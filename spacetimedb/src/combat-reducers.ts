@@ -4,6 +4,7 @@ import spacetimedb, { combatSchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
+import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-command-dispatch.ts";
 import { structureOnline, type StructureKind } from "./sim/construction.ts";
 import { boundedDeltaSeconds } from "./sim/ship-motion.ts";
 import {
@@ -24,46 +25,60 @@ import {
 export const aimWeapon = spacetimedb.reducer(
   { sourceType: t.string(), sourceId: t.u64(), desiredAngleDeg: t.f64() },
   (ctx, { sourceType, sourceId, desiredAngleDeg }) => {
-    if (!Number.isFinite(desiredAngleDeg) || desiredAngleDeg < 0 || desiredAngleDeg >= 360)
-      throw new Error("Invalid aim bearing");
     if (sourceType !== "ship" && sourceType !== "structure")
       throw new Error("Weapon unavailable");
     const vessel = sourceType === "ship" ? ctx.db.ship.id.find(sourceId) : undefined;
     const cannon = sourceType === "structure" ? ctx.db.structure.id.find(sourceId) : undefined;
-    if (!vessel && (!cannon || cannon.kind !== "cannon")) throw new Error("Weapon unavailable");
+    if (!vessel && (!cannon || cannon.kind !== "cannon"))
+      throw new Error("Weapon unavailable");
     const matchId = vessel ? vessel.matchId : cannon!.matchId;
     const match = ctx.db.match.id.find(matchId);
-    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs,
+      ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated ||
-        (vessel ? !mayControlFaction(member!.slot, vessel.ownerSlot, faction.eliminated) : cannon!.ownerSlot !== faction.slot))
+        (vessel ? vessel.ownerSlot !== faction.slot : cannon!.ownerSlot !== faction.slot))
       throw new Error("Weapon unavailable");
-    if (vessel ? vessel.hp <= 0 : (!cannon!.complete || !cannon!.connected || cannon!.hp <= 0))
-      throw new Error("Weapon offline");
-    const kind = vessel ? vessel.kind : "cannon";
-    if (!weaponDefinition(kind)) throw new Error("Weapon unavailable");
-    const angle = normalizeBearing(desiredAngleDeg);
-    const current = vessel ? vessel.turretAngleDeg : cannon!.turretAngleDeg;
-    const existing = Array.from(ctx.db.turretAim.matchId.filter(matchId))
-      .find(row => row.sourceType === sourceType && row.sourceId === sourceId);
-    if (turretAligned(current, angle, 0)) {
-      if (existing) ctx.db.turretAim.id.delete(existing.id);
-      return;
-    }
-    if (existing) ctx.db.turretAim.id.update({ ...existing, desiredAngleDeg: angle });
-    else ctx.db.turretAim.insert({
-      id: 0n, matchId, sourceType, sourceId, desiredAngleDeg: angle,
+    const source: WeaponSource = vessel
+      ? { type: "ship", id: vessel.id, matchId, ownerSlot: vessel.ownerSlot,
+          kind: vessel.kind, x: vessel.x, y: vessel.y, hp: vessel.hp,
+          complete: true, connected: true, turretAngleDeg: vessel.turretAngleDeg,
+          lastFiredAtUs: vessel.lastFiredAtUs }
+      : { type: "structure", id: cannon!.id, matchId, ownerSlot: cannon!.ownerSlot,
+          kind: cannon!.kind, x: cannon!.gridX + cannon!.width / 2,
+          y: cannon!.gridY + cannon!.height / 2, hp: cannon!.hp,
+          complete: cannon!.complete, connected: cannon!.connected,
+          turretAngleDeg: cannon!.turretAngleDeg, lastFiredAtUs: cannon!.lastFiredAtUs };
+    const result = dispatchAim({
+      faction: { matchId, slot: faction.slot, controller: "human", eliminated: faction.eliminated },
+      source, desiredAngleDeg,
+    }, {
+      clearAim: (type,id) => {
+        for (const row of Array.from(ctx.db.turretAim.matchId.filter(matchId)))
+          if (row.sourceType === type && row.sourceId === id)
+            ctx.db.turretAim.id.delete(row.id);
+      },
+      upsertAim: (type,id,angle) => {
+        const current = Array.from(ctx.db.turretAim.matchId.filter(matchId))
+          .find(row => row.sourceType === type && row.sourceId === id);
+        if (current) ctx.db.turretAim.id.update({ ...current, desiredAngleDeg: angle });
+        else ctx.db.turretAim.insert({
+          id: 0n, matchId, sourceType: type, sourceId: id, desiredAngleDeg: angle,
+        });
+      },
+      ensureCombatTick: () => {
+        if (!Array.from(ctx.db.combatSchedule.matchId.filter(matchId)).length)
+          ctx.db.combatSchedule.insert({
+            scheduledId: 0n, matchId,
+            scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
+            lastTickAt: ctx.timestamp,
+          });
+      },
     });
-    if (!Array.from(ctx.db.combatSchedule.matchId.filter(matchId)).length) {
-      ctx.db.combatSchedule.insert({
-        scheduledId: 0n, matchId,
-        scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
-        lastTickAt: ctx.timestamp,
-      });
-    }
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
@@ -71,89 +86,77 @@ export const aimWeapon = spacetimedb.reducer(
 export const fireWeapon = spacetimedb.reducer(
   { sourceType: t.string(), sourceId: t.u64(), targetType: t.string(), targetId: t.u64() },
   (ctx, { sourceType, sourceId, targetType, targetId }) => {
-    if (sourceType !== "ship" && sourceType !== "structure") throw new Error("Invalid weapon");
-    if (targetType !== "ship" && targetType !== "structure") throw new Error("Target unavailable");
+    if (sourceType !== "ship" && sourceType !== "structure")
+      throw new Error("Weapon unavailable");
+    if (targetType !== "ship" && targetType !== "structure")
+      throw new Error("Target not visible or unavailable");
     const vessel = sourceType === "ship" ? ctx.db.ship.id.find(sourceId) : undefined;
-    const turret = sourceType === "structure" ? ctx.db.structure.id.find(sourceId) : undefined;
-    if (!vessel && (!turret || turret.kind !== "cannon")) throw new Error("Weapon unavailable");
-    const matchId = vessel ? vessel.matchId : turret!.matchId;
+    const cannon = sourceType === "structure" ? ctx.db.structure.id.find(sourceId) : undefined;
+    if (!vessel && (!cannon || cannon.kind !== "cannon"))
+      throw new Error("Weapon unavailable");
+    const matchId = vessel ? vessel.matchId : cannon!.matchId;
     const match = ctx.db.match.id.find(matchId);
-    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs,
+      ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated ||
-        (vessel ? !mayControlFaction(member!.slot, vessel.ownerSlot, faction.eliminated) : turret!.ownerSlot !== faction.slot))
+        (vessel ? vessel.ownerSlot !== faction.slot : cannon!.ownerSlot !== faction.slot))
       throw new Error("Weapon unavailable");
-    if (vessel ? vessel.hp <= 0 : (!turret!.complete || !turret!.connected || turret!.hp <= 0))
-      throw new Error("Weapon offline");
-    const kind = (vessel ? vessel.kind : "cannon") as WeaponKind;
-    const definition = weaponDefinition(kind);
-    if (!definition) throw new Error("Weapon unavailable");
-    const nowUs = ctx.timestamp.microsSinceUnixEpoch;
-    const lastFiredAtUs = vessel ? vessel.lastFiredAtUs : turret!.lastFiredAtUs;
-    if (lastFiredAtUs !== -1n && !canFire(nowUs, lastFiredAtUs, definition.cooldownMs))
-      throw new Error("Weapon cooldown");
-    const source = vessel
-      ? { x: vessel.x, y: vessel.y }
-      : { x: turret!.gridX + turret!.width / 2, y: turret!.gridY + turret!.height / 2 };
-
-    // A guessed secret target ID must not bypass identity or visibility.
     const hostileShip = targetType === "ship" ? ctx.db.ship.id.find(targetId) : undefined;
-    const hostileStructure = targetType === "structure" ? ctx.db.structure.id.find(targetId) : undefined;
-    const targetMatchId = hostileShip?.matchId ?? hostileStructure?.matchId;
-    if (targetMatchId !== matchId || (hostileShip?.hp ?? hostileStructure?.hp ?? 0) <= 0)
-      throw new Error("Target not visible or unavailable");
-    if (hostileShip?.ownerSlot === member.slot || hostileStructure?.ownerSlot === member.slot)
-      throw new Error("Target not visible or unavailable");
-    const targetFaction = hostileShip ? hostileShip.ownerSlot : hostileStructure!.ownerSlot;
-    if (targetFaction === undefined || targetFaction === member.slot)
-      throw new Error("Target not visible or unavailable");
-    const destination = hostileShip
-      ? { x: hostileShip.x, y: hostileShip.y }
-      : { x: hostileStructure!.gridX + hostileStructure!.width / 2,
-          y: hostileStructure!.gridY + hostileStructure!.height / 2 };
+    const hostileStructure = targetType === "structure" ?
+      ctx.db.structure.id.find(targetId) : undefined;
     const world = ctx.db.worldConfig.matchId.find(matchId);
     if (!world) throw new Error("Missing world");
     const terrain = decodeTerrainChunks(
       world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
     );
-    // Preliminary source-sensor LoS. Full client-visible FoW is still #13.
-    if (!withinRange(source, destination, definition.range) ||
-        !withinRange(source, destination, definition.vision) ||
-        !terrainLineOfSight(source, destination, terrain, world.mapCells))
-      throw new Error("Target not visible or unavailable");
-
-    // Shooting never turns a turret. The current *authoritative* angle must
-    // already point toward the target's current server-observed position.
-    const bearing = desiredBearing(source, destination);
-    if (!turretAligned(vessel ? vessel.turretAngleDeg : turret!.turretAngleDeg, bearing))
-      throw new Error("Weapon not aligned");
-    if (Array.from(ctx.db.projectile.matchId.filter(matchId)).length >=
-        COMBAT_RULES.maxProjectilesPerMatch) throw new Error("Match projectile cap");
-    const shot = createProjectile(source, destination, kind, member.slot);
-    // Both cooldown bookkeeping and projectile creation are one DB transaction.
-    if (vessel) {
-      ctx.db.ship.id.update({ ...vessel, lastFiredAtUs: nowUs, updatedAt: ctx.timestamp });
-    } else {
-      ctx.db.structure.id.update({ ...turret!, lastFiredAtUs: nowUs });
-    }
-    ctx.db.projectile.insert({
-      id: 0n, matchId, sourceFaction: member.slot,
-      sourceId, sourceType, firedAtUs: nowUs,
-      x: shot.x, y: shot.y, vx: shot.vx, vy: shot.vy,
-      damage: shot.damage, splash: shot.splash,
-      structureMultiplier: shot.structureMultiplier,
-      remainingRange: shot.remainingRange,
+    const source: WeaponSource = vessel
+      ? { type: "ship", id: vessel.id, matchId, ownerSlot: vessel.ownerSlot,
+          kind: vessel.kind, x: vessel.x, y: vessel.y, hp: vessel.hp,
+          complete: true, connected: true, turretAngleDeg: vessel.turretAngleDeg,
+          lastFiredAtUs: vessel.lastFiredAtUs }
+      : { type: "structure", id: cannon!.id, matchId, ownerSlot: cannon!.ownerSlot,
+          kind: cannon!.kind, x: cannon!.gridX + cannon!.width / 2,
+          y: cannon!.gridY + cannon!.height / 2, hp: cannon!.hp,
+          complete: cannon!.complete, connected: cannon!.connected,
+          turretAngleDeg: cannon!.turretAngleDeg, lastFiredAtUs: cannon!.lastFiredAtUs };
+    const target = hostileShip
+      ? { id: hostileShip.id, matchId: hostileShip.matchId,
+          ownerSlot: hostileShip.ownerSlot, type: "ship" as const,
+          x: hostileShip.x, y: hostileShip.y, hp: hostileShip.hp }
+      : hostileStructure
+        ? { id: hostileStructure.id, matchId: hostileStructure.matchId,
+            ownerSlot: hostileStructure.ownerSlot, type: "structure" as const,
+            x: hostileStructure.gridX + hostileStructure.width / 2,
+            y: hostileStructure.gridY + hostileStructure.height / 2,
+            hp: hostileStructure.hp }
+        : null;
+    const result = dispatchFire({
+      faction: { matchId, slot: faction.slot, controller: "human", eliminated: faction.eliminated },
+      source, target, nowUs: ctx.timestamp.microsSinceUnixEpoch,
+      targetVisible: true, terrain, mapCells: world.mapCells,
+      projectileCount: Array.from(ctx.db.projectile.matchId.filter(matchId)).length,
+    }, {
+      markFired: (_,atUs) => {
+        if (vessel) ctx.db.ship.id.update({
+          ...vessel, lastFiredAtUs: atUs, updatedAt: ctx.timestamp,
+        });
+        else ctx.db.structure.id.update({ ...cannon!, lastFiredAtUs: atUs });
+      },
+      insertProjectile: shot => { ctx.db.projectile.insert({ id: 0n, ...shot }); },
+      ensureCombatTick: () => {
+        if (!Array.from(ctx.db.combatSchedule.matchId.filter(matchId)).length)
+          ctx.db.combatSchedule.insert({
+            scheduledId: 0n, matchId,
+            scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
+            lastTickAt: ctx.timestamp,
+          });
+      },
     });
-    if (!Array.from(ctx.db.combatSchedule.matchId.filter(matchId)).length) {
-      ctx.db.combatSchedule.insert({
-        scheduledId: 0n, matchId,
-        scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
-        lastTickAt: ctx.timestamp,
-      });
-    }
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
