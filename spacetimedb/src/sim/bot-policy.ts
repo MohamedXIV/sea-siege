@@ -5,6 +5,7 @@
  * An authoritative adapter must revalidate EVERY returned intent before use.
  */
 import { ECONOMY_RULES, type ShipKind } from './economy.ts';
+import { CONSTRUCTION_RULES } from './construction.ts';
 import { COMBAT_RULES, type WeaponKind } from './combat.ts';
 import { desiredBearing, turretAligned } from './turret-aim.ts';
 
@@ -146,7 +147,7 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     rigs.length === 0 ? ['salvage_rig', 'platform', 'cannon'] : ['cannon', 'platform'];
   for (const kind of preference) {
     if (!canAdd()) break;
-    const cost = kind === 'platform' ? 25 : kind === 'shipyard' ? 150 : kind === 'salvage_rig' ? 110 : 95;
+    const cost = CONSTRUCTION_RULES.definitions[kind].cost;
     if (obs.salvage - reservedSalvage < cost) continue;
     const candidates = obs.legalBuildCandidates.filter(c => c.kind === kind)
       .sort((a, b) => a.gridY - b.gridY || a.gridX - b.gridX);
