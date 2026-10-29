@@ -231,3 +231,18 @@ These tests check that resources are only proposed to a Bot if seen by a friendl
 - four additional **prepared, unexecuted** module-harness cases for server-only scheduling, sensor-hidden hostiles, time-limit cleanup and 1-human/7-bot single-timer scenario.
 
 **Known gaps:** no actual SDK module compilation/test harness, direct 2-client subscription audit, bot-only headless game, exact-head deterministic whole-match digest, or benchmark for 8 concurrent Bot seats. Human/bot reducer mutation orchestration is still duplicated despite shared pure validators. Keep PR #20 draft and issues #12/#13/#17 open. Client generated bindings must be refreshed before real integration. No UI/HUD edits.
+
+
+## Shared command transaction orchestration — 30 Oct 2026
+
+**Executed on byte-identical GitHub source/test files:** Node v22.16.0 `node --experimental-strip-types --test tests/command-dispatch.test.mjs`: **10/10 PASS**. Strict standalone `tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --allowImportingTsExtensions spacetimedb/src/sim/command-dispatch.ts`: **PASS**, TypeScript v5.8.3.
+
+Git SHA-1 blobs of local tested bytes exactly match connected GitHub:
+- `spacetimedb/src/sim/command-dispatch.ts` — `a1b6b5e4cd7274100b0c486949edf8848ff98997`
+- `tests/command-dispatch.test.mjs` — `31c45c8093318efa620eb02005c9415fafdc4f6b`
+
+Tests verified human/Bot identical harvest-order and production writes, cross-faction/cross-match rejection, missing perception, depleted/remote salvage, eliminated actors, non-harvest ship, paid FIFO insertion, over-cap/insufficient funds rejection before ANY mutation, invalid shipyard or queue cap rejection and two sequential paid proposals using freshly reread balance.
+
+**Testing limitation:** local `sim/economy.ts` is an *isolated matching-rules stub* for this test, not the repository's full dependency graph. There is no locally available SpacetimeDB SDK or CLI; full module TypeScript build, official Vitest datastore harness, real DB transaction rollback, scheduled bot reducer and two-client integration were **not run**.
+
+**Integration changes present but unexecuted:** both human and Bot entrypoints now call shared `dispatchHarvest` and `dispatchProduction`, with transaction-backed mutation callbacks. Human harvest also checks current server terrain LoS to the chosen node. Other command types remain partially duplicated and the official tests need a real SDK/CLI environment. PR Draft, main unmodified, UI gate #15 enforced.
