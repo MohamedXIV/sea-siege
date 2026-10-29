@@ -71,3 +71,26 @@ test('rejects invalid positions, corrupted routes and invalid budgets', () => {
   assert.throws(()=>advanceShipOnRoute({...ship(),x:NaN},[2],0,8,.1),RangeError);
   assert.equal(advanceShipOnRoute(ship(),[2],0,8,0).changed,false);
 });
+
+
+test('5, 10 and 20 Hz server stepping give matching constant-velocity travel', () => {
+  const path=route(16,[2,1],[3,1],[4,1],[5,1],[6,1]);
+  const endpoints=[];
+  for(const hz of [5,10,20]) {
+    let state=ship();let cursor=0;
+    for(let i=0;i<hz;i++) {
+      const result=advanceShipOnRoute(state,path,cursor,16,1/hz);
+      state=result.ship;cursor=result.cursor;
+    }
+    endpoints.push(state.x);
+  }
+  for(const end of endpoints)assert.ok(Math.abs(end-3.5)<1e-9);
+});
+
+test('a five-second scheduling stall moves no farther than the capped dt', () => {
+  const path=route(16,[2,1],[3,1],[4,1]);
+  const seconds=boundedDeltaSeconds(0n,5_000_000n);
+  const result=advanceShipOnRoute(ship(),path,0,16,seconds);
+  assert.ok(result.ship.x <= 2.0+1e-9);
+  assert.ok(result.ship.x > 1.5);
+});
