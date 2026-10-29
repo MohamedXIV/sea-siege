@@ -17,20 +17,20 @@ export const finishMatchAtDeadline = spacetimedb.reducer(
     const nowUs = ctx.timestamp.microsSinceUnixEpoch;
     if (nowUs < schedule.deadlineUs) throw new Error("Match deadline has not elapsed");
 
-    const members = Array.from(ctx.db.matchMember.matchId.filter(match.id));
+    const factions = Array.from(ctx.db.factionState.matchId.filter(match.id));
     const structures = Array.from(ctx.db.structure.matchId.filter(match.id));
     const ships = Array.from(ctx.db.ship.matchId.filter(match.id));
-    const living = members.flatMap(member => {
-      if (member.eliminated) return [];
+    const living = factions.flatMap(faction => {
+      if (faction.eliminated) return [];
       const core = structures.find(row =>
-        row.ownerSlot === member.slot && row.kind === "command_core" && row.hp > 0,
+        row.ownerSlot === faction.slot && row.kind === "command_core" && row.hp > 0,
       );
       if (!core) return [];
       return [{
-        slot: member.slot, coreHp: core.hp,
-        structures: structures.filter(row => row.ownerSlot === member.slot && row.hp > 0).length,
-        ships: ships.filter(row => row.ownerSlot === member.slot && row.hp > 0).length,
-        totalSalvageGathered: member.totalSalvageGathered,
+        slot: faction.slot, coreHp: core.hp,
+        structures: structures.filter(row => row.ownerSlot === faction.slot && row.hp > 0).length,
+        ships: ships.filter(row => row.ownerSlot === faction.slot && row.hp > 0).length,
+        totalSalvageGathered: faction.totalSalvageGathered,
       }];
     });
     const result = resolveMatchOutcome(living, true);
