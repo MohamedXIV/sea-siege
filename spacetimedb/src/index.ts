@@ -1,6 +1,11 @@
 import { ScheduleAt } from "spacetimedb";
 import { schema, table, t } from "spacetimedb/server";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
+import {
+  ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
+  debitSalvage, drawSalvage, replenishSalvage, inRange, rigExtraction,
+  shipDefinition, findShipyardSpawn, type ShipKind,
+} from "./sim/economy.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import {
@@ -48,6 +53,9 @@ const ship = table(
     id: t.u64().primaryKey().autoInc(),
     matchId: t.u64().index("btree"),
     owner: t.identity().index("btree"),
+    kind: t.string(),
+    hp: t.u32(),
+    radiusCells: t.f64(),
     x: t.f64(),
     y: t.f64(),
     velocityX: t.f64(),
@@ -108,6 +116,44 @@ const salvageNode = table(
     remaining: t.u32(),
     regenPerSec: t.u32(),
     contested: t.bool(),
+  },
+);
+
+
+/** Each ship can harvest one server-authorized salvage node at a time. */
+const harvestOrder = table(
+  { name: "harvest_order" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    nodeId: t.u64(),
+  },
+);
+
+/** Per-yard FIFO production. An order is charged exactly once at enqueue. */
+const productionOrder = table(
+  { name: "production_order" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    yardId: t.u64().index("btree"),
+    ownerSlot: t.u32(),
+    shipKind: t.string(),
+    remainingUs: t.i64(),
+    queuedAtUs: t.i64(),
+    startedAtUs: t.i64(),
+  },
+);
+
+/** One deterministic 1Hz economy timer for every active match. */
+const economySchedule = table(
+  { name: "economy_schedule" },
+  {
+    scheduledId: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    scheduledAt: t.scheduleAt(),
+    lastTickAt: t.timestamp(),
+    leftoverUs: t.u64(),
   },
 );
 
@@ -172,6 +218,7 @@ const constructionSchedule = table(
 const spacetimedb = schema({
   match, matchMember, ship, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
+  harvestOrder, productionOrder, economySchedule,
 });
 export default spacetimedb;
 
@@ -236,6 +283,8 @@ export const createMatch = spacetimedb.reducer(
       id: 0n,
       matchId: created.id,
       owner: ctx.sender,
+      kind: "scout", hp: ECONOMY_RULES.ships.scout.hp,
+      radiusCells: ECONOMY_RULES.ships.scout.radius,
       x: initialX,
       y: initialY,
       velocityX: 0,
@@ -285,6 +334,8 @@ export const joinMatch = spacetimedb.reducer(
       id: 0n,
       matchId,
       owner: ctx.sender,
+      kind: "scout", hp: ECONOMY_RULES.ships.scout.hp,
+      radiusCells: ECONOMY_RULES.ships.scout.radius,
       x,
       y,
       velocityX: 0,
@@ -309,6 +360,11 @@ export const startMatch = spacetimedb.reducer(
     for (const _member of ctx.db.matchMember.matchId.filter(matchId)) count++;
     if (count < 2) throw new Error("Need at least two actual members");
     ctx.db.match.id.update({ ...lobby, phase: "active" });
+    ctx.db.economySchedule.insert({
+      scheduledId: 0n, matchId,
+      scheduledAt: ScheduleAt.interval(ECONOMY_RULES.tickMicroseconds),
+      lastTickAt: ctx.timestamp, leftoverUs: 0n,
+    });
   },
 );
 
@@ -337,7 +393,9 @@ export const issueShipOrder = spacetimedb.reducer(
     );
     const env = {
       mapCells: config.mapCells, terrain,
-      vessels: createVesselBodies(Array.from(ctx.db.ship.matchId.filter(current.matchId))),
+      vessels: Array.from(ctx.db.ship.matchId.filter(current.matchId)).map(vessel => ({
+        id: vessel.id, x: vessel.x, y: vessel.y, radius: vessel.radiusCells,
+      })),
       footprints: Array.from(ctx.db.structure.matchId.filter(current.matchId))
         .filter(row => row.channel === "surface")
         .map(row => ({ x: row.gridX, y: row.gridY, width: row.width, height: row.height })),
@@ -348,11 +406,13 @@ export const issueShipOrder = spacetimedb.reducer(
       { x: targetX, y: targetY },
       {
         blocked: (x, y) => isNavigationCellBlocked(
-          x, y, COLLISION_RULES.scoutRadiusCells, env, shipId,
+          x, y, current.radiusCells, env, shipId,
         ),
       },
     );
     if (!route) throw new Error("Destination unreachable");
+    // A move order cancels the previous harvest target atomically.
+    ctx.db.harvestOrder.shipId.delete(shipId);
     const nextRevision = current.revision + 1n;
     const cellPath = route.waypoints.slice(1).map(
       point => Math.floor(point.y) * config.mapCells + Math.floor(point.x),
@@ -426,6 +486,7 @@ export const stopShip = spacetimedb.reducer(
     const lobby = ctx.db.match.id.find(current.matchId);
     if (!lobby || lobby.phase !== "active") throw new Error("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
+    ctx.db.harvestOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
       ...current,
       velocityX: 0, velocityY: 0,
@@ -473,7 +534,7 @@ export const advanceMatchSimulation = spacetimedb.reducer(
     // transaction iteration orders from deciding who may cross first.
     const matchShips = Array.from(ctx.db.ship.matchId.filter(timer.matchId));
     matchShips.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-    const bodies = createVesselBodies(matchShips);
+    const bodies = matchShips.map(v => ({ id: v.id, x: v.x, y: v.y, radius: v.radiusCells }));
     const footprints = Array.from(ctx.db.structure.matchId.filter(timer.matchId))
       .filter(row => row.channel === "surface")
       .map(row => ({ x: row.gridX, y: row.gridY, width: row.width, height: row.height }));
@@ -502,7 +563,7 @@ export const advanceMatchSimulation = spacetimedb.reducer(
       const clear = canSweepVessel(
         { x: vessel.x, y: vessel.y },
         { x: stepped.ship.x, y: stepped.ship.y },
-        COLLISION_RULES.scoutRadiusCells, env, vessel.id,
+        vessel.radiusCells, env, vessel.id,
       );
       if (!clear) {
         routesRemaining++;
@@ -516,7 +577,7 @@ export const advanceMatchSimulation = spacetimedb.reducer(
             { x: vessel.targetX, y: vessel.targetY },
             {
               blocked: (x, y) => isNavigationCellBlocked(
-                x, y, COLLISION_RULES.scoutRadiusCells, env, vessel.id,
+                x, y, vessel.radiusCells, env, vessel.id,
               ),
             },
           );
