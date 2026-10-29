@@ -4,6 +4,7 @@ import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
+import { terrainLineOfSight } from "./sim/combat.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
   ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
@@ -26,11 +27,21 @@ export const orderHarvest = spacetimedb.reducer(
     const matchRow = ctx.db.match.id.find(vessel.matchId);
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const node = ctx.db.salvageNode.id.find(nodeId);
+    const world = ctx.db.worldConfig.matchId.find(vessel.matchId);
+    if (!world) throw new Error("Missing authoritative world");
+    const terrain = decodeTerrainChunks(
+      world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(vessel.matchId)),
+    );
+    const observable = Boolean(node && terrainLineOfSight(
+      { x: vessel.x, y: vessel.y },
+      { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+      terrain, world.mapCells,
+    ));
     const result = dispatchHarvest({
       faction: { matchId: vessel.matchId, slot: faction!.slot, controller: "human",
         eliminated: faction!.eliminated },
       ship: vessel, node: node ?? null,
-      nowUs: ctx.timestamp.microsSinceUnixEpoch, observable: true,
+      nowUs: ctx.timestamp.microsSinceUnixEpoch, observable,
     }, {
       clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
       upsertOrder: order => {
