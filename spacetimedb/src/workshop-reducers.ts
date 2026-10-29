@@ -1,13 +1,7 @@
 import { t } from "spacetimedb/server";
 import spacetimedb from "./schema.ts";
-import { structureDefinition } from "./sim/construction.ts";
-import { debitSalvage, shipDefinition } from "./sim/economy.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { dispatchWorkshopRepair, dispatchWorkshopUpgrade } from "./sim/workshop-command-dispatch.ts";
-import {
-  calculateRepair, maximumStructureHp, nextWorkshopUpgrade,
-  withinWorkshopRange,
-} from "./sim/workshop.ts";
 
 /**
  * Repairs are single authoritative transactions: the same transaction checks
