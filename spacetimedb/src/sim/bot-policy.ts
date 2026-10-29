@@ -10,6 +10,10 @@ import { COMBAT_RULES, type WeaponKind } from './combat.ts';
 import { desiredBearing, turretAligned } from './turret-aim.ts';
 
 export const BOT_RULES = {
+  strategicTickUs: 1_000_000n,
+  maxPlacementChecksPerKind: 16,
+  maxFrontiersPerShip: 8,
+  coreSensorRadius: 6,
   maxIntelAgeUs: 2_000_000n,
   difficulties: {
     easy:   { intervalUs: 4_000_000n, maxOrders: 1, defenseRangeScale: 0.8, queueLimit: 1, aggression: 0 },
