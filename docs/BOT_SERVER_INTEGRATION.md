@@ -168,3 +168,14 @@ The server supplies authenticated faction capabilities, never client-supplied ow
 **Verified locally:** new exact `world-command-dispatch.ts` plus `tests/world-command-dispatch.test.mjs` **9/9 PASS**; new exact `combat-command-dispatch.ts` plus `tests/combat-command-dispatch.test.mjs` **8/8 PASS**. Alongside the earlier Harvest/Production suite, **27/27 isolated Node 22 tests PASS** and strict TypeScript for the two new source modules PASS. Exact Git SHA-1 blob IDs match the locally executed four new files. **Important:** test fixtures contain compatible *simplified* navigation, collision, construction, combat, turret and economy dependencies, not a real SDK module or all real helper code. The 27 successes prove dispatcher logic under those fixtures, NOT real-game correctness.
 
 **Still unimplemented or unverified:** Workshop repair/upgrade transaction dispatcher, actual bot-only match initialization and end-to-end deterministic headless run, full SpacetimeDB build/scheduler/rollback, real fog subscriptions and cross-client visibility, and performance profile. Keep issues #9/#11/#12/#13 open and PR Draft.
+
+
+## Phase 4, slice D — Workshop parity and traced ship motion (30 Oct 2026)
+
+The existing shared-command authority work now additionally includes `sim/workshop-command-dispatch.ts`, with one validated transactional sequence for structure repair, vessel repair and tier upgrade. The three authenticated human Workshop reducers invoke that common command implementation, and remain protected by same-match identity/controller/ownership. The Bot policy does **not yet propose Workshop actions**; the dispatcher accepts a verified Bot faction capability for a future autonomous repair policy. No client controls HP, price or upgrade duration.
+
+The movement primitive now returns `traversedSegments` for every actual waypoint leg within a tick. The live motion scheduler checks `canSweepVessel` separately against each segment, **not a shortcut chord**; this avoids incorrect collision detection on sharp turns in one tick.
+
+**Verified locally:** 36/36 shared-command tests (10 Harvest/Production + 9 Move/Build + 8 Aim/Fire + 9 Workshop), plus 11/11 actual ship-motion tests. All **47/47 PASS**, standalone strict TS PASS; exact new source/test Git blob hashes documented in `docs/FOUNDATION_VALIDATION.md`. Simplified dependencies are used for the dispatcher tests and actual real source is used for ship motion. The full SpacetimeDB SDK module and scheduler have **NOT** been built or run.
+
+Phase 5 remains a strict acceptance gate: real module build, full test harness, authenticated negative subscription probes, deterministic Bot-only headless game, scheduled 1-human/7-bot match test, and performance profiling. Do not claim bots play successfully end-to-end until those pass. The user-review gate on game UI/HUD remains untouched.
