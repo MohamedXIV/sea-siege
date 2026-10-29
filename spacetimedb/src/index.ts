@@ -199,6 +199,12 @@ export const startMatch = spacetimedb.reducer(
       scheduledAt: ScheduleAt.interval(ECONOMY_RULES.tickMicroseconds),
       lastTickAt: ctx.timestamp, leftoverUs: 0n,
     });
+    if (Array.from(ctx.db.botController.matchId.filter(matchId)).length) {
+      ctx.db.botSchedule.insert({
+        scheduledId: 0n, matchId,
+        scheduledAt: ScheduleAt.interval(1_000_000n),
+      });
+    }
   },
 );
 
@@ -670,3 +676,5 @@ export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
 export { finishMatchAtDeadline } from "./match-reducers.ts";
 
 export { addBot, removeBot } from "./bot-reducers.ts";
+
+export { advanceBots } from "./bot-simulation.ts";
