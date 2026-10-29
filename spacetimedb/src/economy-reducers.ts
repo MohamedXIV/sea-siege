@@ -60,7 +60,7 @@ export const enqueueShip = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(yard.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.slot !== yard.ownerSlot) throw new Error("Not your shipyard");
+    if (!member || member.eliminated || member.slot !== yard.ownerSlot) throw new Error("Not your shipyard");
     if (!yard.complete || !yard.connected || yard.hp <= 0) throw new Error("Shipyard offline");
     const definition = shipDefinition(kind);
     if (!definition) throw new Error("Unknown ship kind");
@@ -88,7 +88,7 @@ export const cancelShipProduction = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(order.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.slot !== order.ownerSlot) throw new Error("Not your production order");
+    if (!member || member.eliminated || member.slot !== order.ownerSlot) throw new Error("Not your production order");
     const definition = shipDefinition(order.shipKind);
     if (!definition) throw new Error("Unknown ship kind");
     ctx.db.productionOrder.id.delete(order.id);
