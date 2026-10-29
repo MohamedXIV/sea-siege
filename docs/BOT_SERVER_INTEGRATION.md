@@ -92,3 +92,28 @@ the owner reviews its visual direction (Issue #15).
 **Required phase 2:** move shared faction resources/elimination accounting into a canonical per-match faction state table (independent of human identity); keep human seat associations separate; add server-owned bot controllers with no fake `Identity`. Then refactor human reducers to delegate to shared authoritative command validators used also by bot scheduler, and test both 1 human + 7 bots and bot-only matches. After that implement actual bot sensing/projections and #13 security tests.
 
 **SDK caveat:** Full SpacetimeDB module build and live indexed-semijoin subscription have **not** been executed here. Check SDK 2.x query builder and row-type constraints before release. Existing generated client bindings from before schema migration are stale and MUST be regenerated when integration testing begins.
+
+
+## Ownership migration phase 2 — independent faction ledger and Bot Controllers (29 October 2026)
+
+**This section supersedes the historical "Still intentionally incomplete" paragraph above.**
+The source now implements these backend foundations:
+- `faction_state` is a **private row per actual match faction**, with `matchId`, `slot`, indexed `factionKey`, `controller: human | bot`, `salvage`, `totalSalvageGathered` and `eliminated`. `match_member` stores **only** the real human Identity, match ID, slot and factionKey; it no longer duplicates the economic ledger.
+- `createMatch` and `joinMatch` create one human membership **plus** its corresponding faction ledger transactionally. Joining fills the first genuinely available slot across **both** human and bot factions and cannot claim an occupied Bot slot.
+- `addBot(matchId, difficulty)` requires the human host during lobby phase. It validates Easy/Normal/Hard, allocates one unclaimed slot, inserts a private Bot Controller **without a fake Identity**, creates its own faction balance, Command Core, six initial platforms and scout. The bot seed is derived reproducibly from the private server world seed and slot.
+- `removeBot(matchId, slot)` is host-only during lobby phase, deletes just that Bot's own faction, ships, structures and controller, and frees the slot for a human or another Bot. It cannot delete human factions or eject running-game Bots.
+- `startMatch` can now start with any two occupied factions, including **one real human and one server-owned bot**. This only establishes the real match and normal economy/movement timers; it does **not** make the Bot execute decisions automatically yet.
+- `myFactionStates` is an identity-filtered indexed semijoin that provides only the logged-in human's own private resource ledger. Neither other humans' resources nor bot faction balances should be visible.
+- Building, demolition, repairs, upgrades, production, harvesting, income, combat, elimination, and 12-minute dominance score now use `faction_state`, regardless of human/bot controller type. Human command auth still requires an actual matching `match_member` and checks the faction's non-eliminated human-controller status.
+- Ship ownership remains match-scoped `ownerSlot + factionKey`; production inherits the faction key, not a human identity.
+
+**Execution status:**
+- **Actually run:** `tests/bot-seats.test.mjs` **4/4 PASS** (Node 22) and isolated strict TypeScript check **PASS**. Exact committed file hashes match locally executed bytes.
+- **Added but not run:** official module-harness cases covering a 1-human/3-bot lobby, private views, unauthorized human access, Bot seats with independent income, owner-only lobby removal, and match start with 1 human + 1 bot.
+- The full SpacetimeDB module was **not compiled, executed, published or observed by independent clients** in this environment. The schema changes require regenerated client bindings; the SDK semijoin/table declarations remain unverified.
+
+### Remaining phase 3 — first *playing* Bots
+
+The private `bot_controller` rows currently store difficulty, seed and `nextDecisionUs`, **but no strategic scheduler is registered**. The policy and perception helper are still only pure modules. Next, introduce a bounded one-timer-per-match strategic scheduler, construct authoritative visibility-limited observations, and apply proposed actions through reusable shared validators used for human commands too. Those commands must never impersonate users or bypass resource, navigation, visibility, firing or ownership contracts. **Bot-only headless matches** also need separate internal fixture initialization without requiring a real host Identity. Keep Issue #12 open until these are running and tested.
+
+The P0 acceptance gates (SpacetimeDB build/test/publish, identity-filtered subscriptions and two-client validation) remain outstanding. The user-approved UI/HUD design gate is untouched.
