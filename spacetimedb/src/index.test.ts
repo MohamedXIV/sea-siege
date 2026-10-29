@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { ConnectionId } from "spacetimedb";
 import { createModuleTestHarness, TestAuth } from "spacetimedb/server/test-utils";
 import spacetimedb, * as moduleExports from "./index";
+import { generateDeterministicWorld } from "./sim/worldgen.ts";
 
 const auth = (subject: string, connectionId: bigint) =>
   TestAuth.fromJwtPayload(
@@ -12,11 +13,11 @@ const auth = (subject: string, connectionId: bigint) =>
 it("accepts only 2-8 slots and rolls back invalid creation", () => {
   const test = createModuleTestHarness(spacetimedb, moduleExports);
   const alice = auth("alice", 1n);
-  expect(() => test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { seed: 42, maxSlots: 1 })))
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 1 })))
     .toThrow("2–8");
   expect(test.db.match.count()).toBe(0n);
 
-  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { seed: 42, maxSlots: 2 }));
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
   expect(test.db.match.count()).toBe(1n);
   expect(test.db.ship.count()).toBe(1n);
   expect(test.db.worldChunk.count()).toBe(16n); // 56 cells => 4x4 chunks
@@ -32,7 +33,7 @@ it("prevents guest start and unauthorized ship orders", () => {
   const alice = auth("alice", 1n);
   const bob = auth("bob", 2n);
 
-  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { seed: 7, maxSlots: 2 }));
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   const ownShip = [...test.db.ship.iter()][0]!;
@@ -53,7 +54,7 @@ it("identity-filtered views do not reveal another faction's ships or slots", () 
   const test = createModuleTestHarness(spacetimedb, moduleExports);
   const alice = auth("alice", 1n);
   const bob = auth("bob", 2n);
-  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { seed: 3, maxSlots: 2 }));
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
 
@@ -69,11 +70,15 @@ it("persists consistent seeded terrain and assigns guest to another valid spawn"
   const test = createModuleTestHarness(spacetimedb, moduleExports);
   const alice = auth("alice", 1n);
   const bob = auth("bob", 2n);
-  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { seed: 123, maxSlots: 6 }));
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 6 }));
   const matchId = [...test.db.match.iter()][0]!.id;
   const config = test.db.worldConfig.matchId.find(matchId)!;
-  expect(config.seed).toBe(123);
+  expect(config.seed).toBeGreaterThanOrEqual(0);
+  expect(config.seed).toBeLessThanOrEqual(0xffffffff);
   expect(config.mapCells).toBe(72);
+  const expectedWorld = generateDeterministicWorld(config.seed, 6);
+  const firstChunk = [...test.db.worldChunk.iter()].find(row => row.chunkX === 0 && row.chunkY === 0)!;
+  expect([...firstChunk.terrain]).toEqual(expectedWorld.chunks[0]!.terrain);
   expect(test.db.worldChunk.count()).toBe(25n);
   expect(test.db.worldSpawn.count()).toBe(6n);
   expect(test.db.salvageNode.count()).toBe(18n);
@@ -96,7 +101,7 @@ it("rejects destinations outside each match's actual map size", () => {
   const test = createModuleTestHarness(spacetimedb, moduleExports);
   const alice = auth("alice", 1n);
   const bob = auth("bob", 2n);
-  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { seed: 77, maxSlots: 2 }));
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
