@@ -1,6 +1,9 @@
 import { ScheduleAt } from "spacetimedb";
 import { t } from "spacetimedb/server";
-import spacetimedb, { motionSchedule, constructionSchedule, economySchedule } from "./schema.ts";
+import spacetimedb, {
+  motionSchedule, constructionSchedule, economySchedule,
+} from "./schema.ts";
+import { deadlineMicroseconds } from "./sim/match-outcome.ts";
 export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
@@ -40,7 +43,8 @@ export const createMatch = spacetimedb.reducer(
       id: 0n,
       host: ctx.sender,
       phase: "lobby",
-      winnerSlot: -1,
+      winnerSlot: -1, victoryReason: "", winningScore5: 0n,
+      startedAtUs: 0n, endedAtUs: 0n,
       maxSlots,
       createdAt: ctx.timestamp,
     });
@@ -69,7 +73,7 @@ export const createMatch = spacetimedb.reducer(
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       salvage: CONSTRUCTION_RULES.startingSalvage,
-      eliminated: false,
+      totalSalvageGathered: 0n, eliminated: false,
     });
     const initial = world.spawns[0]!;
     for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
@@ -124,7 +128,7 @@ export const joinMatch = spacetimedb.reducer(
     ctx.db.matchMember.insert({
       id: 0n, matchId, identity: ctx.sender, slot,
       salvage: CONSTRUCTION_RULES.startingSalvage,
-      eliminated: false,
+      totalSalvageGathered: 0n, eliminated: false,
     });
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
     if (!spawn) throw new Error("Missing server-owned spawn assignment");
@@ -172,7 +176,13 @@ export const startMatch = spacetimedb.reducer(
     let count = 0;
     for (const _member of ctx.db.matchMember.matchId.filter(matchId)) count++;
     if (count < 2) throw new Error("Need at least two actual members");
-    ctx.db.match.id.update({ ...lobby, phase: "active" });
+    const startUs = ctx.timestamp.microsSinceUnixEpoch;
+    ctx.db.match.id.update({ ...lobby, phase: "active", startedAtUs: startUs });
+    const deadlineUs = deadlineMicroseconds(startUs);
+    ctx.db.matchDeadline.insert({
+      scheduledId: 0n, matchId, deadlineUs,
+      scheduledAt: ScheduleAt.time(deadlineUs),
+    });
     ctx.db.economySchedule.insert({
       scheduledId: 0n, matchId,
       scheduledAt: ScheduleAt.interval(ECONOMY_RULES.tickMicroseconds),
@@ -613,3 +623,5 @@ export {
 } from "./workshop-reducers.ts";
 
 export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
+
+export { finishMatchAtDeadline } from "./match-reducers.ts";
