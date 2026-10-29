@@ -1035,3 +1035,84 @@ it("human commands cannot control a same-numbered faction in a different active 
   expect(myShip.factionKey).not.toBe(foreign.factionKey);
   test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: myShip.id }));
 });
+
+
+it("server-owned bot seats have independent faction funds without human Identities", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n), eve = auth("eve", 3n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 4 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  )).toThrow("Only the host");
+  test.withReducerTx(alice, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "easy" })
+  );
+  test.withReducerTx(alice, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "hard" })
+  );
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(2);
+  const factions = [...test.db.factionState.matchId.filter(matchId)];
+  expect(factions).toHaveLength(4);
+  expect(factions.map(row => row.slot).sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
+  expect(factions.filter(row => row.controller === "bot")).toHaveLength(2);
+  expect(factions.every(row => row.salvage === 420 && row.totalSalvageGathered === 0n)).toBe(true);
+  expect([...test.db.botController.matchId.filter(matchId)].map(row => row.slot)).toEqual([1, 2]);
+  expect([...test.db.ship.matchId.filter(matchId)]).toHaveLength(4);
+  expect(test.runQuery(moduleExports.myShips(test.viewContext(alice)))).toHaveLength(1);
+  expect(test.runQuery(moduleExports.myShips(test.viewContext(bob)))).toHaveLength(1);
+  expect(test.runQuery(moduleExports.myShips(test.viewContext(eve)))).toHaveLength(0);
+  expect(test.runQuery(moduleExports.myFactionStates(test.viewContext(alice)))).toHaveLength(1);
+  expect(test.runQuery(moduleExports.myFactionStates(test.viewContext(bob)))).toHaveLength(1);
+  expect(test.runQuery(moduleExports.myFactionStates(test.viewContext(eve)))).toHaveLength(0);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  )).toThrow("Lobby full");
+});
+
+it("bot ships remain inaccessible to host even when the host created them", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  const bot = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot === 1)!;
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  expect(test.db.match.id.find(matchId)?.phase).toBe("active");
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.stopShip(ctx, { shipId: bot.id })
+  )).toThrow("Cannot command another");
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.stopShip(ctx, { shipId: bot.id })
+  )).toThrow("Cannot command another");
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.removeBot(ctx, { matchId, slot: 1 })
+  )).toThrow("Lobby unavailable");
+  expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.salvage)
+    .toBe(420);
+});
+
+it("only host can remove a bot in lobby; its entire seat is recycled atomically", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 3 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "hard" }));
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.removeBot(ctx, { matchId, slot: 1 })
+  )).toThrow("Only the host");
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "cheat" })
+  )).toThrow("Invalid bot difficulty");
+  test.withReducerTx(alice, ctx => moduleExports.removeBot(ctx, { matchId, slot: 1 }));
+  expect(test.db.botController.count()).toBe(0n);
+  expect([...test.db.factionState.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.ship.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.structure.matchId.filter(matchId)]).toHaveLength(7);
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.controller)
+    .toBe("human");
+});
