@@ -1058,7 +1058,7 @@ it("server-owned bot seats have independent faction funds without human Identiti
   expect(factions.map(row => row.slot).sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
   expect(factions.filter(row => row.controller === "bot")).toHaveLength(2);
   expect(factions.every(row => row.salvage === 420 && row.totalSalvageGathered === 0n)).toBe(true);
-  expect([...test.db.botController.matchId.filter(matchId)].map(row => row.slot)).toEqual([1, 2]);
+  expect([...test.db.botController.matchId.filter(matchId)].map(row => row.slot).sort((a, b) => a - b)).toEqual([1, 2]);
   expect([...test.db.ship.matchId.filter(matchId)]).toHaveLength(4);
   expect(test.runQuery(moduleExports.myShips(test.viewContext(alice)))).toHaveLength(1);
   expect(test.runQuery(moduleExports.myShips(test.viewContext(bob)))).toHaveLength(1);
