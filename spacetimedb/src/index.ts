@@ -10,6 +10,7 @@ import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
+import { BOT_RULES } from "./sim/bot-policy.ts";
 import { nextWorkshopUpgrade } from "./sim/workshop.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
@@ -202,7 +203,7 @@ export const startMatch = spacetimedb.reducer(
     if (Array.from(ctx.db.botController.matchId.filter(matchId)).length) {
       ctx.db.botSchedule.insert({
         scheduledId: 0n, matchId,
-        scheduledAt: ScheduleAt.interval(1_000_000n),
+        scheduledAt: ScheduleAt.interval(BOT_RULES.strategicTickUs),
       });
     }
   },
