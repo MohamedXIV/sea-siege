@@ -693,3 +693,127 @@ it("demolition refunds a paid but unfinished workshop upgrade only once", () => 
     moduleExports.demolishStructure(ctx, { structureId: workshop.id })
   )).toThrow("unavailable");
 });
+
+
+it("fire authorization rejects foreign weapons, friendly targets, and cooldown bypass", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const host = [...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 0)!;
+  const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.owner.isEqual(host.identity))!;
+  const defender = [...test.db.ship.matchId.filter(matchId)].find(row => !row.owner.isEqual(host.identity))!;
+  // Internal test authority moves the defender into visible fire range only.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.id.update({
+      ...defender, x: attacker.x + 3, y: attacker.y, hp: 210,
+    });
+  });
+  expect(() => test.withReducerTx(bob, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: attacker.id, targetType: "ship", targetId: defender.id,
+  }))).toThrow("Weapon unavailable");
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: attacker.id, targetType: "ship", targetId: attacker.id,
+  }))).toThrow("Target not visible");
+  test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  expect(test.db.projectile.count()).toBe(1n);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: attacker.id, targetType: "ship", targetId: defender.id,
+  }))).toThrow("cooldown");
+});
+
+it("moving defender dodges the fired trajectory; only internal scheduler can advance it", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const first = [...test.db.ship.matchId.filter(matchId)][0]!;
+  const second = [...test.db.ship.matchId.filter(matchId)][1]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({ ...second, x: first.x + 3, y: first.y })
+  );
+  test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: first.id, targetType: "ship", targetId: second.id,
+  }));
+  const initial = test.db.ship.id.find(second.id)!.hp;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const row = ctx.db.ship.id.find(second.id)!;
+    ctx.db.ship.id.update({ ...row, y: row.y + 4 });
+  });
+  const timer = [...test.db.combatSchedule.iter()][0]!;
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.advanceCombat(ctx, { arg: timer })
+  )).toThrow("internal-only");
+  for (let i = 0; i < 2; i++) {
+    test.clock.advance(TimeDuration.fromMillis(100));
+    const current = [...test.db.combatSchedule.iter()][0]!;
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceCombat(ctx, { arg: current })
+    );
+  }
+  expect(test.db.ship.id.find(second.id)!.hp).toBe(initial);
+  expect(test.db.projectile.count()).toBe(0n);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+});
+
+it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const own = [...test.db.ship.matchId.filter(matchId)][0]!;
+  const enemy = [...test.db.ship.matchId.filter(matchId)][1]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({ ...enemy, x: own.x + 2, y: own.y })
+  );
+  test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: own.id, targetType: "ship", targetId: enemy.id,
+  }));
+  test.clock.advance(TimeDuration.fromMillis(100));
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
+    arg: [...test.db.combatSchedule.iter()][0]!,
+  }));
+  expect(test.db.ship.id.find(enemy.id)!.hp).toBe(210 - 16); // Scout 18 minus Scout armor 2
+  expect(test.db.projectile.count()).toBe(0n);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+});
+
+it("destroying the last hostile Command Core eliminates its faction and ends the match", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const own = [...test.db.ship.matchId.filter(matchId)][0]!;
+  const enemyCore = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1 && row.kind === "command_core")!;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.structure.id.update({
+      ...enemyCore, gridX: Math.floor(own.x + 2),
+      gridY: Math.floor(own.y - 1), hp: 5,
+    });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, {
+    sourceType: "ship", sourceId: own.id, targetType: "structure", targetId: enemyCore.id,
+  }));
+  for (let i = 0; i < 3 && test.db.combatSchedule.count() > 0n; i++) {
+    test.clock.advance(TimeDuration.fromMillis(100));
+    test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
+      arg: [...test.db.combatSchedule.iter()][0]!,
+    }));
+  }
+  expect(test.db.structure.id.find(enemyCore.id)).toBeUndefined();
+  expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
+  expect(test.db.match.id.find(matchId)?.winnerSlot).toBe(0);
+  expect([...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
+});
