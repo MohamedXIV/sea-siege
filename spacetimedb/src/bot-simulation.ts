@@ -12,6 +12,7 @@ import { angularDifference, desiredBearing, turretAligned } from "./sim/turret-a
 import { SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts";
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
+import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
 
 /**
  * One server-owned strategic scheduler per active match.
@@ -231,29 +232,42 @@ export const advanceBots = spacetimedb.reducer(
           if (!result.ok) continue;
         } else if (intent.type === "move") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
-          if (!vessel || vessel.ownerSlot !== bot.slot || vessel.matchId !== match.id ||
-              ctx.db.shipRoute.shipId.find(vessel.id) ||
-              ctx.db.harvestOrder.shipId.find(vessel.id) ||
-              !Number.isFinite(intent.destination.x) || !Number.isFinite(intent.destination.y) ||
-              !sensorSees(intent.destination.x, intent.destination.y)) continue;
-          const env = pathEnvironment();
-          const route = findTerrainPath(terrain, world.mapCells,
-            { x: vessel.x, y: vessel.y }, intent.destination,
-            { blocked: (x,y) => isNavigationCellBlocked(x,y,vessel.radiusCells,env,vessel.id) });
-          if (!route || route.waypoints.length <= 1) continue;
-          const nextRevision = vessel.revision + 1n;
-          const cellPath = route.waypoints.slice(1).map(point =>
-            Math.floor(point.y) * world.mapCells + Math.floor(point.x));
-          ctx.db.shipRoute.insert({
-            shipId: vessel.id, matchId: match.id, cellPath,
-            cursor: 0, revision: nextRevision, repathAfterUs: 0n,
+          if (!vessel || ctx.db.shipRoute.shipId.find(vessel.id) ||
+              ctx.db.harvestOrder.shipId.find(vessel.id)) continue;
+          const result = dispatchMovement({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: faction.eliminated },
+            ship: vessel, destination: intent.destination,
+            environment: pathEnvironment(),
+            destinationVisible: sensorSees(intent.destination.x, intent.destination.y),
+          }, {
+            cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+            setRoute: order => {
+              const existing = ctx.db.shipRoute.shipId.find(vessel.id);
+              if (!order) {
+                if (existing) ctx.db.shipRoute.shipId.delete(vessel.id);
+              } else if (existing) {
+                ctx.db.shipRoute.shipId.update({
+                  ...existing, cellPath: [...order.cellPath], cursor: 0,
+                  revision: order.revision, repathAfterUs: order.repathAfterUs,
+                });
+              } else {
+                ctx.db.shipRoute.insert({
+                  ...order, cellPath: [...order.cellPath], cursor: 0,
+                });
+              }
+            },
+            updateShip: order => {
+              ctx.db.ship.id.update({
+                ...vessel, targetX: order.targetX, targetY: order.targetY,
+                velocityX: order.stopImmediately ? 0 : vessel.velocityX,
+                velocityY: order.stopImmediately ? 0 : vessel.velocityY,
+                revision: order.revision, updatedAt: ctx.timestamp,
+              });
+            },
+            ensureMotionTick: startMotion,
           });
-          ctx.db.ship.id.update({
-            ...vessel, targetX: Math.floor(intent.destination.x)+0.5,
-            targetY: Math.floor(intent.destination.y)+0.5,
-            revision: nextRevision, updatedAt: ctx.timestamp,
-          });
-          startMotion();
+          if (!result.ok) continue;
         } else if (intent.type === "aim") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
           const weapon = vessel ? weaponDefinition(vessel.kind) : null;
@@ -328,30 +342,42 @@ export const advanceBots = spacetimedb.reducer(
           if (!result.ok) continue;
         } else if (intent.type === "build") {
           const factionNow = ctx.db.factionState.id.find(faction.id);
-          const def = structureDefinition(intent.kind);
-          const wasVetted = legalBuildCandidates.some(row =>
-            row.kind === intent.kind && row.gridX === intent.gridX && row.gridY === intent.gridY);
-          if (!wasVetted || !def || !factionNow || factionNow.eliminated ||
-              factionNow.salvage < def.cost ||
-              !canBuild(intent.kind,bot.slot,intent.gridX,intent.gridY,factionNow.salvage))
-            continue;
-          const deadline = nowUs + BigInt(def.buildMs)*1_000n;
-          ctx.db.factionState.id.update({
-            ...factionNow, salvage: debitSalvage(factionNow.salvage,def.cost),
+          if (!factionNow) continue;
+          const allowed = legalBuildCandidates.some(row =>
+            row.kind === intent.kind && row.gridX === intent.gridX &&
+            row.gridY === intent.gridY);
+          const result = dispatchConstruction({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: factionNow.eliminated },
+            request: {
+              kind: intent.kind, ownerSlot: bot.slot, gridX: intent.gridX,
+              gridY: intent.gridY, salvage: factionNow.salvage,
+              mapCells: world.mapCells, terrain,
+              structures: currentShapes().map(row => ({
+                ...row, kind: row.kind as StructureKind,
+              })),
+              deposits: Array.from(ctx.db.salvageNode.matchId.filter(match.id))
+                .map(row => ({ x: row.gridX, y: row.gridY })),
+              hulls: currentHulls(),
+            },
+            nowUs, locationAllowed: allowed,
+          }, {
+            setBalance: salvage => {
+              ctx.db.factionState.id.update({ ...factionNow, salvage });
+            },
+            insertStructure: row => ctx.db.structure.insert({
+              id: 0n, ...row, lastFiredAtUs: -1n, turretAngleDeg: 0,
+              level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
+              complete: false,
+            }).id,
+            scheduleCompletion: (structureId, dueAtUs) => {
+              ctx.db.constructionSchedule.insert({
+                scheduledId: 0n, structureId,
+                scheduledAt: ScheduleAt.time(dueAtUs),
+              });
+            },
           });
-          const structure = ctx.db.structure.insert({
-            id: 0n, matchId: match.id, ownerSlot: bot.slot, kind: intent.kind,
-            channel: def.channel, gridX: intent.gridX, gridY: intent.gridY,
-            width: def.width, height: def.height, hp: def.hp,
-            lastFiredAtUs: -1n, turretAngleDeg: 0,
-            level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
-            complete: false, connected: def.channel === "superstructure",
-            completeAtUs: deadline,
-          });
-          ctx.db.constructionSchedule.insert({
-            scheduledId: 0n, structureId: structure.id,
-            scheduledAt: ScheduleAt.time(deadline),
-          });
+          if (!result.ok) continue;
         }
       }
       // Skip missed strategic decisions; never replay a huge backlog after lag.
