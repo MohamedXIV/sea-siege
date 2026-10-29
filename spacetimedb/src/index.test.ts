@@ -365,3 +365,35 @@ it("demolition refunds exactly once, protects Command Core and preserves other p
     moduleExports.demolishStructure(ctx, { structureId: pad.id })
   )).toThrow("unavailable");
 });
+
+it("demolishing support collapses a mounted workshop and cancels its construction timer", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: lobby.id, kind: "workshop", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const workshop = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "workshop"
+  )!;
+  const support = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "platform" &&
+    row.gridX === core.gridX && row.gridY === core.gridY + 3
+  )!;
+  expect(test.db.constructionSchedule.count()).toBe(1n);
+  test.withReducerTx(alice, ctx =>
+    moduleExports.demolishStructure(ctx, { structureId: support.id })
+  );
+  expect(test.db.structure.id.find(support.id)).toBeUndefined();
+  expect(test.db.structure.id.find(workshop.id)).toBeUndefined();
+  expect(test.db.constructionSchedule.count()).toBe(0n);
+  const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
+  expect(member.salvage).toBe(420 - 120 + 12);
+});
