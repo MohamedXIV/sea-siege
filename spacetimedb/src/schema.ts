@@ -8,7 +8,11 @@ const match = table(
     host: t.identity(),
     phase: t.string(),
     maxSlots: t.u32(),
-    winnerSlot: t.i32(), // -1 means no winner yet or deterministic draw
+    winnerSlot: t.i32(), // -1 for draw/unresolved
+    victoryReason: t.string(),
+    winningScore5: t.u64(), // score units are fifths; 0 for non-timeout outcomes
+    startedAtUs: t.i64(),
+    endedAtUs: t.i64(),
     createdAt: t.timestamp(),
   },
 );
@@ -21,6 +25,7 @@ const matchMember = table(
     identity: t.identity().index("btree"),
     slot: t.u32(),
     salvage: t.u32(),
+    totalSalvageGathered: t.u64(),
     eliminated: t.bool(),
   },
 );
@@ -243,9 +248,22 @@ const turretAim = table(
   },
 );
 
+
+/** Single one-shot, 12-minute match deadline; never one timer per player. */
+export const matchDeadline = table(
+  { name: "match_deadline" },
+  {
+    scheduledId: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    scheduledAt: t.scheduleAt(),
+    deadlineUs: t.i64(),
+  },
+);
+
 const spacetimedb = schema({
   match, matchMember, ship, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
   harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
+  matchDeadline,
 });
 export default spacetimedb;
