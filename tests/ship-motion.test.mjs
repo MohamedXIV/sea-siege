@@ -93,3 +93,38 @@ test('a five-second scheduling stall moves no farther than the capped dt', () =>
   assert.ok(result.ship.x <= 2.0+1e-9);
   assert.ok(result.ship.x > 1.5);
 });
+
+
+test('trace records each physical leg when one tick turns at a waypoint', () => {
+  const result = advanceShipOnRoute(ship(2.4, 1.5, 0),
+    route(8, [2,1], [2,2]), 0, 8, .25);
+  assert.equal(result.traversedSegments.length, 2);
+  const [first, second] = result.traversedSegments;
+  assert.deepEqual(first.from, { x: 2.4, y: 1.5 });
+  assert.deepEqual(first.to, { x: 2.5, y: 1.5 });
+  assert.deepEqual(second.from, first.to);
+  assert.equal(second.to.x, 2.5);
+  assert.ok(second.to.y > 1.5);
+  assert.deepEqual(second.to, {x: result.ship.x, y: result.ship.y});
+  // Start/end CHORD is diagonal, but neither travelled leg is.
+  assert.ok(result.ship.x !== first.from.x && result.ship.y !== first.from.y);
+  assert.equal(first.from.y, first.to.y);
+  assert.equal(second.from.x, second.to.x);
+});
+
+test('an idle or turning-only step produces no phantom collision segments', () => {
+  const zero = advanceShipOnRoute(ship(), route(8,[2,1]), 0,8,0);
+  assert.deepEqual(zero.traversedSegments, []);
+  const turn = advanceShipOnRoute(ship(1.5,1.5,270),route(8,[1,2]),0,8,.1);
+  assert.deepEqual(turn.traversedSegments, []);
+});
+
+test('all swept legs form a contiguous path ending at the server position', () => {
+  const result = advanceShipOnRoute(ship(2.45,1.5,0),
+    route(8,[2,1],[2,2],[2,3]),0,8,.25);
+  for(let i=1;i<result.traversedSegments.length;i++)
+    assert.deepEqual(result.traversedSegments[i].from,
+      result.traversedSegments[i-1].to);
+  const final=result.traversedSegments.at(-1);
+  assert.deepEqual(final?.to,{x:result.ship.x,y:result.ship.y});
+});
