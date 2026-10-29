@@ -29,7 +29,7 @@ export const finishMatchAtDeadline = spacetimedb.reducer(
       return [{
         slot: member.slot, coreHp: core.hp,
         structures: structures.filter(row => row.ownerSlot === member.slot && row.hp > 0).length,
-        ships: ships.filter(row => row.owner.isEqual(member.identity) && row.hp > 0).length,
+        ships: ships.filter(row => row.ownerSlot === member.slot && row.hp > 0).length,
         totalSalvageGathered: member.totalSalvageGathered,
       }];
     });
