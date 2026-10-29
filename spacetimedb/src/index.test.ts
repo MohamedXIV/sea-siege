@@ -46,8 +46,12 @@ it("prevents guest start and unauthorized ship orders", () => {
   expect(() => test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, { shipId: ownShip.id, targetX: -5, targetY: 30 })))
     .toThrow("out of bounds");
 
-  test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, { shipId: ownShip.id, targetX: 32, targetY: 30 }));
-  expect(test.db.ship.id.find(ownShip.id)?.targetX).toBe(32);
+  const guestShip = [...test.db.ship.iter()][1]!;
+  test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
+    shipId: ownShip.id, targetX: guestShip.x, targetY: guestShip.y,
+  }));
+  expect(test.db.ship.id.find(ownShip.id)?.targetX).toBe(guestShip.x);
+  expect(test.db.shipRoute.shipId.find(ownShip.id)?.cellPath.length).toBeGreaterThan(0);
 });
 
 it("identity-filtered views do not reveal another faction's ships or slots", () => {
@@ -109,4 +113,30 @@ it("rejects destinations outside each match's actual map size", () => {
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.issueShipOrder(ctx, { shipId: ownShip.id, targetX: 64, targetY: 20 })
   )).toThrow("Destination out of bounds");
+});
+
+it("rejects impassable terrain and keeps an existing ship route unchanged", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const own = [...test.db.ship.iter()][0]!;
+  const other = [...test.db.ship.iter()][1]!;
+  test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
+    shipId: own.id, targetX: other.x, targetY: other.y,
+  }));
+  const routeBefore = test.db.shipRoute.shipId.find(own.id)!;
+  const seed = test.db.worldConfig.matchId.find(matchId)!.seed;
+  const world = generateDeterministicWorld(seed, 2);
+  const blocked = world.cells.findIndex(value => value >= 2);
+  expect(blocked).toBeGreaterThanOrEqual(0);
+  const blockedX = blocked % world.mapCells + 0.5;
+  const blockedY = Math.floor(blocked / world.mapCells) + 0.5;
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
+    shipId: own.id, targetX: blockedX, targetY: blockedY,
+  }))).toThrow("Destination unreachable");
+  expect(test.db.shipRoute.shipId.find(own.id)).toEqual(routeBefore);
 });
