@@ -117,3 +117,25 @@ The source now implements these backend foundations:
 The private `bot_controller` rows currently store difficulty, seed and `nextDecisionUs`, **but no strategic scheduler is registered**. The policy and perception helper are still only pure modules. Next, introduce a bounded one-timer-per-match strategic scheduler, construct authoritative visibility-limited observations, and apply proposed actions through reusable shared validators used for human commands too. Those commands must never impersonate users or bypass resource, navigation, visibility, firing or ownership contracts. **Bot-only headless matches** also need separate internal fixture initialization without requiring a real host Identity. Keep Issue #12 open until these are running and tested.
 
 The P0 acceptance gates (SpacetimeDB build/test/publish, identity-filtered subscriptions and two-client validation) remain outstanding. The user-approved UI/HUD design gate is untouched.
+
+
+## Phase 3 — server-scheduled strategic decisions (29 Oct 2026)
+
+**Implemented as SpacetimeDB source, not runtime-validated:** the active match now creates **one private `bot_schedule` interval per match with at least one Bot**. `advanceBots` accepts only an internal scheduled caller, checks absolute match deadline and persists a next-decision timestamp per private `bot_controller`. Easy/Normal/Hard retain their 4/2/1-second cadence and 1/2/3-intent caps. Skipped ticks are *not* replayed; endgame removes the timer whether victory is by Core elimination or deadline score.
+
+Each due Bot gets a fresh server-built `BotObservation`, never a raw table handle:
+- Friendly ships/structures and an independent `faction_state` balance;
+- current enemy contacts **only** when projected through actual friendly sensors and terrain line-of-sight;
+- deposits **only** when within sensor radius and terrain LoS, plus legal build locations validated from friendly connected territory and physical occupancy;
+- bounded nearby navigable exploration frontiers. Unobserved enemy ships, enemy faction ledgers and undiscovered deposits are not passed to `decideBot`.
+- placement checks are capped to 16 candidate origins **per type** and favor existing completed friendly platforms for mounted structures.
+
+The scheduler interprets and **revalidates** every proposed intent against current SpacetimeDB state: faction ownership, correct match, surviving unit, non-eliminated Bot controller, resource cost and queue limit, legal building footprint/support, destination A* with hull-specific collision, harvest range and visible deposit, firing sensor/LoS/range/cooldown/aligned turret, and bounded projectiles. Accepted actions update the same private ship-route, harvest-order, turret-aim, projectile, production, structure and faction-ledger tables used by human reducers. This is **not** a second in-browser simulation. The bot does not forge `ctx.sender`, invoke a human reducer, or gain special resources.
+
+**Important architecture limitation:** while the scheduler reuses the *same pure validation/rules functions* as human reducer paths (`validateStructurePlacement`, `findTerrainPath`, `isNavigationCellBlocked`, `shipDefinition`, `debitSalvage`, `inRange`, `canFire`, `terrainLineOfSight`, `turretAligned`, etc.), the authoritative **transaction orchestration is still duplicated** between human reducers and the bot scheduler. A central, typed command application layer is needed before we claim full guaranteed reducer parity. Don't claim shared transaction code, or full #12 completion, yet.
+
+**Actually executed now:** standalone `tests/bot-observation.test.mjs` **5/5 PASS**, strict `tsc` **PASS**; exact executed source/tests verified byte-identical with GitHub blobs:
+- `sim/bot-observation.ts`: `e105265f9022e04d5c15ead78b974c7dccdc830b`
+- `tests/bot-observation.test.mjs`: `8e54161148e3b85e9bf21ab8f8ccae47fdb79319`
+
+**Prepared but not executed:** official SpacetimeDB module-harness tests for internal-only strategic tick, one shared timer for 2–7 Bot seats, zero fake human memberships, human inability to control Bot fleets, sensor-hidden contact denial, resource conservation and bot-timer cleanup at victory. The actual 1-human + 7-Bot scheduled loop, headless Bot-only match, fog subscription security, full SDK compile/build, performance and two-client gameplay **are NOT VERIFIED**. Regenerate bindings and run the SDK test harness before calling bots playable. The UI/HUD review gate #15 remains intact.
