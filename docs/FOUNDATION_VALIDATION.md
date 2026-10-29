@@ -103,3 +103,21 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - `index.test.ts` includes additional **unexecuted** module-harness cases for internal-only economy ticks, range/owner restrictions, no pre-enqueue production time, FIFO launches, cancellation/refunds and incomplete rigs.
 
 **Release blockers:** no actual `npm install`, `spacetime build`, V8 module execution, scheduled clock run, generated bindings, independent client connections, or live authorization/visibility audit. Source validity at SDK level and 2-player operation are **not proven**; keep #3/#4/#9/#17 open. Workshop repair/upgrades and client-visible authorized production state are still outstanding. The UI design gate #15 remains intact.
+
+
+## Workshop repairs and tier upgrades — 29 Oct 2026
+
+**Actually executed (pure TypeScript only):**
+- Node 22 `node --experimental-strip-types --test tests/workshop.test.mjs`: **7/7 PASS**; strict `tsc --noEmit` of `spacetimedb/src/sim/workshop.ts`: **PASS**.
+- The files uploaded to GitHub are **byte-identical** to locally executed/tested files, Git blob IDs:
+  - `workshop.ts` — `9341b347da20036454284250029cc0c4a30e45bb`
+  - `workshop.test.mjs` — `7ce9403876139fe20bc41c02b2cb215bf17405dc`
+- Pure tests cover tier pricing/config, repair cap/missing HP, exact ceiling costs, no dead/full repairs, 2D range, level-specific structure max HP and offline upgrade pause.
+
+**Source changes prepared, not executed in SpacetimeDB:**
+- `structure` rows now carry `level`, `upgradeRemainingUs`, and `upgradeStartedAtUs`; every starter/construction insertion initializes these fields.
+- `repairStructure`, `repairShip`, `upgradeWorkshop` exported via module entrypoint with server-checked match, ownership, range, health, affordability and atomic cost/state updates.
+- Active upgrades are progressed within the existing **internal-only** 1 Hz economy reducer; disconnection pauses progress, and cost/remaining work survive reconnects.
+- Demolition and collapsed support refund paid but uncompleted Workshop upgrades once. Prepared official harness tests in `index.test.ts` cover repairs, access control, missing support, time progression and refunds.
+
+**Not verified:** actual SpacetimeDB module typecheck/build or V8 reducer execution, scheduled tick integration, two independent client subscriptions, combat damage input, UI. Keep the relevant P0/P1 issues and Draft PR #20 open until live verification. Workshop tier balancing is **new provisional design**, not asserted as a value from Gemini reference files.
