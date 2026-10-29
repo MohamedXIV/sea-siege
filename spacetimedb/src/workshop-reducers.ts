@@ -62,7 +62,7 @@ export const repairShip = spacetimedb.reducer(
         workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
 
     const target = ctx.db.ship.id.find(shipId);
-    if (!target || target.matchId !== workshop.matchId || !target.owner.isEqual(ctx.sender))
+    if (!target || target.matchId !== workshop.matchId || target.ownerSlot !== member.slot)
       throw new Error("Ship not owned by this faction");
     if (target.hp <= 0) throw new Error("Cannot repair destroyed ship");
     const shipDef = shipDefinition(target.kind);
