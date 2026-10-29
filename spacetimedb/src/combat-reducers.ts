@@ -3,17 +3,14 @@ import { t } from "spacetimedb/server";
 import spacetimedb, { combatSchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
-import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-command-dispatch.ts";
 import { structureOnline, type StructureKind } from "./sim/construction.ts";
 import { boundedDeltaSeconds } from "./sim/ship-motion.ts";
 import {
-  advanceTurret, desiredBearing, normalizeBearing, turretAligned, type TurretKind,
+  advanceTurret, type TurretKind,
 } from "./sim/turret-aim.ts";
 import {
-  COMBAT_RULES, advanceProjectile, canFire, createProjectile, terrainLineOfSight,
-  weaponDefinition, withinRange, type CombatBody, type StructureCombatBody,
-  type ShipCombatBody, type WeaponKind,
+  COMBAT_RULES, advanceProjectile, weaponDefinition, type CombatBody,
 } from "./sim/combat.ts";
 
 
