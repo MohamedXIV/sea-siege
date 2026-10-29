@@ -246,3 +246,25 @@ Tests verified human/Bot identical harvest-order and production writes, cross-fa
 **Testing limitation:** local `sim/economy.ts` is an *isolated matching-rules stub* for this test, not the repository's full dependency graph. There is no locally available SpacetimeDB SDK or CLI; full module TypeScript build, official Vitest datastore harness, real DB transaction rollback, scheduled bot reducer and two-client integration were **not run**.
 
 **Integration changes present but unexecuted:** both human and Bot entrypoints now call shared `dispatchHarvest` and `dispatchProduction`, with transaction-backed mutation callbacks. Human harvest also checks current server terrain LoS to the chosen node. Other command types remain partially duplicated and the official tests need a real SDK/CLI environment. PR Draft, main unmodified, UI gate #15 enforced.
+
+
+## Shared move, build, aim and fire command contracts — 30 October 2026
+
+**Actually executed in local Node 22.16.0 with standalone strict TypeScript 5.8.3**:
+- `tests/command-dispatch.test.mjs`: **10/10 PASS** (previous Harvest & Enqueue slice);
+- `tests/world-command-dispatch.test.mjs`: **9/9 PASS**;
+- `tests/combat-command-dispatch.test.mjs`: **8/8 PASS**;
+- **All three suites together: 27/27 PASS**, zero failures.
+- Standalone `tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --allowImportingTsExtensions` on the **two new dispatcher modules**: **PASS**.
+
+The exact new four source/test files were verified byte-for-byte by local Git-blob SHA-1 calculation against the GitHub connector:
+- `spacetimedb/src/sim/world-command-dispatch.ts`: `c0458889a1449f7d691157919a426c95be307341`
+- `tests/world-command-dispatch.test.mjs`: `573e007735cd3bfa8a821b89ed1f3199f118c6cf`
+- `spacetimedb/src/sim/combat-command-dispatch.ts`: `d0e1fcdf4ce77cef527a52fa40da0b1e8916b827`
+- `tests/combat-command-dispatch.test.mjs`: `429a3a5cb33ffa0a89b3ad8de3b393ea2802d208`
+
+**Exact dependency limitation:** the executable local fixture uses simplified, compatible `economy.ts`, `navigation.ts`, `collision.ts`, `construction.ts`, `combat.ts` and `turret-aim.ts` for this purpose. It validates the byte-identical dispatcher implementation and staged mutation calls under the fixture, but does **not** validate the entire real helper implementation, the actual SpacetimeDB module, the SDK row types, DB atomic rollback or 2–8 client networking. The GitHub tests have not been run with the full real dependency graph.
+
+**Source-only new authorization views:** `spacetimedb/src/visibility-views.ts` defines `myVisibleEnemies` (minimal current sensor/terrain-LoS-projected enemy contact ID, type and position) and `myStructures` (only caller-owned private structure rows). Their underlying tables remain PRIVATE. View code uses only match-scoped indexed reads. Three additional official module-harness negative subscription tests are checked into `spacetimedb/src/index.test.ts` but were NOT run. Full discovered terrain, last-known enemy positions, spectators, client interpolation, and performant incremental view behavior are NOT done.
+
+**External SDK verification:** official SpacetimeDB 2.x docs support authenticated procedural views and `rightSemijoin`, private table isolation, `ScheduleAt.time/interval` and private scheduled reducers. However `npm install`, `spacetime build`, real module typechecking/publishing and the official Vitest datastore harness **remain blocked by absent SDK/CLI and unavailable npm registry DNS**. An alternate shell execution tunnel was also unavailable. This is an explicit release blocker, not evidence of a passing integration build. No GitHub Actions minutes were consumed, no Cloud database was touched and no UI/HUD was modified.
