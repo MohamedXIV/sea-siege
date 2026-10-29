@@ -213,3 +213,21 @@ Pure coverage: consistent empty-seat selection and reuse, no duplicate slots, bo
 - Module test harness prepared to inspect 1 Human + 3 Bots, private view visibility, forged command denial, full-lobby rejection, Bot removal and slot reuse. The existing economy, workshop and score test cases were migrated to `factionState` rows.
 
 **NOT verified:** official SpacetimeDB 2.x module typecheck/build/publish, scheduled reducers, private view join runtime behavior, real two-client negative tests, generated bindings, client stability or headless Bot match. The Bots remain **idle** because the strategic scheduler/validated execution bridge is not implemented. No Cloud DB or user credentials were touched. Keep PR #20 DRAFT, #12/#13 open and #15 UI design gate intact.
+
+
+## Strategic Bots: first server-ticked action path — 29 Oct 2026
+
+**Verified exact-source local checks** (Node 22.16.0, TypeScript 5.8.3):
+- `node --experimental-strip-types --test tests/bot-observation.test.mjs` — **5/5 PASS**.
+- Standalone `tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler spacetimedb/src/sim/bot-observation.ts` — **PASS**.
+- Git blob SHA equality proven for exact committed/tested source `e105265f9022e04d5c15ead78b974c7dccdc830b` and test `8e54161148e3b85e9bf21ab8f8ccae47fdb79319`.
+
+These tests check that resources are only proposed to a Bot if seen by a friendly sensor with line-of-sight; no-sensor information denial, stable input ordering, and that complete friendly platforms are prioritized for mounted buildings. **No real SpacetimeDB transactions were executed by these checks.**
+
+**Not yet tested in a real SpacetimeDB module:**
+- New private `bot_schedule` (one scheduled interval per match) created during `startMatch` when actual Bot controllers exist, and deleted on either match finalization path;
+- internal-only `advanceBots` constructs visibility-limited `BotObservation`, invokes deterministic bounded `decideBot`, rechecks commands against live server data, and applies ship routes, gathering, aim/fire, construction and shipyard production;
+- capped per-kind construction candidate search and timestamp-based cadence without replaying missed strategic ticks;
+- four additional **prepared, unexecuted** module-harness cases for server-only scheduling, sensor-hidden hostiles, time-limit cleanup and 1-human/7-bot single-timer scenario.
+
+**Known gaps:** no actual SDK module compilation/test harness, direct 2-client subscription audit, bot-only headless game, exact-head deterministic whole-match digest, or benchmark for 8 concurrent Bot seats. Human/bot reducer mutation orchestration is still duplicated despite shared pure validators. Keep PR #20 draft and issues #12/#13/#17 open. Client generated bindings must be refreshed before real integration. No UI/HUD edits.
