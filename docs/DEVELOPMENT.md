@@ -266,3 +266,16 @@ The bot readiness migration has begun without faking client identities. `ship.ow
 The private `my_ships` identity view uses `matchMember.where(identity == sender).rightSemijoin(ship, factionKey == factionKey)`; filtering on slot alone would **leak same-numbered factions from unrelated matches**. This indexed semijoin is supported by the [official SpacetimeDB 2.x view API](https://spacetimedb.com/docs/functions/views/), but this module's actual SDK build and subscription security tests are pending.
 
 `tests/faction-ownership.test.mjs` passes 5/5 standalone cases and the exact Git blobs match locally executed source/tests. Two new **unexecuted** module harness cases check cross-match subscriptions and human command rejection. See `docs/BOT_SERVER_INTEGRATION.md` for the remaining faction ledger/controller migration and explicit non-playability boundary. **No UI or HUD edits.**
+
+
+## Independent faction ledgers and lobby Bots — 29 October 2026
+
+The server now treats **Faction as the economy/combat unit** and **Human Membership as authentication only**. Private `faction_state` rows own the balance, lifetime earned salvage and elimination state, and identify `controller` as human or bot. A real human `match_member` has just its true Identity, match, slot and match-scoped faction key. This supersedes the older statement above that no bot controller or independent ledger exists.
+
+Host-only `addBot(matchId, difficulty)` and `removeBot(matchId, slot)` work at the *source reducer* level during lobby setup. Adding a Bot claims a free slot, creates a private `bot_controller` with a deterministic server-derived seed and resources, a Core + six platforms and its own scout; deleting a Bot removes only its own lobby assets. Join never overwrites a bot seat. A human can start a match with a Bot as the second faction, but bots **do not yet issue any actions**. There is no server strategic tick or real headless runner yet.
+
+Both `myShips` and the new `myFactionStates` are identity-filtered views joining full match-scoped faction keys, intended to exclude other humans' and all Bots' private state. The real SpacetimeDB query builder / subscriptions still need runtime verification and generated binding updates.
+
+All construction, repair, resource income, shipyard production, combat elimination and Naval Dominance score now read/write `faction_state`. Client commands still require a valid human membership and a non-eliminated human-controlled faction. See `docs/BOT_SERVER_INTEGRATION.md` for the shared-validator and strategic scheduler work still needed.
+
+Pure Bot seat tests `tests/bot-seats.test.mjs`: **4/4 passed** on Node 22.16 with strict standalone TypeScript (5.8.3) passing. These do **not** prove the integrated reducers compile or that Bots are playable. No UI/HUD edits were made.
