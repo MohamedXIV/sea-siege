@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ConnectionId } from "spacetimedb";
+import { ConnectionId, TimeDuration } from "spacetimedb";
 import { createModuleTestHarness, TestAuth } from "spacetimedb/server/test-utils";
 import spacetimedb, * as moduleExports from "./index";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
@@ -139,4 +139,92 @@ it("rejects impassable terrain and keeps an existing ship route unchanged", () =
     shipId: own.id, targetX: blockedX, targetY: blockedY,
   }))).toThrow("Destination unreachable");
   expect(test.db.shipRoute.shipId.find(own.id)).toEqual(routeBefore);
+});
+
+it("scheduled ship movement advances only under internal authority and expires when idle", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const vessel = [...test.db.ship.iter()].find(row => row.owner.isEqual(
+    [...test.db.match.iter()][0]!.host
+  ))!;
+
+  // A spawn's 3x3 area is clear by construction, so the adjacent cell is legal.
+  const targetX = vessel.x + 1;
+  const targetY = vessel.y;
+  test.withReducerTx(alice, ctx =>
+    moduleExports.issueShipOrder(ctx, { shipId: vessel.id, targetX, targetY })
+  );
+  expect(test.db.motionSchedule.count()).toBe(1n);
+  // Reissuing an order in the same match must not create a second timer.
+  test.withReducerTx(alice, ctx =>
+    moduleExports.issueShipOrder(ctx, { shipId: vessel.id, targetX, targetY })
+  );
+  expect(test.db.motionSchedule.count()).toBe(1n);
+  const timer = [...test.db.motionSchedule.iter()][0]!;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.advanceMatchSimulation(ctx, { arg: timer })
+  )).toThrow("internal-only");
+  expect(test.db.ship.id.find(vessel.id)?.x).toBe(vessel.x);
+
+  test.clock.advance(TimeDuration.fromMillis(100));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceMatchSimulation(ctx, { arg: timer })
+  );
+  const moved = test.db.ship.id.find(vessel.id)!;
+  expect(moved.x).toBeGreaterThan(vessel.x);
+  expect(moved.x).toBeLessThanOrEqual(vessel.x + 0.2 + 1e-8);
+  expect(moved.updatedAt.microsSinceUnixEpoch)
+    .toBeGreaterThan(vessel.updatedAt.microsSinceUnixEpoch);
+
+  for (let i = 0; i < 30 && test.db.motionSchedule.count() > 0n; i++) {
+    test.clock.advance(TimeDuration.fromMillis(100));
+    const nextTimer = [...test.db.motionSchedule.iter()][0]!;
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceMatchSimulation(ctx, { arg: nextTimer })
+    );
+  }
+  const arrived = test.db.ship.id.find(vessel.id)!;
+  expect(arrived.x).toBe(targetX);
+  expect(arrived.y).toBe(targetY);
+  expect(arrived.velocityX).toBe(0);
+  expect(test.db.shipRoute.count()).toBe(0n);
+  expect(test.db.motionSchedule.count()).toBe(0n);
+});
+
+it("stop orders are authorized, halt movement, and let the lazy timer expire", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const vessel = [...test.db.ship.iter()][0]!;
+  test.withReducerTx(alice, ctx =>
+    moduleExports.issueShipOrder(ctx, {
+      shipId: vessel.id, targetX: vessel.x + 1, targetY: vessel.y,
+    })
+  );
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.stopShip(ctx, { shipId: vessel.id })
+  )).toThrow("Cannot command another");
+  test.withReducerTx(alice, ctx =>
+    moduleExports.stopShip(ctx, { shipId: vessel.id })
+  );
+  expect(test.db.shipRoute.count()).toBe(0n);
+  const stopped = test.db.ship.id.find(vessel.id)!;
+  expect(stopped.targetX).toBe(stopped.x);
+  expect(stopped.velocityX).toBe(0);
+  test.clock.advance(TimeDuration.fromMillis(100));
+  const timer = [...test.db.motionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceMatchSimulation(ctx, { arg: timer })
+  );
+  expect(test.db.motionSchedule.count()).toBe(0n);
+  expect(test.db.ship.id.find(vessel.id)?.x).toBe(stopped.x);
 });
