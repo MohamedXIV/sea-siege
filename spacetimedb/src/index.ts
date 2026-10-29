@@ -4,6 +4,10 @@ import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import {
+  CONSTRUCTION_RULES, initialStructures, structureDefinition, structureOnline,
+  validateStructurePlacement, type StructureKind, type StructureShape,
+} from "./sim/construction.ts";
+import {
   canSweepVessel, createVesselBodies, isNavigationCellBlocked, COLLISION_RULES,
 } from "./sim/collision.ts";
 
@@ -34,6 +38,7 @@ const matchMember = table(
     matchId: t.u64().index("btree"),
     identity: t.identity().index("btree"),
     slot: t.u32(),
+    salvage: t.u32(),
   },
 );
 
@@ -133,9 +138,40 @@ const motionSchedule = table(
   },
 );
 
+
+/** Owned physical structures; the surface and mounted layers may coexist. */
+const structure = table(
+  { name: "structure" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    ownerSlot: t.u32(),
+    kind: t.string(),
+    channel: t.string(),
+    gridX: t.u32(),
+    gridY: t.u32(),
+    width: t.u32(),
+    height: t.u32(),
+    hp: t.u32(),
+    complete: t.bool(),
+    connected: t.bool(),
+    completeAtUs: t.i64(),
+  },
+);
+
+/** One-shot construction completion; the authoritative deadline is server time. */
+const constructionSchedule = table(
+  { name: "construction_schedule" },
+  {
+    scheduledId: t.u64().primaryKey().autoInc(),
+    structureId: t.u64().index("btree"),
+    scheduledAt: t.scheduleAt(),
+  },
+);
+
 const spacetimedb = schema({
   match, matchMember, ship, shipRoute, motionSchedule,
-  worldConfig, worldSpawn, worldChunk, salvageNode,
+  worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
 });
 export default spacetimedb;
 
@@ -178,9 +214,23 @@ export const createMatch = spacetimedb.reducer(
         regenPerSec: node.regenPerSec, contested: node.contested,
       });
     }
-    ctx.db.matchMember.insert({ id: 0n, matchId: created.id, identity: ctx.sender, slot: 0 });
+    ctx.db.matchMember.insert({
+      id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
+      salvage: CONSTRUCTION_RULES.startingSalvage,
+    });
+    for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
+      const definition = CONSTRUCTION_RULES.definitions[base.kind];
+      ctx.db.structure.insert({
+        id: 0n, matchId: created.id, ownerSlot: base.ownerSlot,
+        kind: base.kind, channel: definition.channel, gridX: base.gridX, gridY: base.gridY,
+        width: base.width, height: base.height, hp: definition.hp,
+        complete: true, connected: true,
+        completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
+      });
+    }
     const initial = world.spawns[0]!;
-    const initialX = initial.gridX + 1.5;
+    // The launch vessel must NOT spawn inside its solid 3×3 Command Core.
+    const initialX = initial.gridX - 1.5;
     const initialY = initial.gridY + 1.5;
     ctx.db.ship.insert({
       id: 0n,
@@ -213,10 +263,23 @@ export const joinMatch = spacetimedb.reducer(
     }
     const slot = Array.from({ length: lobby.maxSlots }, (_, index) => index).find(index => !occupied.has(index));
     if (slot === undefined) throw new Error("Lobby full");
-    ctx.db.matchMember.insert({ id: 0n, matchId, identity: ctx.sender, slot });
+    ctx.db.matchMember.insert({
+      id: 0n, matchId, identity: ctx.sender, slot,
+      salvage: CONSTRUCTION_RULES.startingSalvage,
+    });
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
     if (!spawn) throw new Error("Missing server-owned spawn assignment");
-    const x = spawn.gridX + 1.5;
+    for (const base of initialStructures(slot, spawn.gridX, spawn.gridY)) {
+      const definition = CONSTRUCTION_RULES.definitions[base.kind];
+      ctx.db.structure.insert({
+        id: 0n, matchId, ownerSlot: slot,
+        kind: base.kind, channel: definition.channel, gridX: base.gridX, gridY: base.gridY,
+        width: base.width, height: base.height, hp: definition.hp,
+        complete: true, connected: true,
+        completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
+      });
+    }
+    const x = spawn.gridX - 1.5;
     const y = spawn.gridY + 1.5;
     ctx.db.ship.insert({
       id: 0n,
@@ -275,6 +338,9 @@ export const issueShipOrder = spacetimedb.reducer(
     const env = {
       mapCells: config.mapCells, terrain,
       vessels: createVesselBodies(Array.from(ctx.db.ship.matchId.filter(current.matchId))),
+      footprints: Array.from(ctx.db.structure.matchId.filter(current.matchId))
+        .filter(row => row.channel === "surface")
+        .map(row => ({ x: row.gridX, y: row.gridY, width: row.width, height: row.height })),
     };
     const route = findTerrainPath(
       terrain, config.mapCells,
@@ -408,7 +474,10 @@ export const advanceMatchSimulation = spacetimedb.reducer(
     const matchShips = Array.from(ctx.db.ship.matchId.filter(timer.matchId));
     matchShips.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const bodies = createVesselBodies(matchShips);
-    const env = { mapCells: world.mapCells, terrain, vessels: bodies };
+    const footprints = Array.from(ctx.db.structure.matchId.filter(timer.matchId))
+      .filter(row => row.channel === "surface")
+      .map(row => ({ x: row.gridX, y: row.gridY, width: row.width, height: row.height }));
+    const env = { mapCells: world.mapCells, terrain, vessels: bodies, footprints };
     let routesRemaining = 0;
     for (const vessel of matchShips) {
       const route = ctx.db.shipRoute.shipId.find(vessel.id);
