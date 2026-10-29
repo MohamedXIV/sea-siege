@@ -550,3 +550,146 @@ it("rig income is server-owned and incomplete rigs never produce salvage", () =>
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, { arg: timer }));
   expect(test.db.matchMember.id.find(initial.id)!.salvage).toBeGreaterThanOrEqual(before.salvage + 4 + 9);
 });
+
+it("workshop repairs owned hulls and structures only at range with exact salvage charges", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: match.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: match.id, kind: "workshop", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const workshop = [...test.db.structure.matchId.filter(match.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "workshop"
+  )!;
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.repairStructure(ctx, {
+    workshopId: workshop.id, structureId: core.id, requestedHp: 60,
+  }))).toThrow("offline");
+  test.clock.advance(TimeDuration.fromMillis(5000));
+  const completion = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: completion })
+  );
+  const vessel = [...test.db.ship.matchId.filter(match.id)].find(row =>
+    row.owner.isEqual(match.host)
+  )!;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.structure.id.update({ ...core, hp: 2100 });
+    ctx.db.ship.id.update({ ...vessel, hp: 160 });
+  });
+  expect(() => test.withReducerTx(bob, ctx => moduleExports.repairStructure(ctx, {
+    workshopId: workshop.id, structureId: core.id, requestedHp: 60,
+  }))).toThrow("Not your workshop");
+  test.withReducerTx(alice, ctx => moduleExports.repairStructure(ctx, {
+    workshopId: workshop.id, structureId: core.id, requestedHp: 60,
+  }));
+  expect(test.db.structure.id.find(core.id)?.hp).toBe(2160);
+  test.withReducerTx(alice, ctx => moduleExports.repairShip(ctx, {
+    workshopId: workshop.id, shipId: vessel.id, requestedHp: 50,
+  }));
+  expect(test.db.ship.id.find(vessel.id)?.hp).toBe(210);
+  const member = [...test.db.matchMember.matchId.filter(match.id)].find(row =>
+    row.slot === 0
+  )!;
+  expect(member.salvage).toBe(420 - 120 - 30 - 25);
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.repairShip(ctx, {
+    workshopId: workshop.id, shipId: vessel.id, requestedHp: 50,
+  }))).toThrow("full health");
+});
+
+it("paid workshop upgrade pauses while offline and progresses only under internal economy ticks", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: match.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: match.id, kind: "workshop", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const workshop = [...test.db.structure.matchId.filter(match.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "workshop"
+  )!;
+  test.clock.advance(TimeDuration.fromMillis(5000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, {
+      arg: [...test.db.constructionSchedule.iter()][0]!,
+    })
+  );
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.upgradeWorkshop(ctx, { workshopId: workshop.id })
+  )).toThrow("Not your");
+  test.withReducerTx(alice, ctx =>
+    moduleExports.upgradeWorkshop(ctx, { workshopId: workshop.id })
+  );
+  expect(test.db.structure.id.find(workshop.id)?.upgradeRemainingUs).toBe(6_000_000n);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.upgradeWorkshop(ctx, { workshopId: workshop.id })
+  )).toThrow("already upgrading");
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const row = ctx.db.structure.id.find(workshop.id)!;
+    ctx.db.structure.id.update({ ...row, connected: false });
+  });
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: [...test.db.economySchedule.iter()][0]! })
+  );
+  expect(test.db.structure.id.find(workshop.id)?.upgradeRemainingUs).toBe(6_000_000n);
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const row = ctx.db.structure.id.find(workshop.id)!;
+    ctx.db.structure.id.update({ ...row, connected: true });
+  });
+  for (let i = 0; i < 6; i++) {
+    test.clock.advance(TimeDuration.fromMillis(1000));
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceEconomy(ctx, { arg: [...test.db.economySchedule.iter()][0]! })
+    );
+  }
+  expect(test.db.structure.id.find(workshop.id)?.level).toBe(2);
+  expect(test.db.structure.id.find(workshop.id)?.upgradeRemainingUs).toBe(0n);
+});
+
+it("demolition refunds a paid but unfinished workshop upgrade only once", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: match.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: match.id, kind: "workshop", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const workshop = [...test.db.structure.matchId.filter(match.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "workshop"
+  )!;
+  test.clock.advance(TimeDuration.fromMillis(5000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, {
+      arg: [...test.db.constructionSchedule.iter()][0]!,
+    })
+  );
+  test.withReducerTx(alice, ctx =>
+    moduleExports.upgradeWorkshop(ctx, { workshopId: workshop.id })
+  );
+  test.withReducerTx(alice, ctx =>
+    moduleExports.demolishStructure(ctx, { structureId: workshop.id })
+  );
+  const member = [...test.db.matchMember.matchId.filter(match.id)]
+    .find(row => row.slot === 0)!;
+  expect(member.salvage).toBe(420 - 120 - 200 + 60 + 200);
+  expect(test.db.structure.id.find(workshop.id)).toBeUndefined();
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.demolishStructure(ctx, { structureId: workshop.id })
+  )).toThrow("unavailable");
+});
