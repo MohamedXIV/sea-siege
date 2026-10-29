@@ -4,6 +4,7 @@ import spacetimedb, {
   motionSchedule, constructionSchedule, economySchedule,
 } from "./schema.ts";
 import { deadlineMicroseconds } from "./sim/match-outcome.ts";
+import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
@@ -200,7 +201,7 @@ export const issueShipOrder = spacetimedb.reducer(
     if (!current) throw new Error("Ship unavailable");
     if (!current.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
     const match = ctx.db.match.id.find(current.matchId);
-    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) throw new Error("Invalid destination");
     const config = ctx.db.worldConfig.matchId.find(current.matchId);
     if (!config) throw new Error("Missing match world configuration");
@@ -306,7 +307,7 @@ export const stopShip = spacetimedb.reducer(
     if (!current) throw new Error("Ship unavailable");
     if (!current.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
     const lobby = ctx.db.match.id.find(current.matchId);
-    if (!lobby || lobby.phase !== "active") throw new Error("Match is not active");
+    if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
     ctx.db.harvestOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
@@ -336,7 +337,7 @@ export const advanceMatchSimulation = spacetimedb.reducer(
     const timer = ctx.db.motionSchedule.scheduledId.find(arg.scheduledId);
     if (!timer) return;
     const active = ctx.db.match.id.find(timer.matchId);
-    if (!active || active.phase !== "active") {
+    if (!active || !matchStillActive(active.phase, active.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) {
       ctx.db.motionSchedule.scheduledId.delete(timer.scheduledId);
       return;
     }
@@ -460,7 +461,7 @@ export const placeStructure = spacetimedb.reducer(
   { matchId: t.u64(), kind: t.string(), gridX: t.u32(), gridY: t.u32() },
   (ctx, { matchId, kind, gridX, gridY }) => {
     const matchRow = ctx.db.match.id.find(matchId);
-    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member) throw new Error("Cannot construct in another player's match");
@@ -509,7 +510,7 @@ export const demolishStructure = spacetimedb.reducer(
     if (!target) throw new Error("Structure unavailable");
     if (target.kind === "command_core") throw new Error("Command Core cannot be demolished");
     const matchRow = ctx.db.match.id.find(target.matchId);
-    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(target.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.slot !== target.ownerSlot) throw new Error("Cannot demolish another faction's structure");
@@ -596,6 +597,8 @@ export const completeConstruction = spacetimedb.reducer(
     if (!pending) return;
     const target = ctx.db.structure.id.find(pending.structureId);
     if (!target) return; // Demolition could have removed the supporting building.
+    const phase = ctx.db.match.id.find(target.matchId);
+    if (!phase || !matchStillActive(phase.phase, phase.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) return;
     if (target.complete) return;
     if (ctx.timestamp.microsSinceUnixEpoch < target.completeAtUs) {
       throw new Error("Construction completion executed before authoritative deadline");
