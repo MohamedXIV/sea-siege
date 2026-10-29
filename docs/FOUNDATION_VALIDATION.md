@@ -148,3 +148,18 @@ Coverage: wrap-around, 180° tie, class-specific maximum turn speed, aiming tole
 **Unverified runtime code:** private `turret_aim` persistence; authenticated `aimWeapon`; server-ticked turret bearing changes in `advanceCombat`; `fireWeapon` rejects misaligned shots; timer reactivation/cleanup and source destruction. New official SpacetimeDB in-memory harness tests for aim ownership, premature fire, 100ms increments and destroyed source cleanup are **prepared but not executed**. No npm package installation, generated SDK bindings, live SpacetimeDB scheduler, independent-client or FoW negative test evidence. Do not close #11/#13/#19 or merge PR #20 on this isolated test evidence alone.
 
 **Design boundary:** no UI/HUD edits were made; issue #15 remains a mandatory review gate. Sudden Death rules have not been chosen or implemented yet.
+
+
+## Source-grounded deterministic match ending — 29 October 2026
+
+**Verified exact committed pure files:** `node --experimental-strip-types --test tests/match-outcome.test.mjs` **9/9 PASS**; standalone strict TypeScript **PASS**, Node v22.16.0, TS v5.8.3. Blob SHA-1 checked against GitHub and matched locally executed bytes:
+- `spacetimedb/src/sim/match-outcome.ts` — `091fc8ac2f1cfaea120c66e92849341e4d8bee42`
+- `tests/match-outcome.test.mjs` — `9a2d280a39132c9584269443a0597b42af96b574`
+
+Coverage: exact 12-minute microsecond deadline, integer-fifths dominance score (Core HP, structure/ship counts, lifetime salvage), immediate one-survivor victory, zero-survivor draw, no premature end, fixed-score time-limit winner, stable lowest-slot equal-score tie-break and commands rejected at the precise cutoff.
+
+**Source prepared but SpacetimeDB runtime NOT verified:** one private one-shot `match_deadline` per active match, internal-only deadline completion and teardown, early combat victory cancellation of timer, public match metadata for winner/reason/time, private u64 lifetime salvage ledger, and active-match deadline guard across gameplay reducers. Official module harness now includes **unexecuted** deadline and ledger tests (internal-only invocation, no early finish, 720-second result, command score freeze before delayed timer, income accrual vs spending).
+
+**Semantic note:** Gemini calls the 12-minute immediate score termination “Sudden Death,” but does not include a special overtime state. This implementation follows that reference, not an invented damage-acceleration phase. Exact equal-score outcomes use the lowest slot, and mutual Core destruction records a draw (-1).
+
+**Unverified:** `npm install` / `spacetime build` / scheduled SDK execution, test-utils harness run, end-to-end two-client match result consistency, encrypted or fog-filtered subscribers and UI. PR #20 remains Draft, issues remain open. No Cloud DB or account credentials were used.
