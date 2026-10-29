@@ -121,3 +121,29 @@ tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler
 ```
 
 **8/8 pure construction tests passed** (Node 22), plus standalone strict TypeScript passed. Existing `index.test.ts` now includes unexecuted module-harness tests for atomic salvage/cost/placement, construction completion and authority, one-time demolition refunds and support collapse. These are **not proof that the SpacetimeDB module compiles or the timers execute**. Continue to mark #8 and #9 open until runtime verification and remaining scope.
+
+
+## Salvage economy and ship production — implementation batch (29 October 2026)
+
+The genuine SpacetimeDB module source has been organized into:
+- `schema.ts`: typed tables and the default module schema (re-exported as the default from `index.ts`).
+- `economy-reducers.ts`: harvesting, queue commands, and the internal scheduled economy reducer.
+- `sim/economy.ts`: deterministic, dependency-light rules and reference-derived balance values; tests in `tests/economy.test.mjs`.
+
+**Balance from the archived Gemini reference (starting hypotheses):** Core +4 salvage/sec, online Salvage Rig +9/sec base plus up to 11/sec drawn from a nearby node, harvesting range 3.5 cells, rig node bonus range 4.5. Scout/Gunboat/Siege cost **70/130/220**, build time **4/6.5/9.5s**, harvesting **14/8/0 per second**, and hull radii **0.42/0.56/0.72** cells. These values are centralized in `ECONOMY_RULES` and must be tuned via real multiplayer observations.
+
+**Server-only operations and persistence:**
+- Each active match starts exactly one 1-second `economy_schedule`. Each invocation validates internal scheduler identity and uses a capped real elapsed time with fractional microsecond carry to limit long delayed-tick catch-up.
+- `orderHarvest`: checks the caller's ship, its type, a same-match salvage node and actual server-measured range. Issuing Move/Stop cancels harvest; harvesting cancels movement.
+- Nodes regenerate up to capacity and are drawn down atomically. Multiple collectors and rigs share the same authoritative node remainder within the transaction. Work is sorted by stable IDs to avoid unordered transaction iteration.
+- Only an existing, completed, Core-connected, non-destroyed Core or Rig produces income. Rig bonus draws from a physically nearby node and never overdraws it. Harvest orders and newly completed rigs cannot claim an entire delayed tick that predates their activation.
+- `enqueueShip` authorizes the player's completed/connected Shipyard, enforces a queue maximum of **5**, and deducts cost exactly once. `cancelShipProduction` returns the original price only while the job exists.
+- `production_order` is a private persistent FIFO table; only the oldest job per yard progresses, only while that yard is online. A new active job starts on its first eligible economy tick and cannot receive earlier elapsed time. Destroyed/unsupported yards pause work (unless demolished, in which case their pending jobs are canceled/refunded).
+- Completed jobs hold at zero remaining work if no safe-water launch point exists; creation and paid-queue deletion occur atomically on the first legal spawn. The bounded launch search checks authoritative terrain, surface structures and current ship hulls using per-class radius.
+- A demolished/collapsed Shipyard cancels its pending orders and returns their prepaid unit costs in the same transaction; no duplicate launches or cancellation refunds after a job is consumed.
+- All sensitive tables are **private**. Owner-filtered views for production orders and structure economy status, and fog-safe visibility to other units, remain #13/#15 before any client gameplay HUD.
+- Ship types and radii are stored on server rows, but class-specific naval acceleration, damage/armor and behavior are **not** implemented here (#10/#11).
+
+**Verified now:** `node --experimental-strip-types --test tests/economy.test.mjs` — **9/9 passing**; standalone strict TypeScript on `sim/economy.ts` passing. This pure-test execution used a compatible local collision implementation to satisfy imports; the committed economy source and tests are byte-identical to the ones executed, while actual full SpacetimeDB module tests remain unexecuted. See `FOUNDATION_VALIDATION.md`.
+
+**Still required for full #9 acceptance:** real module build/runtime/reducer timing and 2-client verification; production queue owner-visible views, workshop repair/upgrades, optimized server query indexes, ship combat/damage integration, future accounting policy for destroyed ships/buildings, and benchmarked live performance.
