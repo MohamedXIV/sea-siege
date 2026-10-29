@@ -306,3 +306,16 @@ Following Harvest and Shipyard Production, both human and server Bot command pat
 The first Fog-of-War-safe **live enemy contact view** is exported as `myVisibleEnemies`, calculating observed hostile contacts from private match-scoped sensors and terrain LoS. It returns only contact key, match ID, type, ID and position. The new `myStructures` view returns only allied structures to an authenticated faction. Underlying ship, structure, resource, bot planning and order tables remain private. These are **initial contact projections**, not complete terrain discovery or spectator policy; they require SDK negative-subscription and performance tests (Issue #13).
 
 Local standalone tests for shared dispatchers: **27/27 PASS** across three suites with compatible test fixtures, and new dispatcher TypeScript strict check PASS. Exact files were hash-verified against connected GitHub. Full SpacetimeDB module compilation/testing and Cloud deployment were NOT performed; see `docs/FOUNDATION_VALIDATION.md`.
+
+
+## October 30 — integrated command parity and real-segment collision fix
+
+The primary interactive command types are routed through shared pure, transaction-bound orchestration: Harvest, Shipyard Enqueue, A* Movement, Construction, Aim and Fire; human Workshop repair/upgrade now uses another reusable authoritative dispatcher. Both human and Bots use the same first six command contracts, but bots do not currently select Workshop repair/upgrade intents.
+
+Physics correctness: server motion updates validate the **ordered physical waypoint segments** returned from `advanceShipOnRoute`. A tick that turns at a waypoint no longer collides along an imaginary straight-line chord between initial and final positions.
+
+Fog source foundation: identity-limited `myVisibleEnemies` returns minimal live enemy contacts under friendly sensor + terrain LoS, while `myStructures` returns owned structures; all underlying sensitive tables remain private. Real SDK subscription correctness, read-set performance and spectator policy are pending Issue #13.
+
+Local standalone regression: **47/47 PASS** and strict pure TypeScript PASS on exact GitHub blob-matched new files, with compatible simplified helper fixtures for dispatcher tests. **NOT** an SDK build or live multiplayer evidence. More detail: `docs/FOUNDATION_VALIDATION.md`.
+
+No UI or HUD edits pending collaborative owner review (#15); no merge, GitHub Actions or Cloud deployments.
