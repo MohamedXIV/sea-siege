@@ -286,7 +286,7 @@ it("atomically charges owned salvage for a platform and rejects invalid placemen
   const lobby = [...test.db.match.iter()][0]!;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
-  const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
+  const member = [...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
   const core = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
     row.ownerSlot === 0 && row.kind === "command_core"
   )!;
@@ -296,9 +296,9 @@ it("atomically charges owned salvage for a platform and rejects invalid placemen
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.placeStructure(ctx, { ...request, kind: "command_core" })
   )).toThrow("protected");
-  expect(test.db.matchMember.id.find(member.id)?.salvage).toBe(420);
+  expect(test.db.factionState.id.find(member.id)?.salvage).toBe(420);
   test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, request));
-  expect(test.db.matchMember.id.find(member.id)?.salvage).toBe(395);
+  expect(test.db.factionState.id.find(member.id)?.salvage).toBe(395);
   const placed = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
     row.ownerSlot === 0 && row.kind === "platform" && row.gridX === request.gridX && row.gridY === request.gridY
   )!;
@@ -306,7 +306,7 @@ it("atomically charges owned salvage for a platform and rejects invalid placemen
   expect(test.db.constructionSchedule.count()).toBe(1n);
   expect(() => test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, request)))
     .toThrow("Surface cell occupied");
-  expect(test.db.matchMember.id.find(member.id)?.salvage).toBe(395);
+  expect(test.db.factionState.id.find(member.id)?.salvage).toBe(395);
 });
 
 it("scheduled completion activates connected platform; only internal scheduler may complete it", () => {
@@ -354,10 +354,10 @@ it("demolition refunds exactly once, protects Command Core and preserves other p
   expect(() => test.withReducerTx(bob, ctx =>
     moduleExports.demolishStructure(ctx, { structureId: pad.id })
   )).toThrow("another faction");
-  const balance = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage;
+  const balance = [...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage;
   test.withReducerTx(alice, ctx => moduleExports.demolishStructure(ctx, { structureId: pad.id }));
   expect(test.db.structure.id.find(pad.id)).toBeUndefined();
-  expect([...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage)
+  expect([...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage)
     .toBe(balance + 12);
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.demolishStructure(ctx, { structureId: pad.id })
@@ -392,7 +392,7 @@ it("demolishing support collapses a mounted workshop and cancels its constructio
   expect(test.db.structure.id.find(support.id)).toBeUndefined();
   expect(test.db.structure.id.find(workshop.id)).toBeUndefined();
   expect(test.db.constructionSchedule.count()).toBe(0n);
-  const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
+  const member = [...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
   expect(member.salvage).toBe(420 - 120 + 12);
 });
 
@@ -417,7 +417,7 @@ it("harvest orders require the owner and actual node range; economy credits only
     shipId: vessel.id, nodeId: node.id,
   }));
   expect(test.db.harvestOrder.count()).toBe(1n);
-  const previous = [...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
+  const previous = [...test.db.factionState.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
   test.clock.advance(TimeDuration.fromMillis(1000));
   const timer = [...test.db.economySchedule.iter()][0]!;
   expect(() => test.withReducerTx(bob, ctx =>
@@ -426,7 +426,7 @@ it("harvest orders require the owner and actual node range; economy credits only
   test.withReducerTx(TestAuth.internal(), ctx =>
     moduleExports.advanceEconomy(ctx, { arg: timer })
   );
-  const current = test.db.matchMember.id.find(previous.id)!;
+  const current = test.db.factionState.id.find(previous.id)!;
   expect(current.salvage).toBe(previous.salvage + 4 + 14);
   expect(test.db.salvageNode.id.find(node.id)!.remaining).toBe(node.capacity - 14);
   test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: vessel.id }));
@@ -460,7 +460,7 @@ it("shipyard charges once, respects FIFO, then produces only after time and a sa
   test.withReducerTx(alice, ctx =>
     moduleExports.enqueueShip(ctx, { shipyardId: yard.id, kind: "scout" })
   );
-  const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
+  const member = [...test.db.factionState.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
   expect(member.salvage).toBe(420 - 150 - 70);
   expect(test.db.productionOrder.count()).toBe(1n);
   expect([...test.db.productionOrder.iter()][0]!.remainingUs).toBe(4_000_000n);
@@ -513,7 +513,7 @@ it("demolition cancels paid ship queues and refunds exactly once", () => {
   )).toThrow("Not your");
   test.withReducerTx(alice, ctx => moduleExports.demolishStructure(ctx, { structureId: yard.id }));
   expect(test.db.productionOrder.count()).toBe(0n);
-  expect([...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!.salvage)
+  expect([...test.db.factionState.matchId.filter(lobby.id)].find(m => m.slot === 0)!.salvage)
     .toBe(420 - 150 - 130 + 75 + 130);
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.cancelShipProduction(ctx, { orderId: production.id })
@@ -533,20 +533,20 @@ it("rig income is server-owned and incomplete rigs never produce salvage", () =>
   test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
     matchId: lobby.id, kind: "salvage_rig", gridX: core.gridX, gridY: core.gridY + 3,
   }));
-  const initial = [...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
+  const initial = [...test.db.factionState.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
   test.clock.advance(TimeDuration.fromMillis(1000));
   let timer = [...test.db.economySchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, { arg: timer }));
-  expect(test.db.matchMember.id.find(initial.id)!.salvage).toBe(initial.salvage + 4);
+  expect(test.db.factionState.id.find(initial.id)!.salvage).toBe(initial.salvage + 4);
   test.clock.advance(TimeDuration.fromMillis(4500));
   const construction = [...test.db.constructionSchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx =>
     moduleExports.completeConstruction(ctx, { arg: construction })
   );
-  const before = test.db.matchMember.id.find(initial.id)!;
+  const before = test.db.factionState.id.find(initial.id)!;
   timer = [...test.db.economySchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, { arg: timer }));
-  expect(test.db.matchMember.id.find(initial.id)!.salvage).toBeGreaterThanOrEqual(before.salvage + 4 + 9);
+  expect(test.db.factionState.id.find(initial.id)!.salvage).toBeGreaterThanOrEqual(before.salvage + 4 + 9);
 });
 
 it("workshop repairs owned hulls and structures only at range with exact salvage charges", () => {
@@ -591,7 +591,7 @@ it("workshop repairs owned hulls and structures only at range with exact salvage
     workshopId: workshop.id, shipId: vessel.id, requestedHp: 50,
   }));
   expect(test.db.ship.id.find(vessel.id)?.hp).toBe(210);
-  const member = [...test.db.matchMember.matchId.filter(match.id)].find(row =>
+  const member = [...test.db.factionState.matchId.filter(match.id)].find(row =>
     row.slot === 0
   )!;
   expect(member.salvage).toBe(420 - 120 - 30 - 25);
@@ -683,7 +683,7 @@ it("demolition refunds a paid but unfinished workshop upgrade only once", () => 
   test.withReducerTx(alice, ctx =>
     moduleExports.demolishStructure(ctx, { structureId: workshop.id })
   );
-  const member = [...test.db.matchMember.matchId.filter(match.id)]
+  const member = [...test.db.factionState.matchId.filter(match.id)]
     .find(row => row.slot === 0)!;
   expect(member.salvage).toBe(420 - 120 - 200 + 60 + 200);
   expect(test.db.structure.id.find(workshop.id)).toBeUndefined();
@@ -700,7 +700,7 @@ it("fire authorization rejects foreign weapons, friendly targets, and cooldown b
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
-  const host = [...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 0)!;
+  const host = [...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 0)!;
   const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot === host.slot)!;
   const defender = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot !== host.slot)!;
   // Internal test authority moves the defender into visible fire range only.
@@ -813,7 +813,7 @@ it("destroying the last hostile Command Core eliminates its faction and ends the
   expect(test.db.structure.id.find(enemyCore.id)).toBeUndefined();
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
   expect(test.db.match.id.find(matchId)?.winnerSlot).toBe(0);
-  expect([...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
+  expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
 });
 
 it("turrets slew gradually under internal authority; premature fire and foreign aim fail", () => {
@@ -940,13 +940,13 @@ it("lifetime salvage is credited by server production even when balance is spent
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
-  const host = [...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 0)!;
+  const host = [...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 0)!;
   expect(host.totalSalvageGathered).toBe(0n);
   test.clock.advance(TimeDuration.fromMillis(1000));
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, {
     arg: [...test.db.economySchedule.iter()][0]!,
   }));
-  const earned = test.db.matchMember.id.find(host.id)!;
+  const earned = test.db.factionState.id.find(host.id)!;
   expect(earned.totalSalvageGathered).toBe(4n);
   expect(earned.salvage).toBe(424);
   const core = [...test.db.structure.matchId.filter(matchId)]
@@ -954,7 +954,7 @@ it("lifetime salvage is credited by server production even when balance is spent
   test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
     matchId, kind: "platform", gridX: core.gridX + 3, gridY: core.gridY + 1,
   }));
-  const after = test.db.matchMember.id.find(host.id)!;
+  const after = test.db.factionState.id.find(host.id)!;
   expect(after.salvage).toBe(399);
   expect(after.totalSalvageGathered).toBe(4n);
 });
@@ -969,14 +969,14 @@ it("late commands cannot alter dominance scores before a delayed timeout reducer
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
   const core = [...test.db.structure.matchId.filter(matchId)]
     .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
-  const member = [...test.db.matchMember.matchId.filter(matchId)]
+  const member = [...test.db.factionState.matchId.filter(matchId)]
     .find(row => row.slot === 0)!;
   test.clock.advance(TimeDuration.fromMillis(720_000));
   expect(test.db.match.id.find(matchId)?.phase).toBe("active"); // Deadline reducer not manually triggered yet.
   expect(() => test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
     matchId, kind: "platform", gridX: core.gridX + 3, gridY: core.gridY + 1,
   }))).toThrow("Match is not active");
-  const after = test.db.matchMember.id.find(member.id)!;
+  const after = test.db.factionState.id.find(member.id)!;
   expect(after.salvage).toBe(member.salvage);
   expect(after.totalSalvageGathered).toBe(member.totalSalvageGathered);
   const deadline = [...test.db.matchDeadline.iter()][0]!;
