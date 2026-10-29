@@ -21,11 +21,17 @@ export type ShipKinematics = Readonly<{
   hullAngleDeg: number;
 }>;
 
+export type TravelSegment = Readonly<{
+  from: Readonly<{ x: number; y: number }>;
+  to: Readonly<{ x: number; y: number }>;
+}>;
 export type RouteMotionResult = Readonly<{
   ship: ShipKinematics;
   cursor: number;
   arrived: boolean;
   changed: boolean;
+  /** Exact ordered physical legs travelled this tick, not a start/end chord. */
+  traversedSegments: readonly TravelSegment[];
 }>;
 
 /** Real elapsed time. Slow/late ticks never simulate arbitrarily large leaps. */
@@ -66,7 +72,10 @@ export function advanceShipOnRoute(
       !Object.values(ship).every(Number.isFinite)) {
     throw new RangeError('invalid ship motion input');
   }
-  if (seconds === 0) return { ship, cursor, arrived: cursor === cellPath.length, changed: false };
+  if (seconds === 0) return {
+    ship, cursor, arrived: cursor === cellPath.length, changed: false,
+    traversedSegments: [],
+  };
 
   let { x, y } = ship;
   let heading = normalizeDegrees(ship.hullAngleDeg);
@@ -75,6 +84,7 @@ export function advanceShipOnRoute(
   let movedX = 0;
   let movedY = 0;
   let turned = false;
+  const traversedSegments: TravelSegment[] = [];
   const epsilon = SHIP_MOTION_RULES.arrivalEpsilonCells;
 
   // The step may consume multiple short segments, never jump across a corner.
@@ -111,6 +121,7 @@ export function advanceShipOnRoute(
     const speedFactor = Math.max(0, Math.min(1, ramp));
     const move = Math.min(distance, SHIP_MOTION_RULES.speedCellsPerSecond * remaining * speedFactor);
     if (move <= epsilon) break;
+    const previous = { x, y };
     const moveX = (dx / distance) * move;
     const moveY = (dy / distance) * move;
     x += moveX;
@@ -128,6 +139,7 @@ export function advanceShipOnRoute(
     } else {
       remaining = 0;
     }
+    traversedSegments.push({ from: previous, to: { x, y } });
   }
 
   const arrived = nextCursor === cellPath.length;
@@ -137,5 +149,8 @@ export function advanceShipOnRoute(
   const changed = nextCursor !== cursor || turned ||
     Math.abs(x - ship.x) > epsilon || Math.abs(y - ship.y) > epsilon ||
     Math.abs(velocityX - ship.velocityX) > epsilon || Math.abs(velocityY - ship.velocityY) > epsilon;
-  return { ship: changed ? result : ship, cursor: nextCursor, arrived, changed };
+  return {
+    ship: changed ? result : ship, cursor: nextCursor, arrived, changed,
+    traversedSegments,
+  };
 }
