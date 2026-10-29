@@ -105,10 +105,13 @@ export default spacetimedb;
 
 /** Creates lobby + host's ship atomically. Join/start rules will expand in #4/#14. */
 export const createMatch = spacetimedb.reducer(
-  { seed: t.u32(), maxSlots: t.u32() },
-  (ctx, { seed, maxSlots }) => {
+  { maxSlots: t.u32() },
+  (ctx, { maxSlots }) => {
     if (maxSlots < 2 || maxSlots > 8) throw new Error("Matches support 2–8 slots");
-    // Generate deterministically in a server transaction, not in the browser.
+    // Choose the seed on the authoritative server, not from a player-supplied value.
+    // SpacetimeDB context RNG is deterministic for reducer execution, but is not
+    // intended to be cryptographically unpredictable (fine for casual RTS maps).
+    const seed = ctx.random.integerInRange(0, 0xffffffff);
     const world = generateDeterministicWorld(seed, maxSlots);
     const created = ctx.db.match.insert({
       id: 0n,
