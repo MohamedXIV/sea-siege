@@ -89,13 +89,14 @@ it("persists consistent seeded terrain and assigns guest to another valid spawn"
   expect(test.db.salvageNode.count()).toBe(18n);
   const first = [...test.db.ship.iter()][0]!;
   const spawn0 = [...test.db.worldSpawn.iter()].find(row => row.slot === 0)!;
-  expect(first.x).toBe(spawn0.gridX + 1.5);
+  expect(first.x).toBe(spawn0.gridX - 1.5); // scout launches outside the core
   expect(first.y).toBe(spawn0.gridY + 1.5);
+  expect([...test.db.structure.matchId.filter(matchId)].filter(row => row.ownerSlot === 0)).toHaveLength(7);
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   const ships = [...test.db.ship.iter()];
   expect(ships).toHaveLength(2);
   const guestSpawn = [...test.db.worldSpawn.iter()].find(row => row.slot === 1)!;
-  expect(ships[1]!.x).toBe(guestSpawn.gridX + 1.5);
+  expect(ships[1]!.x).toBe(guestSpawn.gridX - 1.5);
   expect(ships[1]!.y).toBe(guestSpawn.gridY + 1.5);
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   expect(test.db.ship.count()).toBe(2n);
@@ -277,4 +278,90 @@ it("scheduler holds a vessel if a new dynamic ship blocks its planned segment", 
   expect(after.y).toBe(original.y);
   expect(after.velocityX).toBe(0);
   expect(test.db.shipRoute.shipId.find(own!.id)).toBeDefined();
+});
+
+it("atomically charges owned salvage for a platform and rejects invalid placement", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  const request = { matchId: lobby.id, kind: "platform", gridX: core.gridX + 3, gridY: core.gridY + 1 };
+  expect(() => test.withReducerTx(bob, ctx => moduleExports.placeStructure(ctx, request)))
+    .toThrow("touch connected territory"); // Bob cannot extend Alice's deck.
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.placeStructure(ctx, { ...request, kind: "command_core" })
+  )).toThrow("protected");
+  expect(test.db.matchMember.id.find(member.id)?.salvage).toBe(420);
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, request));
+  expect(test.db.matchMember.id.find(member.id)?.salvage).toBe(395);
+  const placed = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "platform" && row.gridX === request.gridX && row.gridY === request.gridY
+  )!;
+  expect(placed.complete).toBe(false);
+  expect(test.db.constructionSchedule.count()).toBe(1n);
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, request)))
+    .toThrow("Surface cell occupied");
+  expect(test.db.matchMember.id.find(member.id)?.salvage).toBe(395);
+});
+
+it("scheduled completion activates connected platform; only internal scheduler may complete it", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: lobby.id, kind: "platform", gridX: core.gridX + 3, gridY: core.gridY + 1,
+  }));
+  const placed = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.kind === "platform" && row.gridX === core.gridX + 3 && row.gridY === core.gridY + 1
+  )!;
+  const timer = [...test.db.constructionSchedule.iter()][0]!;
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.completeConstruction(ctx, { arg: timer })
+  )).toThrow("internal-only");
+  test.clock.advance(TimeDuration.fromMillis(1500));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: timer })
+  );
+  expect(test.db.structure.id.find(placed.id)?.complete).toBe(true);
+  expect(test.db.structure.id.find(placed.id)?.connected).toBe(true);
+});
+
+it("demolition refunds exactly once, protects Command Core and preserves other players", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  const pad = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "platform"
+  )!;
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.demolishStructure(ctx, { structureId: core.id })
+  )).toThrow("Command Core");
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.demolishStructure(ctx, { structureId: pad.id })
+  )).toThrow("another faction");
+  const balance = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage;
+  test.withReducerTx(alice, ctx => moduleExports.demolishStructure(ctx, { structureId: pad.id }));
+  expect(test.db.structure.id.find(pad.id)).toBeUndefined();
+  expect([...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage)
+    .toBe(balance + 12);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.demolishStructure(ctx, { structureId: pad.id })
+  )).toThrow("unavailable");
 });
