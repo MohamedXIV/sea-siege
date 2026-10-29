@@ -960,3 +960,30 @@ it("lifetime salvage is credited by server production even when balance is spent
   expect(after.salvage).toBe(399);
   expect(after.totalSalvageGathered).toBe(4n);
 });
+
+
+it("late commands cannot alter dominance scores before a delayed timeout reducer executes", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  const member = [...test.db.matchMember.matchId.filter(matchId)]
+    .find(row => row.slot === 0)!;
+  test.clock.advance(TimeDuration.fromMillis(720_000));
+  expect(test.db.match.id.find(matchId)?.phase).toBe("active"); // Deadline reducer not manually triggered yet.
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "platform", gridX: core.gridX + 3, gridY: core.gridY + 1,
+  }))).toThrow("Match is not active");
+  const after = test.db.matchMember.id.find(member.id)!;
+  expect(after.salvage).toBe(member.salvage);
+  expect(after.totalSalvageGathered).toBe(member.totalSalvageGathered);
+  const deadline = [...test.db.matchDeadline.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  );
+  expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
+});
