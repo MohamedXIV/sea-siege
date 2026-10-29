@@ -8,6 +8,7 @@ const match = table(
     host: t.identity(),
     phase: t.string(),
     maxSlots: t.u32(),
+    winnerSlot: t.i32(), // -1 means no winner yet or deterministic draw
     createdAt: t.timestamp(),
   },
 );
@@ -20,6 +21,7 @@ const matchMember = table(
     identity: t.identity().index("btree"),
     slot: t.u32(),
     salvage: t.u32(),
+    eliminated: t.bool(),
   },
 );
 
@@ -38,6 +40,7 @@ const ship = table(
     velocityY: t.f64(),
     hullAngleDeg: t.f64(),
     turretAngleDeg: t.f64(),
+    lastFiredAtUs: t.i64(),
     targetX: t.f64(),
     targetY: t.f64(),
     revision: t.u64(),
@@ -176,6 +179,7 @@ const structure = table(
     width: t.u32(),
     height: t.u32(),
     hp: t.u32(),
+    lastFiredAtUs: t.i64(),
     level: t.u32(),                // Workshop tier (other kinds remain level 1)
     upgradeRemainingUs: t.i64(),  // 0 when no upgrade is pending
     upgradeStartedAtUs: t.i64(),  // Server clock, prevents retroactive progress
@@ -195,9 +199,39 @@ export const constructionSchedule = table(
   },
 );
 
+
+/** All projectile state stays private until identity-filtered FoW views exist. */
+const projectile = table(
+  { name: "projectile" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    sourceFaction: t.u32(),
+    sourceId: t.u64(),
+    sourceType: t.string(),
+    firedAtUs: t.i64(),
+    x: t.f64(), y: t.f64(),
+    vx: t.f64(), vy: t.f64(),
+    damage: t.u32(), splash: t.f64(),
+    structureMultiplier: t.f64(),
+    remainingRange: t.f64(),
+  },
+);
+
+/** One lazy timer per active combat match, never one per projectile. */
+export const combatSchedule = table(
+  { name: "combat_schedule" },
+  {
+    scheduledId: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    scheduledAt: t.scheduleAt(),
+    lastTickAt: t.timestamp(),
+  },
+);
+
 const spacetimedb = schema({
   match, matchMember, ship, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
-  harvestOrder, productionOrder, economySchedule,
+  harvestOrder, productionOrder, economySchedule, projectile, combatSchedule,
 });
 export default spacetimedb;
