@@ -11,6 +11,7 @@ export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { BOT_RULES } from "./sim/bot-policy.ts";
+import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
 import { nextWorkshopUpgrade } from "./sim/workshop.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
@@ -225,17 +226,10 @@ export const issueShipOrder = spacetimedb.reducer(
       throw new Error("Cannot command another player's ship");
     const match = ctx.db.match.id.find(current.matchId);
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
-    if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) throw new Error("Invalid destination");
     const config = ctx.db.worldConfig.matchId.find(current.matchId);
     if (!config) throw new Error("Missing match world configuration");
-    if (targetX < 0 || targetY < 0 || targetX >= config.mapCells || targetY >= config.mapCells) {
-      throw new Error("Destination out of bounds");
-    }
-    // Decode real authoritative stored chunks. Rebuilding from browser-visible
-    // seeds would leak the unexplored map; there is no client-owned routing.
     const terrain = decodeTerrainChunks(
-      config.mapCells,
-      Array.from(ctx.db.worldChunk.matchId.filter(current.matchId)),
+      config.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(current.matchId)),
     );
     const env = {
       mapCells: config.mapCells, terrain,
@@ -246,66 +240,47 @@ export const issueShipOrder = spacetimedb.reducer(
         .filter(row => row.channel === "surface")
         .map(row => ({ x: row.gridX, y: row.gridY, width: row.width, height: row.height })),
     };
-    const route = findTerrainPath(
-      terrain, config.mapCells,
-      { x: current.x, y: current.y },
-      { x: targetX, y: targetY },
-      {
-        blocked: (x, y) => isNavigationCellBlocked(
-          x, y, current.radiusCells, env, shipId,
-        ),
+    const result = dispatchMovement({
+      faction: { matchId: current.matchId, slot: faction!.slot,
+        controller: "human", eliminated: faction!.eliminated },
+      ship: current, destination: { x: targetX, y: targetY },
+      environment: env, destinationVisible: true,
+    }, {
+      cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+      setRoute: order => {
+        const existing = ctx.db.shipRoute.shipId.find(shipId);
+        if (!order) {
+          if (existing) ctx.db.shipRoute.shipId.delete(shipId);
+        } else if (existing) {
+          ctx.db.shipRoute.shipId.update({
+            ...existing, cellPath: [...order.cellPath], cursor: 0,
+            revision: order.revision, repathAfterUs: order.repathAfterUs,
+          });
+        } else {
+          ctx.db.shipRoute.insert({
+            ...order, cellPath: [...order.cellPath], cursor: 0,
+          });
+        }
       },
-    );
-    if (!route) throw new Error("Destination unreachable");
-    // A move order cancels the previous harvest target atomically.
-    ctx.db.harvestOrder.shipId.delete(shipId);
-    const nextRevision = current.revision + 1n;
-    const cellPath = route.waypoints.slice(1).map(
-      point => Math.floor(point.y) * config.mapCells + Math.floor(point.x),
-    );
-    const existing = ctx.db.shipRoute.shipId.find(shipId);
-    if (cellPath.length === 0) {
-      if (existing) ctx.db.shipRoute.shipId.delete(shipId);
-    } else if (existing) {
-      ctx.db.shipRoute.shipId.update({
-        ...existing, cellPath, cursor: 0, revision: nextRevision, repathAfterUs: 0n,
-      });
-    } else {
-      ctx.db.shipRoute.insert({
-        shipId, matchId: current.matchId,
-        cellPath, cursor: 0, revision: nextRevision, repathAfterUs: 0n,
-      });
-    }
-    // The navigation grid is cell-centered. Store the precise actual destination
-    // that the server can reach, rather than a misleading arbitrary cursor pixel.
-    const finalX = Math.floor(targetX) + 0.5;
-    const finalY = Math.floor(targetY) + 0.5;
-    ctx.db.ship.id.update({
-      ...current,
-      targetX: finalX,
-      targetY: finalY,
-      velocityX: cellPath.length === 0 ? 0 : current.velocityX,
-      velocityY: cellPath.length === 0 ? 0 : current.velocityY,
-      revision: nextRevision,
-      updatedAt: ctx.timestamp,
-    });
-    if (cellPath.length > 0) {
-      // Schedule on demand, exactly once per live match. Another order in the
-      // same transaction stream observes the existing timer.
-      let hasTimer = false;
-      for (const _row of ctx.db.motionSchedule.matchId.filter(current.matchId)) {
-        hasTimer = true;
-        break;
-      }
-      if (!hasTimer) {
-        ctx.db.motionSchedule.insert({
-          scheduledId: 0n,
-          matchId: current.matchId,
-          scheduledAt: ScheduleAt.interval(SHIP_MOTION_RULES.tickMicroseconds),
-          lastTickAt: ctx.timestamp,
+      updateShip: order => {
+        ctx.db.ship.id.update({
+          ...current, targetX: order.targetX, targetY: order.targetY,
+          velocityX: order.stopImmediately ? 0 : current.velocityX,
+          velocityY: order.stopImmediately ? 0 : current.velocityY,
+          revision: order.revision, updatedAt: ctx.timestamp,
         });
-      }
-    }
+      },
+      ensureMotionTick: () => {
+        if (!Array.from(ctx.db.motionSchedule.matchId.filter(current.matchId)).length) {
+          ctx.db.motionSchedule.insert({
+            scheduledId: 0n, matchId: current.matchId,
+            scheduledAt: ScheduleAt.interval(SHIP_MOTION_RULES.tickMicroseconds),
+            lastTickAt: ctx.timestamp,
+          });
+        }
+      },
+    });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
@@ -510,39 +485,43 @@ export const placeStructure = spacetimedb.reducer(
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated) throw new Error("Cannot construct in another player's match");
     const definition = structureDefinition(kind);
-    if (!definition || kind === "command_core") throw new Error("Unknown or protected structure kind");
+    if (!definition || kind === "command_core")
+      throw new Error("Unknown or protected structure kind");
     const world = ctx.db.worldConfig.matchId.find(matchId);
     if (!world) throw new Error("Missing authoritative world");
     const terrain = decodeTerrainChunks(
       world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
     );
-    const existing = Array.from(ctx.db.structure.matchId.filter(matchId));
-    const error = validateStructurePlacement({
-      kind: kind as StructureKind, ownerSlot: member.slot, gridX, gridY,
-      salvage: faction.salvage, mapCells: world.mapCells, terrain,
-      structures: existing.map(row => ({ ...row, kind: row.kind as StructureKind })),
-      deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
-        .map(row => ({ x: row.gridX, y: row.gridY })),
-      hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
-        .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
+    const result = dispatchConstruction({
+      faction: { matchId, slot: faction.slot, controller: "human",
+        eliminated: faction.eliminated },
+      request: {
+        kind: kind as StructureKind, ownerSlot: faction.slot, gridX, gridY,
+        salvage: faction.salvage, mapCells: world.mapCells, terrain,
+        structures: Array.from(ctx.db.structure.matchId.filter(matchId))
+          .map(row => ({ ...row, kind: row.kind as StructureKind })),
+        deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+        hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
+          .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
+      },
+      nowUs: ctx.timestamp.microsSinceUnixEpoch, locationAllowed: true,
+    }, {
+      setBalance: salvage => {
+        ctx.db.factionState.id.update({ ...faction, salvage });
+      },
+      insertStructure: row => ctx.db.structure.insert({
+        id: 0n, ...row, lastFiredAtUs: -1n, turretAngleDeg: 0,
+        level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n, complete: false,
+      }).id,
+      scheduleCompletion: (structureId, dueAtUs) => {
+        ctx.db.constructionSchedule.insert({
+          scheduledId: 0n, structureId,
+          scheduledAt: ScheduleAt.time(dueAtUs),
+        });
+      },
     });
-    if (error) throw new Error(error);
-    // A thrown insertion/schedule error rolls back BOTH cost and placement.
-    ctx.db.factionState.id.update({ ...faction, salvage: faction.salvage - definition.cost });
-    const deadline = ctx.timestamp.microsSinceUnixEpoch + BigInt(definition.buildMs) * 1000n;
-    const placed = ctx.db.structure.insert({
-      id: 0n, matchId, ownerSlot: member.slot, kind,
-      channel: definition.channel, gridX, gridY,
-      width: definition.width, height: definition.height,
-      hp: definition.hp, lastFiredAtUs: -1n, turretAngleDeg: 0, level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
-      complete: false,
-      connected: definition.channel === "superstructure",
-      completeAtUs: deadline,
-    });
-    ctx.db.constructionSchedule.insert({
-      scheduledId: 0n, structureId: placed.id,
-      scheduledAt: ScheduleAt.time(deadline),
-    });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
