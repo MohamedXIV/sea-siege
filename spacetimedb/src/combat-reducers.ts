@@ -258,8 +258,15 @@ export const advanceCombat = spacetimedb.reducer(
       const match = ctx.db.match.id.find(matchId);
       if (!match || match.phase !== "active") return;
       ctx.db.match.id.update({
-        ...match, phase: "finished", winnerSlot: living.size === 1 ? [...living][0]! : -1,
+        ...match, phase: "finished",
+        winnerSlot: living.size === 1 ? [...living][0]! : -1,
+        victoryReason: living.size === 1 ? "domination" : "mutual_destruction",
+        winningScore5: 0n,
+        endedAtUs: ctx.timestamp.microsSinceUnixEpoch,
       });
+      // Cancel the one-shot deadline when combat has already decided the match.
+      for (const pending of Array.from(ctx.db.matchDeadline.matchId.filter(matchId)))
+        ctx.db.matchDeadline.scheduledId.delete(pending.scheduledId);
       // No further periodic economy / movement / combat activity after match finish.
       for (const job of Array.from(ctx.db.economySchedule.matchId.filter(matchId)))
         ctx.db.economySchedule.scheduledId.delete(job.scheduledId);
