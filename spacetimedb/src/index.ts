@@ -571,3 +571,135 @@ export const advanceMatchSimulation = spacetimedb.reducer(
     }
   },
 );
+
+/** The caller's active match seat is the only source of construction ownership. */
+export const placeStructure = spacetimedb.reducer(
+  { matchId: t.u64(), kind: t.string(), gridX: t.u32(), gridY: t.u32() },
+  (ctx, { matchId, kind, gridX, gridY }) => {
+    const matchRow = ctx.db.match.id.find(matchId);
+    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    if (!member) throw new Error("Cannot construct in another player's match");
+    const definition = structureDefinition(kind);
+    if (!definition || kind === "command_core") throw new Error("Unknown or protected structure kind");
+    const world = ctx.db.worldConfig.matchId.find(matchId);
+    if (!world) throw new Error("Missing authoritative world");
+    const terrain = decodeTerrainChunks(
+      world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
+    );
+    const existing = Array.from(ctx.db.structure.matchId.filter(matchId));
+    const error = validateStructurePlacement({
+      kind: kind as StructureKind, ownerSlot: member.slot, gridX, gridY,
+      salvage: member.salvage, mapCells: world.mapCells, terrain,
+      structures: existing.map(row => ({ ...row, kind: row.kind as StructureKind })),
+      deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+        .map(row => ({ x: row.gridX, y: row.gridY })),
+      hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
+        .map(row => ({ x: row.x, y: row.y, radius: COLLISION_RULES.scoutRadiusCells })),
+    });
+    if (error) throw new Error(error);
+    // A thrown insertion/schedule error rolls back BOTH cost and placement.
+    ctx.db.matchMember.id.update({ ...member, salvage: member.salvage - definition.cost });
+    const deadline = ctx.timestamp.microsSinceUnixEpoch + BigInt(definition.buildMs) * 1000n;
+    const placed = ctx.db.structure.insert({
+      id: 0n, matchId, ownerSlot: member.slot, kind,
+      channel: definition.channel, gridX, gridY,
+      width: definition.width, height: definition.height,
+      hp: definition.hp, complete: false,
+      connected: definition.channel === "superstructure",
+      completeAtUs: deadline,
+    });
+    ctx.db.constructionSchedule.insert({
+      scheduledId: 0n, structureId: placed.id,
+      scheduledAt: ScheduleAt.time(deadline),
+    });
+  },
+);
+
+/** Owner demolition applies refunds and recomputes live support in one transaction. */
+export const demolishStructure = spacetimedb.reducer(
+  { structureId: t.u64() },
+  (ctx, { structureId }) => {
+    const target = ctx.db.structure.id.find(structureId);
+    if (!target) throw new Error("Structure unavailable");
+    if (target.kind === "command_core") throw new Error("Command Core cannot be demolished");
+    const matchRow = ctx.db.match.id.find(target.matchId);
+    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(target.matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    if (!member || member.slot !== target.ownerSlot) throw new Error("Cannot demolish another faction's structure");
+    const definition = structureDefinition(target.kind);
+    if (!definition) throw new Error("Unknown stored structure kind");
+    const world = ctx.db.worldConfig.matchId.find(target.matchId);
+    if (!world) throw new Error("Missing authoritative world");
+    const refund = Math.floor(definition.cost * (target.complete ? 0.5 : 0.75));
+    const newSalvage = member.salvage + refund;
+    if (newSalvage > 0xffffffff) throw new Error("Salvage overflow");
+    ctx.db.structure.id.delete(target.id);
+    for (const pending of ctx.db.constructionSchedule.structureId.filter(target.id)) {
+      ctx.db.constructionSchedule.scheduledId.delete(pending.scheduledId);
+    }
+    // Any mounted building losing even one supporting cell collapses without a
+    // second refund. Other structures may disconnect but remain as offline decks.
+    let remaining = Array.from(ctx.db.structure.matchId.filter(target.matchId));
+    const shapes = remaining.map(row => ({ ...row, kind: row.kind as StructureKind }));
+    for (const row of remaining) {
+      if (row.channel !== "superstructure") continue;
+      const support = structureOnline({ ...row, kind: row.kind as StructureKind }, shapes, world.mapCells);
+      const stillSupported = (() => {
+        for (let dy = 0; dy < row.height; dy++) for (let dx = 0; dx < row.width; dx++) {
+          const x = row.gridX + dx, y = row.gridY + dy;
+          if (!remaining.some(s => s.channel === "surface" && s.ownerSlot === row.ownerSlot &&
+            s.kind === "platform" && s.complete &&
+            x >= s.gridX && x < s.gridX + s.width &&
+            y >= s.gridY && y < s.gridY + s.height)) return false;
+        }
+        return true;
+      })();
+      if (!stillSupported) {
+        ctx.db.structure.id.delete(row.id);
+        for (const pending of ctx.db.constructionSchedule.structureId.filter(row.id)) {
+          ctx.db.constructionSchedule.scheduledId.delete(pending.scheduledId);
+        }
+      } else if (row.connected !== support) {
+        ctx.db.structure.id.update({ ...row, connected: support });
+      }
+    }
+    remaining = Array.from(ctx.db.structure.matchId.filter(target.matchId));
+    const currentShapes = remaining.map(row => ({ ...row, kind: row.kind as StructureKind }));
+    for (const row of remaining) {
+      const connected = structureOnline(
+        { ...row, kind: row.kind as StructureKind }, currentShapes, world.mapCells,
+      );
+      if (row.connected !== connected) ctx.db.structure.id.update({ ...row, connected });
+    }
+    ctx.db.matchMember.id.update({ ...member, salvage: newSalvage });
+  },
+);
+
+/** One-shot completion executes as a trusted internal scheduled transaction. */
+export const completeConstruction = spacetimedb.reducer(
+  { onSchedule: constructionSchedule },
+  { arg: constructionSchedule.rowType },
+  (ctx, { arg }) => {
+    if (!ctx.senderAuth.isInternal) throw new Error("Construction scheduler is internal-only");
+    const pending = ctx.db.constructionSchedule.scheduledId.find(arg.scheduledId);
+    if (!pending) return;
+    const target = ctx.db.structure.id.find(pending.structureId);
+    if (!target) return; // Demolition could have removed the supporting building.
+    if (target.complete) return;
+    if (ctx.timestamp.microsSinceUnixEpoch < target.completeAtUs) {
+      throw new Error("Construction completion executed before authoritative deadline");
+    }
+    ctx.db.structure.id.update({ ...target, complete: true });
+    const world = ctx.db.worldConfig.matchId.find(target.matchId);
+    if (!world) throw new Error("Missing authoritative world");
+    const rows = Array.from(ctx.db.structure.matchId.filter(target.matchId));
+    const shapes = rows.map(row => ({ ...row, kind: row.kind as StructureKind }));
+    for (const row of rows) {
+      const connected = structureOnline({ ...row, kind: row.kind as StructureKind }, shapes, world.mapCells);
+      if (row.connected !== connected) ctx.db.structure.id.update({ ...row, connected });
+    }
+  },
+);
