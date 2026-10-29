@@ -147,3 +147,28 @@ The genuine SpacetimeDB module source has been organized into:
 **Verified now:** `node --experimental-strip-types --test tests/economy.test.mjs` — **9/9 passing**; standalone strict TypeScript on `sim/economy.ts` passing. This pure-test execution used a compatible local collision implementation to satisfy imports; the committed economy source and tests are byte-identical to the ones executed, while actual full SpacetimeDB module tests remain unexecuted. See `FOUNDATION_VALIDATION.md`.
 
 **Still required for full #9 acceptance:** real module build/runtime/reducer timing and 2-client verification; production queue owner-visible views, workshop repair/upgrades, optimized server query indexes, ship combat/damage integration, future accounting policy for destroyed ships/buildings, and benchmarked live performance.
+
+
+## Workshop Repair & Upgrades — implementation (29 October 2026)
+
+The code lives in `spacetimedb/src/sim/workshop.ts` (pure repair math/rules) and `spacetimedb/src/workshop-reducers.ts` (real server-authoritative reducer source), with corresponding private `structure` fields in `schema.ts`. `index.ts` re-exports the command reducers, keeping one module contract.
+
+**Balance:** three data-driven tiers with starting repair range of 4.5/6/8 cells, repair cap 60/100/150 HP per command, 2/3/4 restored HP per Salvage, and +0/120/240 Workshop max HP. Tier 1→2 costs 200 Salvage and 6 seconds, Tier 2→3 costs 320 Salvage and 10 seconds. **These are provisional balancing choices for this implementation, not verified Gemini balance constants.** Workshop construction still costs 120 Salvage and takes 5 seconds, as implemented earlier.
+
+**Server behavior:**
+- Only the owning faction's match member can operate a fully built, connected, living Workshop in an active match. Repair commands are disabled while it is upgrading.
+- `repairStructure` validates the target's match, faction, completed/connected/alive status, actual health and Euclidean reach from the Workshop center. `repairShip` checks the actual owned vessel class/max HP and position. Both charge Salvage once for **actual healed HP**, with no healing of dead/full entities, no client-provided costs, and no HP overflow.
+- `upgradeWorkshop` takes the cost exactly once, refuses multiple concurrent upgrades or level >3 and saves `upgradeRemainingUs` and `upgradeStartedAtUs` in the authoritative private `structure` row.
+- The existing internal-only per-match `advanceEconomy` tick advances Workshop upgrade remaining work, using measured/capped microseconds. **Offline/incomplete/destroyed** Workshops do not progress; upgrades issued after the previous tick are not credited for prior elapsed time. Reconnect does not reset persisted progress. Completed upgrades increment level exactly once and unlock the next tier.
+- Demolishing or physically collapsing a Workshop cancels its unfinished upgrade and refunds its paid tier-upgrade cost once in the same transaction; the standard structure demolition/collapse rules still apply.
+
+No final HUD, builder preview, health bars, or visual workshop design has been attempted; user approval is required before issue #15 UI work. Combat damage and death elimination are future work (#11).
+
+Run the pure rules verification from repository root (Node 22+):
+```bash
+node --experimental-strip-types --test tests/workshop.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler \
+  --allowImportingTsExtensions spacetimedb/src/sim/workshop.ts
+```
+
+**Real module execution still deferred:** `spacetimedb/src/index.test.ts` has prepared but unexecuted tests for owner, cost, range, server-timed progress, support loss and refunds. A real `spacetime build`, datastore harness run, publisher, generated client bindings and two-client E2E remain outstanding and must gate issue closure.
