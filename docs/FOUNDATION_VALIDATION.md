@@ -134,3 +134,17 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - Four new official module-harness cases cover foreign/friendly fire rejection, cooldown, evasion after launch, single resolved damage and Core elimination. These tests are **prepared only**, not executed.
 
 **Remaining release blockers:** exact-HEAD pure Node tests, a full `npm install && npm run typecheck && npm test` under `spacetimedb/`, `spacetime build/publish`, scheduled tick and fog-security proof on a real module, two independent authoritative clients, client-generated bindings and Phaser renderer, and benchmarks of 2–8 faction matches. No Cloud credentials or Cloud database were touched. All Issues stay open until acceptance evidence is actually obtained.
+
+## Verified exact turret slew files — 29 October 2026
+
+**Actually executed:** Node v22.16 `node --experimental-strip-types --test tests/turret-aim.test.mjs` — **6/6 PASS**; TypeScript v5.8.3 isolated strict `tsc --noEmit` — **PASS**.
+
+Git blob SHA-1 values of locally executed files were independently compared with the connected GitHub branch and match **byte-for-byte**:
+- `spacetimedb/src/sim/turret-aim.ts`: `3ff3ed63d352e5166ac83a3664389229d5aa0b79`
+- `tests/turret-aim.test.mjs`: `b36a2ebc7192b53aca9be37ec004b515bfc87456`
+
+Coverage: wrap-around, 180° tie, class-specific maximum turn speed, aiming tolerance gating, actual source/target bearing and NaN/invalid tick rejection.
+
+**Unverified runtime code:** private `turret_aim` persistence; authenticated `aimWeapon`; server-ticked turret bearing changes in `advanceCombat`; `fireWeapon` rejects misaligned shots; timer reactivation/cleanup and source destruction. New official SpacetimeDB in-memory harness tests for aim ownership, premature fire, 100ms increments and destroyed source cleanup are **prepared but not executed**. No npm package installation, generated SDK bindings, live SpacetimeDB scheduler, independent-client or FoW negative test evidence. Do not close #11/#13/#19 or merge PR #20 on this isolated test evidence alone.
+
+**Design boundary:** no UI/HUD edits were made; issue #15 remains a mandatory review gate. Sudden Death rules have not been chosen or implemented yet.
