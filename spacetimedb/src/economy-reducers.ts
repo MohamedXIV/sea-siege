@@ -1,6 +1,7 @@
 import { t } from "spacetimedb/server";
 import spacetimedb, { economySchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
+import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
   ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
   debitSalvage, drawSalvage, replenishSalvage, inRange, rigExtraction,
@@ -118,6 +119,26 @@ export const advanceEconomy = spacetimedb.reducer(
     };
     const structures = Array.from(ctx.db.structure.matchId.filter(timer.matchId))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    // Progress upgrades only for complete, connected and living Workshops.
+    // Newly issued upgrades cannot inherit time from before their order.
+    for (const row of structures) {
+      if (row.kind !== "workshop" || row.upgradeRemainingUs <= 0n) continue;
+      const operational = row.complete && row.connected && row.hp > 0;
+      const activeSince = row.upgradeStartedAtUs > timer.lastTickAt.microsSinceUnixEpoch
+        ? row.upgradeStartedAtUs : timer.lastTickAt.microsSinceUnixEpoch;
+      const eligibleUs = nowUs > activeSince
+        ? (nowUs - activeSince < elapsedUs ? nowUs - activeSince : elapsedUs)
+        : 0n;
+      const remainingUs = progressWorkshopUpgrade(row.upgradeRemainingUs, eligibleUs, operational);
+      if (remainingUs === 0n) {
+        ctx.db.structure.id.update({
+          ...row, level: row.level + 1,
+          upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
+        });
+      } else if (remainingUs !== row.upgradeRemainingUs) {
+        ctx.db.structure.id.update({ ...row, upgradeRemainingUs: remainingUs });
+      }
+    }
     const nodes = Array.from(ctx.db.salvageNode.matchId.filter(timer.matchId))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const remaining = new Map(nodes.map(node => [
