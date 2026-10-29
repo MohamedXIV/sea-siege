@@ -199,7 +199,7 @@ export const motionSchedule = table(
 
 
 /** Owned physical structures; the surface and mounted layers may coexist. */
-const structure = table(
+export const structure = table(
   { name: "structure" },
   {
     id: t.u64().primaryKey().autoInc(),
