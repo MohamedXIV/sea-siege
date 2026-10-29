@@ -1219,3 +1219,72 @@ it("one human can own a real eight-faction lobby with seven identity-free strate
     .every(row=>row.nextDecisionUs>0n)).toBe(true);
   expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
 });
+
+
+it("authenticated allied structures view never includes another seat, match, or spectator", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  const spectator = auth("spectator", 3n), charlie = auth("charlie", 4n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const first = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: first }));
+  test.withReducerTx(charlie, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const second = [...test.db.match.iter()].find(row => row.id !== first)!.id;
+  expect(test.runQuery(moduleExports.myStructures(test.viewContext(spectator))))
+    .toHaveLength(0);
+  const aliceRows = test.runQuery(moduleExports.myStructures(test.viewContext(alice)));
+  const bobRows = test.runQuery(moduleExports.myStructures(test.viewContext(bob)));
+  const charlieRows = test.runQuery(moduleExports.myStructures(test.viewContext(charlie)));
+  expect(aliceRows.length).toBeGreaterThan(0);
+  expect(bobRows.length).toBeGreaterThan(0);
+  expect(charlieRows.length).toBeGreaterThan(0);
+  expect(aliceRows.every(row => row.matchId === first && row.ownerSlot === 0)).toBe(true);
+  expect(bobRows.every(row => row.matchId === first && row.ownerSlot === 1)).toBe(true);
+  expect(charlieRows.every(row => row.matchId === second && row.ownerSlot === 0)).toBe(true);
+});
+
+it("live enemy contact view discloses no secret commands or hidden enemy resources", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  const stranger = auth("stranger", 3n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  expect(test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(alice))))
+    .toHaveLength(0); // enemy spawns must not leak before start
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  expect(test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(stranger))))
+    .toHaveLength(0);
+  const contacts = test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(alice)));
+  const ownShipIds = new Set([...test.db.ship.matchId.filter(matchId)]
+    .filter(row => row.ownerSlot === 0).map(row => row.id));
+  const ownStructureIds = new Set([...test.db.structure.matchId.filter(matchId)]
+    .filter(row => row.ownerSlot === 0).map(row => row.id));
+  for (const contact of contacts) {
+    expect(contact.matchId).toBe(matchId);
+    expect(contact.entityType === "ship" || contact.entityType === "structure").toBe(true);
+    expect(ownShipIds.has(contact.entityId) && contact.entityType === "ship").toBe(false);
+    expect(ownStructureIds.has(contact.entityId) && contact.entityType === "structure").toBe(false);
+    for (const forbidden of ["hp", "lastFiredAtUs", "salvage", "cellPath",
+      "targetX", "productionOrder", "seed", "difficulty", "ownerSlot"]) {
+      expect(forbidden in contact).toBe(false);
+    }
+  }
+});
+
+it("bot factions never receive a user-visible enemy or allied structure subscription", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("host", 1n), outsider = auth("outsider", 2n);
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "hard" }));
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const myStructures = test.runQuery(moduleExports.myStructures(test.viewContext(host)));
+  expect(myStructures.every(row => row.ownerSlot === 0)).toBe(true);
+  expect(test.runQuery(moduleExports.myStructures(test.viewContext(outsider))))
+    .toHaveLength(0);
+  expect(test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(outsider))))
+    .toHaveLength(0);
+  expect(test.runQuery(moduleExports.myFactionStates(test.viewContext(host)))
+    .every(row => row.controller === "human")).toBe(true);
+});
