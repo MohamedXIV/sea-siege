@@ -25,9 +25,35 @@ const matchMember = table(
     identity: t.identity().index("btree"),
     slot: t.u32(),
     factionKey: t.string().index("btree"),
+  },
+);
+
+/** One independent ledger for EVERY faction, human or AI. Never a fake Identity. */
+const factionState = table(
+  { name: "faction_state" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    slot: t.u32(),
+    factionKey: t.string().index("btree"),
+    controller: t.string(), // human | bot; writable only by server reducers
     salvage: t.u32(),
     totalSalvageGathered: t.u64(),
     eliminated: t.bool(),
+  },
+);
+
+/** Private server-owned AI seats have NO SpacetimeDB client Identity. */
+const botController = table(
+  { name: "bot_controller" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    factionKey: t.string().index("btree"),
+    slot: t.u32(),
+    difficulty: t.string(),
+    seed: t.u32(),
+    nextDecisionUs: t.i64(),
   },
 );
 
@@ -263,7 +289,7 @@ export const matchDeadline = table(
 );
 
 const spacetimedb = schema({
-  match, matchMember, ship, shipRoute, motionSchedule,
+  match, matchMember, factionState, botController, ship, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
   harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
   matchDeadline,
