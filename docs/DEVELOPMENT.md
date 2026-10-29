@@ -257,3 +257,12 @@ tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler
 - Policy intents are NOT trusted direct commands. All must be revalidated by the same authority layer as human actions; construction and fleet intentions must never alter the ledger directly.
 - **Important:** the current schema ties ships to a human `Identity`, so this is **NOT** a functioning bot faction. Never assign the human host's identity to bot ships, fake connection IDs, or bypass human permission checks for internal reducers. Before integration, migrate canonical faction ownership to slot/controller mapping and create one per-match bot scheduler, then run a truly bot-only headless match.
 - The migration sequence and complete negative-test/acceptance matrix are in `docs/BOT_SERVER_INTEGRATION.md`. The standalone Node tests passed 14/14 with strict TypeScript checks; complete SpacetimeDB module tests have not been executed.
+
+
+## Match-scoped faction ship ownership — 29 October 2026
+
+The bot readiness migration has begun without faking client identities. `ship.owner: Identity` is replaced with `ownerSlot: u32` plus an indexed `factionKey` derived from match ID and slot. Human membership rows store the matching indexed key. All ship actions and accounting now resolve faction ownership via the member's match and slot; destroyed/eliminated human seats cannot continue building or producing.
+
+The private `my_ships` identity view uses `matchMember.where(identity == sender).rightSemijoin(ship, factionKey == factionKey)`; filtering on slot alone would **leak same-numbered factions from unrelated matches**. This indexed semijoin is supported by the [official SpacetimeDB 2.x view API](https://spacetimedb.com/docs/functions/views/), but this module's actual SDK build and subscription security tests are pending.
+
+`tests/faction-ownership.test.mjs` passes 5/5 standalone cases and the exact Git blobs match locally executed source/tests. Two new **unexecuted** module harness cases check cross-match subscriptions and human command rejection. See `docs/BOT_SERVER_INTEGRATION.md` for the remaining faction ledger/controller migration and explicit non-playability boundary. **No UI or HUD edits.**
