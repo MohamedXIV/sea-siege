@@ -21,9 +21,9 @@ import {
  * Only non-secret lobby metadata is public. Membership and ship state are private
  * until an authenticated, identity-filtered view deliberately exposes them.
  *
- * Basic route-following movement now runs through a server-only scheduled
- * reducer. Dynamic collision, visibility, and production gameplay are still
- * pending. This module has NOT been published or integration-tested yet.
+ * Server-side motion, construction, salvage and shipyard queues are implemented
+ * as source code. Fog-safe views and real runtime integration remain pending.
+ * This module has NOT been published or integration-tested yet.
  */
 const match = table(
   { name: "match", public: true },
@@ -368,9 +368,8 @@ export const startMatch = spacetimedb.reducer(
   },
 );
 
-/** Orders are owner-validated and route-planned against stored static terrain.
- * The lazy internal-only scheduler moves ships after a valid order. Future
- * dynamic structure occupancy must become part of the route predicate. */
+/** Movement orders are server-validated against private static and structure
+ * occupancy. Issuing one also atomically cancels any harvesting assignment. */
 export const issueShipOrder = spacetimedb.reducer(
   { shipId: t.u64(), targetX: t.f64(), targetY: t.f64() },
   (ctx, { shipId, targetX, targetY }) => {
@@ -695,7 +694,9 @@ export const demolishStructure = spacetimedb.reducer(
     const world = ctx.db.worldConfig.matchId.find(target.matchId);
     if (!world) throw new Error("Missing authoritative world");
     const refund = Math.floor(definition.cost * (target.complete ? 0.5 : 0.75));
-    const newSalvage = member.salvage + refund;
+    let newSalvage = creditSalvage(member.salvage, refund);
+    const removedYards = new Set<bigint>();
+    if (target.kind === "shipyard") removedYards.add(target.id);
     if (newSalvage > 0xffffffff) throw new Error("Salvage overflow");
     ctx.db.structure.id.delete(target.id);
     for (const pending of ctx.db.constructionSchedule.structureId.filter(target.id)) {
@@ -719,6 +720,7 @@ export const demolishStructure = spacetimedb.reducer(
         return true;
       })();
       if (!stillSupported) {
+        if (row.kind === "shipyard") removedYards.add(row.id);
         ctx.db.structure.id.delete(row.id);
         for (const pending of ctx.db.constructionSchedule.structureId.filter(row.id)) {
           ctx.db.constructionSchedule.scheduledId.delete(pending.scheduledId);
@@ -734,6 +736,17 @@ export const demolishStructure = spacetimedb.reducer(
         { ...row, kind: row.kind as StructureKind }, currentShapes, world.mapCells,
       );
       if (row.connected !== connected) ctx.db.structure.id.update({ ...row, connected });
+    }
+    // Cancel all paid but not yet launched ships when their shipyard is
+    // demolished or collapses. Refund once in this same authoritative transaction.
+    for (const order of ctx.db.productionOrder.matchId.filter(target.matchId)) {
+      if (!removedYards.has(order.yardId)) continue;
+      const definition = shipDefinition(order.shipKind);
+      if (!definition || order.ownerSlot !== member.slot) {
+        throw new Error("Invalid shipyard queue ownership");
+      }
+      newSalvage = creditSalvage(newSalvage, definition.cost);
+      ctx.db.productionOrder.id.delete(order.id);
     }
     ctx.db.matchMember.id.update({ ...member, salvage: newSalvage });
   },
