@@ -47,6 +47,8 @@ export const finishMatchAtDeadline = spacetimedb.reducer(
     // the finished match. A one-shot reducer schedule auto-removes on success.
     for (const row of Array.from(ctx.db.economySchedule.matchId.filter(match.id)))
       ctx.db.economySchedule.scheduledId.delete(row.scheduledId);
+    for (const row of Array.from(ctx.db.botSchedule.matchId.filter(match.id)))
+      ctx.db.botSchedule.scheduledId.delete(row.scheduledId);
     for (const row of Array.from(ctx.db.motionSchedule.matchId.filter(match.id)))
       ctx.db.motionSchedule.scheduledId.delete(row.scheduledId);
     for (const row of Array.from(ctx.db.combatSchedule.matchId.filter(match.id)))
