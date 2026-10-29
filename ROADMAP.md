@@ -1,6 +1,6 @@
 # Sea Siege — Roadmap
 
-> Project planning baseline: 29 October 2026. The [master implementation epic](https://github.com/MohamedXIV/sea-siege/issues/1) tracks all feature issues and is the canonical source for their completion state. **No game implementation has been merged by this planning step.**
+> Project planning baseline: 29 October 2026; **experimental source foundation squash-merged 30 October 2026** via [PR #20](https://github.com/MohamedXIV/sea-siege/pull/20). This is NOT an accepted playable release. [Implementation/validation status](./docs/STATUS.md) distinguishes code present from acceptance gates. The [master epic](https://github.com/MohamedXIV/sea-siege/issues/1) tracks feature completion.
 
 ## Current verification sequence — user decision (29 Oct 2026)
 
@@ -8,7 +8,7 @@ The user has a **SpacetimeDB account but has not created a Cloud database**. **D
 
 This defers **integration evidence**, not the expectation of real APIs: build real TypeScript SpacetimeDB module source, generated SDK integration when tools become available, Phaser rendering and gameplay systems directly. Perform cheap static/unit/build checks opportunistically; never use fake clients/server or claim successful publication or multiplayer before a real run. Individual issues whose acceptance criteria require deployed evidence remain **open**, even if code is drafted, and later phases may proceed as development-only work with the unresolved P0 proof explicitly tracked. The first comprehensive end-to-end verification is #17, which must also close the pending P0 proof (#3/#4/#5/#6). Do not merge unverified production claims into `main`.
 
-**Implementation branch:** [`feat/real-stack-foundation`](https://github.com/MohamedXIV/sea-siege/tree/feat/real-stack-foundation) ([draft PR #20](https://github.com/MohamedXIV/sea-siege/pull/20)).
+**Source checkpoint:** [PR #20](https://github.com/MohamedXIV/sea-siege/pull/20) was squash-merged into `main`. The browser-to-server integration and P0 acceptance remain unfinished; subsequent implementation should use small focused branches/PRs.
 
 ## Vision
 2–8-faction real-time top-down naval strategy in a drowned-industrial world. Salvage and build connected floating platforms, support multi-cell workshops/shipyards/cannons, gather resources, command naval fleets, siege rival Command Cores and win. Human/bot/empty slots, Quick Play and private lobbies, fair procedural maps, secure fog of war, a reactive stylized ocean.
