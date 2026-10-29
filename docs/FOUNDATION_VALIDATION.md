@@ -177,3 +177,21 @@ New exact HEAD Git blob SHA-1:
 Pure policy covers exact difficulty strategic intervals/order caps, visible-enemy aim/fire, stale or hidden intel denial, resource and legal construction decisions, queue budgets, input-order determinism, exploration frontiers, and invalid observation rejection. Sensor filter covers friendly/dead exclusion, distance, blocked terrain LoS, multi-sensor stable union, and zero-sensor denials.
 
 **NOT implemented/verified in SpacetimeDB:** canonical bot faction slots independent of human `Identity`, bot account-less seat creation, server scheduler, reducer validation bridge, bot-only match execution, secure subscriber projections, 1-human-vs-7-bots session, full SDK build/typecheck. No claim of real bots playing. See `docs/BOT_SERVER_INTEGRATION.md`. All prior module compilation/security gates remain open; #12 and #13 must not be closed.
+
+
+## Faction ownership separation — 29 October 2026
+
+**Actually executed** on Node 22.16.0: `node --experimental-strip-types --test tests/faction-ownership.test.mjs` **5/5 PASS**; standalone `tsc --noEmit --strict` on `sim/faction-ownership.ts` **PASS** using TypeScript 5.8.3. Git blob SHA-1 of BOTH files verified identical to locally executed bytes:
+- `spacetimedb/src/sim/faction-ownership.ts`: `4622f66e6da290b60b494c44e263b2a0dda882a0`
+- `tests/faction-ownership.test.mjs`: `ee61bfcddb738d5cdf23986f9cb5f49a7b5b737e`
+
+Pure tests cover 320 match/slot combinations, invalid slots/IDs, no membership, eliminated seats, cross-faction control and malformed input. **These are not SDK integration tests.**
+
+**Source-only updates, not executed inside SpacetimeDB:**
+- Server-derived `ship.ownerSlot` and indexed `factionKey` instead of `ship.owner`; human `match_member.factionKey` with indexed match-scoped key.
+- `myShips` identity-scoped indexed `rightSemijoin` on key, avoiding same-slot cross-match leaks.
+- Ship ownership across movement, stop, harvest, combat, turret aim/fire, repair, economy, production and match score migrated from Identity lookups to faction slots.
+- All human build/demolition/shipyard/Workshop commands reject eliminated seats. Existing official tests updated; **two additional unexecuted module tests** cover cross-match ship views and cross-match command denial.
+- Static review of actual connected GitHub module sources found no remaining `ship.owner` / `vessel.owner` / `row.owner.isEqual` usages in the migrated reducers/tests.
+
+**Not verified:** complete `spacetimedb/` TypeScript module build, exact SDK view join type safety, real module harness execution, cross-match subscription negative test and two clients. Since schema changed, generated client bindings must be regenerated later. No bot-only faction/scheduler/economy migration was completed. PR remains Draft, issue #12 remains open; no UI edits or Cloud DB changes.
