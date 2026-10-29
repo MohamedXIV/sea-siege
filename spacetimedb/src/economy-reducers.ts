@@ -2,6 +2,7 @@ import { t } from "spacetimedb/server";
 import spacetimedb, { economySchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
+import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
   ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
@@ -15,7 +16,10 @@ export const orderHarvest = spacetimedb.reducer(
   (ctx, { shipId, nodeId }) => {
     const vessel = ctx.db.ship.id.find(shipId);
     if (!vessel) throw new Error("Ship unavailable");
-    if (!vessel.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(vessel.matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    if (!mayControlFaction(member?.slot, vessel.ownerSlot, member?.eliminated ?? true))
+      throw new Error("Cannot command another player's ship");
     const matchRow = ctx.db.match.id.find(vessel.matchId);
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const definition = shipDefinition(vessel.kind);
@@ -169,7 +173,7 @@ export const advanceEconomy = spacetimedb.reducer(
         const vessel = ctx.db.ship.id.find(order.shipId);
         const node = ctx.db.salvageNode.id.find(order.nodeId);
         const definition = vessel ? shipDefinition(vessel.kind) : null;
-        const member = vessel ? members.find(row => row.identity.isEqual(vessel.owner)) : null;
+        const member = vessel ? members.find(row => row.slot === vessel.ownerSlot) : null;
         if (!vessel || !node || node.matchId !== timer.matchId ||
             !member || !definition || definition.harvestPerSecond <= 0 ||
             !inRange({ x: vessel.x, y: vessel.y },
@@ -275,7 +279,8 @@ export const advanceEconomy = spacetimedb.reducer(
         continue; // Completed work waits for a navigable launch berth.
       }
       const launched = ctx.db.ship.insert({
-        id: 0n, matchId: timer.matchId, owner: member.identity, kind: job.shipKind,
+        id: 0n, matchId: timer.matchId, ownerSlot: member.slot,
+        factionKey: member.factionKey, kind: job.shipKind,
         hp: definition.hp, radiusCells: definition.radius,
         x: where.x, y: where.y, velocityX: 0, velocityY: 0,
         hullAngleDeg: 0, turretAngleDeg: 0, lastFiredAtUs: -1n,
