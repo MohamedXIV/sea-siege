@@ -55,7 +55,7 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - `stopShip` with same ownership validation as orders.
 - Prepared module-harness tests: external reducer impersonation rejected, server-internal ticks move a ship, one scheduler per match, stop/route completion drops timer.
 
-**Outstanding gates:** no `spacetime build/publish`, no `npm install`/SpacetimeDB module typecheck, no real wall-clock scheduled ticks, no two-client subscription, no actual bandwidth or latency measurements, no *fully integrated construction-footprint* occupancy or class-specific hull clearance. The draft PR remains unmerged; #3/#5/#10/#19 remain open.
+**Outstanding gates:** no `spacetime build/publish`, no `npm install`/SpacetimeDB module typecheck, no real wall-clock scheduled ticks, no two-client subscription, no actual bandwidth or latency measurements, no *runtime-verified* construction-footprint occupancy or class-specific hull clearance. The draft PR remains unmerged; #3/#5/#10/#19 remain open.
 
 **References:** official [schedule tables](https://spacetimedb.com/docs/tables/schedule-tables/), [scheduled reducer lifecycle](https://spacetimedb.com/docs/functions/reducers/lifecycle/), [module unit-testing](https://spacetimedb.com/docs/how-to/unit-testing/), [ADR-0001](adr/0001-multiplayer-motion-tickrate.md).
 
@@ -67,4 +67,23 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 
 **Server source change, unverified in SpacetimeDB runtime:** `issueShipOrder` uses the dynamic per-match ship occupancy check to avoid ordering into another ship's current hull. `advanceMatchSimulation` checks swept ship motion, updates per-tick vessel bodies deterministically, and holds/repaths around blocked lanes at a 1s retry interval without client authority. New real-module datastore test cases are prepared for occupied goals and obstacle emergence between command and tick; **NOT executed** here.
 
-**Not implemented yet:** construction reducer → persisted structure footprints → live collision environment; per-vessel hull radii and avoidance of moving-vessel trajectories through a future time horizon; sophisticated congestion/deadlock guarantees, scalability benchmarks, real SpacetimeDB module compilation/integration. The temporary UI is intentionally untouched pending the user's design review (#15).
+**Not implemented yet:** real-runtime confirmation of construction reducer → private footprints → live collision; per-vessel hull radii and avoidance of moving-vessel trajectories through a future time horizon; sophisticated congestion/deadlock guarantees, scalability benchmarks, real SpacetimeDB module compilation/integration. The temporary UI is intentionally untouched pending the user's design review (#15).
+
+## Construction and support — source implementation / verification (29 October 2026)
+
+**Actually executed in VM:**
+- `node --experimental-strip-types --test tests/construction.test.mjs` — **8/8 PASS**, including source-grounded Gemini starter decks, separate mounted/surface layers, orthogonal Core connectivity, cross-chunk 2×2 footprints, rejected enemy support/costs/salvage deposits/hull intersections, and loss of support.
+- Standalone strict `tsc` on `spacetimedb/src/sim/construction.ts` — **PASS**.
+- GitHub blob SHA-1 checked against byte-identical files executed locally:
+  - `construction.ts`: `060e3e19339005961ff2078926c0896b98889270`
+  - `construction.test.mjs`: `b0bb7243b298c862fb2c89cae1df1793273f4e01`
+
+**Source implemented but NOT executed inside SpacetimeDB** (official SDK/CLI dependencies unavailable here):
+- Private structures and one-shot construction schedule tables; initial Core/decks for each new faction and 420 starting salvage; launch the scout outside solid buildings.
+- `placeStructure` validates every footprint on authoritative private rows, subtracts salvage exactly once in the same reducer transaction and schedules completion via `ScheduleAt.time(...)`.
+- `demolishStructure` enforces caller's seat, protects cores, refunds once, cancels orphaned schedules, collapses unsupported mounted buildings and recomputes Core connectivity.
+- `completeConstruction` accepts only internally scheduled calls; on completion, recomputes support connectivity.
+- Both authoritative A* planning and scheduled hull motion now pass live private surface footprints (not a client-provided blocker list) to collision validation.
+- Prepared (not executed) actual-module harness tests for construction price, authorization, completion timing, support removal, timer cancellation and refunds.
+
+**Not yet complete:** actual module build/publish, datastore/scheduler execution, 2-browser subscriptions and anti-cheat testing; optimized occupancy indexes for large match sizes, structural damage from combat, repair, passive salvage income, production queues, fog-visible map projections, and full connected UI. No design/implementation of final UI was started (issue #15 review gate).
