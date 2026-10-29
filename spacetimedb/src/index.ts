@@ -9,9 +9,9 @@ import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./si
  * Only non-secret lobby metadata is public. Membership and ship state are private
  * until an authenticated, identity-filtered view deliberately exposes them.
  *
- * This file is deliberately limited to a real match/ownership *contract*.
- * Movement ticks, fog of war and ship physics follow in #10/#13; the module has
- * NOT been published or integration-tested yet.
+ * Basic route-following movement now runs through a server-only scheduled
+ * reducer. Dynamic collision, visibility, and production gameplay are still
+ * pending. This module has NOT been published or integration-tested yet.
  */
 const match = table(
   { name: "match", public: true },
@@ -246,8 +246,8 @@ export const startMatch = spacetimedb.reducer(
 );
 
 /** Orders are owner-validated and route-planned against stored static terrain.
- * Ships still await the scheduled movement simulation in #10. Future dynamic
- * structure occupancy must become part of the server-side route predicate. */
+ * The lazy internal-only scheduler moves ships after a valid order. Future
+ * dynamic structure occupancy must become part of the route predicate. */
 export const issueShipOrder = spacetimedb.reducer(
   { shipId: t.u64(), targetX: t.f64(), targetY: t.f64() },
   (ctx, { shipId, targetX, targetY }) => {
