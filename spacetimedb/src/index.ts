@@ -658,3 +658,5 @@ export { finishMatchAtDeadline } from "./match-reducers.ts";
 export { addBot, removeBot } from "./bot-reducers.ts";
 
 export { advanceBots } from "./bot-simulation.ts";
+
+export { myVisibleEnemies, myStructures } from "./visibility-views.ts";
