@@ -20,9 +20,9 @@
 **Exit gate:** install/typecheck/build/test pass; SpacetimeDB module publishes locally; generated SDK client connects; two independent browsers (not one in-page simulation) view the same match, exchange authoritative updates and reconnect; Phaser 4 renders the subscribed world. No cosmetic feature work substitutes for this proof.
 
 ### P1: Playable naval RTS
-**Issues:** [#7](https://github.com/MohamedXIV/sea-siege/issues/7), [#8](https://github.com/MohamedXIV/sea-siege/issues/8), [#9](https://github.com/MohamedXIV/sea-siege/issues/9), [#10](https://github.com/MohamedXIV/sea-siege/issues/10), [#11](https://github.com/MohamedXIV/sea-siege/issues/11), [#12](https://github.com/MohamedXIV/sea-siege/issues/12).
+**Issues:** [#7](https://github.com/MohamedXIV/sea-siege/issues/7), [#8](https://github.com/MohamedXIV/sea-siege/issues/8), [#9](https://github.com/MohamedXIV/sea-siege/issues/9), [#10](https://github.com/MohamedXIV/sea-siege/issues/10), [#11](https://github.com/MohamedXIV/sea-siege/issues/11), [#12](https://github.com/MohamedXIV/sea-siege/issues/12), [#19](https://github.com/MohamedXIV/sea-siege/issues/19).
 
-**Exit gate:** deterministic seeded 2–8 spawn world, spatial chunks, legal multi-layer platform construction and support collapse, salvage gathering/costs, production, ships/formation/navigation, server-validated weapons/damage, Core destruction/victory and bots playing under the same rules. A complete human-vs-bots match must finish.
+**Exit gate:** deterministic seeded 2–8 spawn world, spatial chunks, legal multi-layer platform construction and support collapse, salvage gathering/costs, production, ships/formation/navigation, server-validated weapons/damage, Core destruction/victory and bots playing under the same rules. A complete human-vs-bots match must finish. Ship motion must render smoothly via buffered interpolation, with performance evidence comparing 5/10/20Hz simulation rather than direct DB-position snapping (see #19).
 
 ### P2: Secure, complete player experience
 **Issues:** [#13](https://github.com/MohamedXIV/sea-siege/issues/13), [#14](https://github.com/MohamedXIV/sea-siege/issues/14), [#15](https://github.com/MohamedXIV/sea-siege/issues/15), [#16](https://github.com/MohamedXIV/sea-siege/issues/16).
@@ -47,16 +47,29 @@
 | #8 | Construction/connectivity | #3, #7 |
 | #9 | Economy/production | #7, #8 |
 | #10 | Ships/navigation | #3, #5, #7 |
+| #19 | Smooth ship presentation, bounded dead reckoning, tickrate benchmarking | #3, #5, #10 |
 | #11 | Combat/victory | #8, #10 |
 | #12 | Bots | #8–#11 |
 | #13 | Secure FoW | #3, #7, #10, #11 |
 | #14 | Full match lifecycle | #4, #7; #13 for public security |
 | #15 | React UI and HUD | #2, #4, #5; integrate core systems |
 | #16 | Art/ocean/audio | #5, #10, #11; integrate #15 |
-| #17 | Full E2E/performance | #6, #12–#16 |
+| #17 | Full E2E/performance, including smooth-motion quality gate | #6, #12–#16, #19 |
 | #18 | Release packaging/docs | #17 |
 
 **Initial dependency-ready issues:** [#2](https://github.com/MohamedXIV/sea-siege/issues/2) and [#3](https://github.com/MohamedXIV/sea-siege/issues/3). Keep `main` healthy; deliver through feature branches and reviewable PRs.
+
+## Multiplayer motion and tickrate decision (ADR-0001)
+
+**[ADR-0001: Smooth server-authoritative ship motion](./docs/adr/0001-multiplayer-motion-tickrate.md)** is the accepted implementation direction, with [Issue #19](https://github.com/MohamedXIV/sea-siege/issues/19) tracking the robust implementation/benchmark. This does **not** mean the implementation has already been completed.
+
+- **Server simulation** is authoritative: begin with measured **10–20Hz**, test **5/10/20Hz**; monitor reducer cost and actual tick intervals.
+- **Observable subscription/motion updates** are independent of simulation and display FPS; **5–10Hz is a trial target, not a setting promised by SpacetimeDB**. Server-side coalescing or parametric movement requires explicit design and measurement.
+- **Phaser rendering** targets smooth 60 FPS using timestamped snapshot buffering, configurable small interpolation delay, shortest-arc angles, limited dead reckoning and authoritative correction.
+- **Lifecycle and security:** no stale extrapolation on reconnect, fog-of-war hiding/reveal, spawn/despawn or change of ownership; never reveal hidden enemy ship state to smooth its renderer.
+- **Test:** actual two-client movement of **20–50 ships**, 5/10/20Hz simulations, variable latency/jitter, frame time, server cost and bandwidth metrics.
+
+**Sequencing:** #3 and #5 establish the timestamped movement contract and minimum Phaser interpolation in P0; #10 provides authoritative movement/orders; #19 hardens smoothness in P1; #11/#16 reconstruct projectiles/wakes visually; #17 verifies the release gate.
 
 ## Minimum content for version 1
 - Resource: Salvage.
