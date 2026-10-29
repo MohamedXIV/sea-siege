@@ -40,6 +40,7 @@ export const createMatch = spacetimedb.reducer(
       id: 0n,
       host: ctx.sender,
       phase: "lobby",
+      winnerSlot: -1,
       maxSlots,
       createdAt: ctx.timestamp,
     });
@@ -68,6 +69,7 @@ export const createMatch = spacetimedb.reducer(
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       salvage: CONSTRUCTION_RULES.startingSalvage,
+      eliminated: false,
     });
     const initial = world.spawns[0]!;
     for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
@@ -76,6 +78,7 @@ export const createMatch = spacetimedb.reducer(
         id: 0n, matchId: created.id, ownerSlot: base.ownerSlot,
         kind: base.kind, channel: definition.channel, gridX: base.gridX, gridY: base.gridY,
         width: base.width, height: base.height, hp: definition.hp,
+        lastFiredAtUs: 0n,
         level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
         complete: true, connected: true,
         completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
@@ -96,6 +99,7 @@ export const createMatch = spacetimedb.reducer(
       velocityY: 0,
       hullAngleDeg: 0,
       turretAngleDeg: 0,
+      lastFiredAtUs: 0n,
       targetX: initialX,
       targetY: initialY,
       revision: 0n,
@@ -120,6 +124,7 @@ export const joinMatch = spacetimedb.reducer(
     ctx.db.matchMember.insert({
       id: 0n, matchId, identity: ctx.sender, slot,
       salvage: CONSTRUCTION_RULES.startingSalvage,
+      eliminated: false,
     });
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
     if (!spawn) throw new Error("Missing server-owned spawn assignment");
@@ -129,6 +134,7 @@ export const joinMatch = spacetimedb.reducer(
         id: 0n, matchId, ownerSlot: slot,
         kind: base.kind, channel: definition.channel, gridX: base.gridX, gridY: base.gridY,
         width: base.width, height: base.height, hp: definition.hp,
+        lastFiredAtUs: 0n,
         level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
         complete: true, connected: true,
         completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
@@ -148,6 +154,7 @@ export const joinMatch = spacetimedb.reducer(
       velocityY: 0,
       hullAngleDeg: 0,
       turretAngleDeg: 0,
+      lastFiredAtUs: 0n,
       targetX: x,
       targetY: y,
       revision: 0n,
@@ -472,7 +479,7 @@ export const placeStructure = spacetimedb.reducer(
       id: 0n, matchId, ownerSlot: member.slot, kind,
       channel: definition.channel, gridX, gridY,
       width: definition.width, height: definition.height,
-      hp: definition.hp, level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
+      hp: definition.hp, lastFiredAtUs: 0n, level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
       complete: false,
       connected: definition.channel === "superstructure",
       completeAtUs: deadline,
@@ -604,3 +611,5 @@ export {
 export {
   repairStructure, repairShip, upgradeWorkshop,
 } from "./workshop-reducers.ts";
+
+export { fireWeapon, advanceCombat } from "./combat-reducers.ts";
