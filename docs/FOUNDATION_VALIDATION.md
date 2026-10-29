@@ -55,6 +55,16 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - `stopShip` with same ownership validation as orders.
 - Prepared module-harness tests: external reducer impersonation rejected, server-internal ticks move a ship, one scheduler per match, stop/route completion drops timer.
 
-**Outstanding gates:** no `spacetime build/publish`, no `npm install`/SpacetimeDB module typecheck, no real wall-clock scheduled ticks, no two-client subscription, no actual bandwidth or latency measurements, no dynamic occupancy/ship hull clearance. The draft PR remains unmerged; #3/#5/#10/#19 remain open.
+**Outstanding gates:** no `spacetime build/publish`, no `npm install`/SpacetimeDB module typecheck, no real wall-clock scheduled ticks, no two-client subscription, no actual bandwidth or latency measurements, no *fully integrated construction-footprint* occupancy or class-specific hull clearance. The draft PR remains unmerged; #3/#5/#10/#19 remain open.
 
 **References:** official [schedule tables](https://spacetimedb.com/docs/tables/schedule-tables/), [scheduled reducer lifecycle](https://spacetimedb.com/docs/functions/reducers/lifecycle/), [module unit-testing](https://spacetimedb.com/docs/how-to/unit-testing/), [ADR-0001](adr/0001-multiplayer-motion-tickrate.md).
+
+## Collision and dynamic obstruction slice — 29 Oct 2026
+
+**Pure TypeScript test execution, actually run:** `node --experimental-strip-types --test tests/collision.test.mjs` **6/6 PASS**; isolated TypeScript strict typecheck **PASS**. Tests cover high-speed tunneling, 3×2 structure footprints, diagonal sweeps, vessel overlap/self-exclusion, invalid/boundary cases and A* cell occupancy. Exact uploaded Git blob SHA-1 matches the locally tested originals:
+- `collision.ts`: `233e54c5351270a53fd423a58a9af7075714b0c1`
+- `collision.test.mjs`: `d034210afb99c4b81d3c5379ec01e0dfa34d87c9`
+
+**Server source change, unverified in SpacetimeDB runtime:** `issueShipOrder` uses the dynamic per-match ship occupancy check to avoid ordering into another ship's current hull. `advanceMatchSimulation` checks swept ship motion, updates per-tick vessel bodies deterministically, and holds/repaths around blocked lanes at a 1s retry interval without client authority. New real-module datastore test cases are prepared for occupied goals and obstacle emergence between command and tick; **NOT executed** here.
+
+**Not implemented yet:** construction reducer → persisted structure footprints → live collision environment; per-vessel hull radii and avoidance of moving-vessel trajectories through a future time horizon; sophisticated congestion/deadlock guarantees, scalability benchmarks, real SpacetimeDB module compilation/integration. The temporary UI is intentionally untouched pending the user's design review (#15).
