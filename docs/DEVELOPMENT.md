@@ -290,3 +290,10 @@ Bot suggestions can lead to authoritative `harvest_order`, A* `ship_route`, `tur
 **Caveats:** This is real module *source code*, not proof of execution. Server-side transaction orchestration is not yet a fully shared module with human reducer entrypoints, even though physical/balance validation helpers are reused. Complete SpacetimeDB SDK module build, official reducer harness, bot-only headless and 1-human/7-bot live matches remain pending. Full Fog of War/subscription authorization also remains #13.
 
 Standalone `bot-observation` pure tests: **5/5 PASS**, exact Git blobs match locally executed files, strict TypeScript PASS. No UI/HUD changes; owner design review #15 still required.
+
+
+## Shared authoritative command dispatcher, first two commands (30 October 2026)
+
+The human economy reducers and the Bot strategy scheduler now share `sim/command-dispatch.ts` for **Harvest** and **Shipyard Enqueue**. Both actions use the same match-scoped faction validation, ability/availability/queue/resource checks, and transactional operation order via DB-bound ports. This eliminates independent mutation logic for these two command types only. Human auth and Bot internal-controller authentication remain separate wrappers; bot gameplay does not simulate `ctx.sender`. A new server-side line-of-sight check prevents a human from harvesting an obscured deposit by guessed ID.
+
+Ten exact-file isolated Node tests and strict standalone TypeScript pass; see `docs/FOUNDATION_VALIDATION.md`. Full SpacetimeDB module and transaction rollback tests were not executed because the runtime SDK is unavailable. Next command families to unify: movement, construction, aim/fire, then workshop flows; maintain headless 2–8 faction performance and FoW authorization gates before declaring playable.
