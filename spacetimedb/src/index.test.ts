@@ -397,3 +397,156 @@ it("demolishing support collapses a mounted workshop and cancels its constructio
   const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
   expect(member.salvage).toBe(420 - 120 + 12);
 });
+
+
+it("harvest orders require the owner and actual node range; economy credits only drawn salvage", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const vessel = [...test.db.ship.iter()].find(row => row.owner.isEqual(lobby.host))!;
+  const node = [...test.db.salvageNode.matchId.filter(lobby.id)][0]!;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.orderHarvest(ctx, { shipId: vessel.id, nodeId: node.id })
+  )).toThrow("Cannot command another");
+  // Test-only authoritative repositioning, not a user-exposed teleport reducer.
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({ ...vessel, x: node.gridX + 0.5, y: node.gridY + 0.5 })
+  );
+  test.withReducerTx(alice, ctx => moduleExports.orderHarvest(ctx, {
+    shipId: vessel.id, nodeId: node.id,
+  }));
+  expect(test.db.harvestOrder.count()).toBe(1n);
+  const previous = [...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const timer = [...test.db.economySchedule.iter()][0]!;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: timer })
+  )).toThrow("internal-only");
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: timer })
+  );
+  const current = test.db.matchMember.id.find(previous.id)!;
+  expect(current.salvage).toBe(previous.salvage + 4 + 14);
+  expect(test.db.salvageNode.id.find(node.id)!.remaining).toBe(node.capacity - 14);
+  test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: vessel.id }));
+  expect(test.db.harvestOrder.count()).toBe(0n);
+});
+
+it("shipyard charges once, respects FIFO, then produces only after time and a safe berth", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: lobby.id, kind: "shipyard", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const yard = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "shipyard"
+  )!;
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.enqueueShip(ctx, { shipyardId: yard.id, kind: "scout" })
+  )).toThrow("offline");
+  test.clock.advance(TimeDuration.fromMillis(6000));
+  const completion = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: completion })
+  );
+  test.withReducerTx(alice, ctx =>
+    moduleExports.enqueueShip(ctx, { shipyardId: yard.id, kind: "scout" })
+  );
+  const member = [...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
+  expect(member.salvage).toBe(420 - 150 - 70);
+  expect(test.db.productionOrder.count()).toBe(1n);
+  expect([...test.db.productionOrder.iter()][0]!.remainingUs).toBe(4_000_000n);
+  // Earlier unprocessed economy elapsed time must NOT make a new job instant.
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  let timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, { arg: timer }));
+  expect(test.db.productionOrder.count()).toBe(1n);
+  expect([...test.db.productionOrder.iter()][0]!.remainingUs).toBe(4_000_000n);
+  for (let i = 0; i < 4; i++) {
+    test.clock.advance(TimeDuration.fromMillis(1000));
+    timer = [...test.db.economySchedule.iter()][0]!;
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceEconomy(ctx, { arg: timer })
+    );
+  }
+  expect(test.db.productionOrder.count()).toBe(0n);
+  const ships = [...test.db.ship.matchId.filter(lobby.id)].filter(row => row.owner.isEqual(lobby.host));
+  expect(ships).toHaveLength(2);
+  expect(ships.some(row => row.kind === "scout" && row.hp === 210)).toBe(true);
+});
+
+it("demolition cancels paid ship queues and refunds exactly once", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: lobby.id, kind: "shipyard", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const yard = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "shipyard"
+  )!;
+  test.clock.advance(TimeDuration.fromMillis(6000));
+  const completion = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: completion })
+  );
+  test.withReducerTx(alice, ctx => moduleExports.enqueueShip(ctx, {
+    shipyardId: yard.id, kind: "gunboat",
+  }));
+  const production = [...test.db.productionOrder.iter()][0]!;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.cancelShipProduction(ctx, { orderId: production.id })
+  )).toThrow("Not your");
+  test.withReducerTx(alice, ctx => moduleExports.demolishStructure(ctx, { structureId: yard.id }));
+  expect(test.db.productionOrder.count()).toBe(0n);
+  expect([...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!.salvage)
+    .toBe(420 - 150 - 130 + 75 + 130);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.cancelShipProduction(ctx, { orderId: production.id })
+  )).toThrow("unavailable");
+});
+
+it("rig income is server-owned and incomplete rigs never produce salvage", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const lobby = [...test.db.match.iter()][0]!;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
+  const core = [...test.db.structure.matchId.filter(lobby.id)].find(row =>
+    row.ownerSlot === 0 && row.kind === "command_core"
+  )!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: lobby.id, kind: "salvage_rig", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const initial = [...test.db.matchMember.matchId.filter(lobby.id)].find(m => m.slot === 0)!;
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  let timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, { arg: timer }));
+  expect(test.db.matchMember.id.find(initial.id)!.salvage).toBe(initial.salvage + 4);
+  test.clock.advance(TimeDuration.fromMillis(4500));
+  const construction = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: construction })
+  );
+  const before = test.db.matchMember.id.find(initial.id)!;
+  timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, { arg: timer }));
+  expect(test.db.matchMember.id.find(initial.id)!.salvage).toBeGreaterThanOrEqual(before.salvage + 4 + 9);
+});
