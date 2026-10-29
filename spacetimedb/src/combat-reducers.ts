@@ -138,10 +138,10 @@ export const advanceCombat = spacetimedb.reducer(
       const row = ctx.db.structure.id.find(id);
       if (!row) return;
       ctx.db.structure.id.delete(id);
-      for (const timer of ctx.db.constructionSchedule.structureId.filter(id))
+      for (const timer of Array.from(ctx.db.constructionSchedule.structureId.filter(id)))
         ctx.db.constructionSchedule.scheduledId.delete(timer.scheduledId);
       if (row.kind === "shipyard") {
-        for (const order of ctx.db.productionOrder.yardId.filter(id))
+        for (const order of Array.from(ctx.db.productionOrder.yardId.filter(id)))
           ctx.db.productionOrder.id.delete(order.id);
       }
     }
@@ -184,9 +184,9 @@ export const advanceCombat = spacetimedb.reducer(
       for (const member of members) {
         if (living.has(member.slot) || member.eliminated) continue;
         ctx.db.matchMember.id.update({ ...member, eliminated: true });
-        for (const ship of ctx.db.ship.matchId.filter(matchId))
+        for (const ship of Array.from(ctx.db.ship.matchId.filter(matchId)))
           if (ship.owner.isEqual(member.identity)) destroyShip(ship.id);
-        for (const st of ctx.db.structure.matchId.filter(matchId))
+        for (const st of Array.from(ctx.db.structure.matchId.filter(matchId)))
           if (st.ownerSlot === member.slot) destroyStructure(st.id);
       }
       if (living.size > 1) return;
@@ -196,11 +196,11 @@ export const advanceCombat = spacetimedb.reducer(
         ...match, phase: "finished", winnerSlot: living.size === 1 ? [...living][0]! : -1,
       });
       // No further periodic economy / movement / combat activity after match finish.
-      for (const job of ctx.db.economySchedule.matchId.filter(matchId))
+      for (const job of Array.from(ctx.db.economySchedule.matchId.filter(matchId)))
         ctx.db.economySchedule.scheduledId.delete(job.scheduledId);
-      for (const job of ctx.db.motionSchedule.matchId.filter(matchId))
+      for (const job of Array.from(ctx.db.motionSchedule.matchId.filter(matchId)))
         ctx.db.motionSchedule.scheduledId.delete(job.scheduledId);
-      for (const job of ctx.db.projectile.matchId.filter(matchId))
+      for (const job of Array.from(ctx.db.projectile.matchId.filter(matchId)))
         ctx.db.projectile.id.delete(job.id);
     }
     if (!ctx.senderAuth.isInternal) throw new Error("Combat scheduler is internal-only");
