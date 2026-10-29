@@ -41,3 +41,20 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - Fresh locally executed evidence: **10/10 pure TS Node tests pass** (4 worldgen, 6 navigation); strict TypeScript checks of both pure modules pass with global `tsc`. Additional smoke: 2–8 slots × 1,200 seeds each generated without exceptions.
 - Source integrity: GitHub blob SHA-1 matched exactly the locally tested worldgen, navigation, and their Node tests.
 - SpacetimeDB module test additions are **prepared only**, not run (no npm/CLI connectivity); the schema and reducer execution remain **unverified**. No Cloud database or account credentials were used.
+
+## Server-owned scheduled ship movement — 29 Oct 2026
+
+**Verified locally (pure TypeScript only):**
+- `spacetimedb/src/sim/ship-motion.ts` passes strict standalone TypeScript typecheck with global TypeScript 5.8.3.
+- `node --experimental-strip-types --test tests/ship-motion.test.mjs` — **8/8 PASS**, including bounded elapsed time, no waypoint teleportation/overshoot, shortest heading arcs, 5/10/20Hz motion invariance for straight paths, idle completion and delayed tick cap.
+- Verified exact GitHub blob IDs against locally executed source and test: `06e2975da23fb8c01b3e08a2581c333b88f00400` and `f5c0e7b61da32e08b3fa7a3b290794a2adf23f2d`.
+
+**Code added, but NOT executed inside SpacetimeDB:**
+- Official `t.scheduleAt()`, `ScheduleAt.interval(100_000n)` and `onSchedule` private per-moving-match timer.
+- `advanceMatchSimulation` with `ctx.senderAuth.isInternal` guard, elapsed time from `ctx.timestamp`, indexed match/ship-route lookup, authoritative ship position/velocity updates and lazy timer teardown.
+- `stopShip` with same ownership validation as orders.
+- Prepared module-harness tests: external reducer impersonation rejected, server-internal ticks move a ship, one scheduler per match, stop/route completion drops timer.
+
+**Outstanding gates:** no `spacetime build/publish`, no `npm install`/SpacetimeDB module typecheck, no real wall-clock scheduled ticks, no two-client subscription, no actual bandwidth or latency measurements, no dynamic occupancy/ship hull clearance. The draft PR remains unmerged; #3/#5/#10/#19 remain open.
+
+**References:** official [schedule tables](https://spacetimedb.com/docs/tables/schedule-tables/), [scheduled reducer lifecycle](https://spacetimedb.com/docs/functions/reducers/lifecycle/), [module unit-testing](https://spacetimedb.com/docs/how-to/unit-testing/), [ADR-0001](adr/0001-multiplayer-motion-tickrate.md).
