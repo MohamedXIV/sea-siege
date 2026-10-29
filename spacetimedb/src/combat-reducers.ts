@@ -36,8 +36,10 @@ export const aimWeapon = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated ||
-        (vessel ? !mayControlFaction(member.slot, vessel.ownerSlot, member.eliminated) : cannon!.ownerSlot !== member.slot))
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated ||
+        (vessel ? !mayControlFaction(member!.slot, vessel.ownerSlot, faction.eliminated) : cannon!.ownerSlot !== faction.slot))
       throw new Error("Weapon unavailable");
     if (vessel ? vessel.hp <= 0 : (!cannon!.complete || !cannon!.connected || cannon!.hp <= 0))
       throw new Error("Weapon offline");
@@ -79,7 +81,10 @@ export const fireWeapon = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || (vessel ? !mayControlFaction(member.slot, vessel.ownerSlot, member.eliminated) : turret!.ownerSlot !== member.slot))
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated ||
+        (vessel ? !mayControlFaction(member!.slot, vessel.ownerSlot, faction.eliminated) : turret!.ownerSlot !== faction.slot))
       throw new Error("Weapon unavailable");
     if (vessel ? vessel.hp <= 0 : (!turret!.complete || !turret!.connected || turret!.hp <= 0))
       throw new Error("Weapon offline");
@@ -239,17 +244,17 @@ export const advanceCombat = spacetimedb.reducer(
     
     /** An eliminated faction cannot retain controllable units or paid job queues. */
     function reconcileEliminations(matchId: bigint): void {
-      const members = Array.from(ctx.db.matchMember.matchId.filter(matchId));
+      const factions = Array.from(ctx.db.factionState.matchId.filter(matchId));
       const cores = Array.from(ctx.db.structure.matchId.filter(matchId))
         .filter((row) => row.kind === "command_core" && row.hp > 0);
       const living = new Set(cores.map((row) => row.ownerSlot));
-      for (const member of members) {
-        if (living.has(member.slot) || member.eliminated) continue;
-        ctx.db.matchMember.id.update({ ...member, eliminated: true });
+      for (const faction of factions) {
+        if (living.has(faction.slot) || faction.eliminated) continue;
+        ctx.db.factionState.id.update({ ...faction, eliminated: true });
         for (const ship of Array.from(ctx.db.ship.matchId.filter(matchId)))
-          if (ship.ownerSlot === member.slot) destroyShip(ship.id);
+          if (ship.ownerSlot === faction.slot) destroyShip(ship.id);
         for (const st of Array.from(ctx.db.structure.matchId.filter(matchId)))
-          if (st.ownerSlot === member.slot) destroyStructure(st.id);
+          if (st.ownerSlot === faction.slot) destroyStructure(st.id);
       }
       if (living.size > 1) return;
       const match = ctx.db.match.id.find(matchId);
