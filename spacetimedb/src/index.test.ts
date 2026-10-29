@@ -985,3 +985,53 @@ it("late commands cannot alter dominance scores before a delayed timeout reducer
   );
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
 });
+
+
+it("indexed faction ship views do not leak matching slots from other matches", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n), eve = auth("eve", 3n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const firstMatch = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const secondMatch = [...test.db.match.iter()].find(row => row.id !== firstMatch)!.id;
+  const aliceSeat = [...test.db.matchMember.matchId.filter(firstMatch)][0]!;
+  const bobSeat = [...test.db.matchMember.matchId.filter(secondMatch)][0]!;
+  expect(aliceSeat.slot).toBe(0);
+  expect(bobSeat.slot).toBe(0);
+  expect(aliceSeat.factionKey).not.toBe(bobSeat.factionKey);
+
+  const aliceVisible = test.runQuery(moduleExports.myShips(test.viewContext(alice)));
+  const bobVisible = test.runQuery(moduleExports.myShips(test.viewContext(bob)));
+  const eveVisible = test.runQuery(moduleExports.myShips(test.viewContext(eve)));
+  expect(aliceVisible).toHaveLength(1);
+  expect(bobVisible).toHaveLength(1);
+  expect(eveVisible).toHaveLength(0);
+  expect(aliceVisible[0]!.matchId).toBe(firstMatch);
+  expect(bobVisible[0]!.matchId).toBe(secondMatch);
+
+  // Bob is slot zero in his own lobby, but cannot command Alice's ship.
+  test.withReducerTx(eve, ctx => moduleExports.joinMatch(ctx, { matchId: firstMatch }));
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.startMatch(ctx, { matchId: secondMatch })
+  )).toThrow("Need at least two");
+});
+
+it("human commands cannot control a same-numbered faction in a different active match", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  const c = auth("charlie", 3n), d = auth("diana", 4n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const firstMatch = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: firstMatch }));
+  test.withReducerTx(c, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const secondMatch = [...test.db.match.iter()].find(row => row.id !== firstMatch)!.id;
+  test.withReducerTx(d, ctx => moduleExports.joinMatch(ctx, { matchId: secondMatch }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: firstMatch }));
+  test.withReducerTx(c, ctx => moduleExports.startMatch(ctx, { matchId: secondMatch }));
+  const foreign = [...test.db.ship.matchId.filter(secondMatch)].find(row => row.ownerSlot === 0)!;
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: foreign.id })))
+    .toThrow("Cannot command another");
+  const myShip = [...test.db.ship.matchId.filter(firstMatch)].find(row => row.ownerSlot === 0)!;
+  expect(myShip.factionKey).not.toBe(foreign.factionKey);
+  test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: myShip.id }));
+});
