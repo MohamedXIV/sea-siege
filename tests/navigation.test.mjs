@@ -49,3 +49,15 @@ test('invalid cells or budgets reject safely, and search has bounded work', () =
   assert.equal(findTerrainPath(new Uint8Array(9), 3, point(0,0),point(2,2),{maxExpanded:1}),null);
   assert.equal(findTerrainPath(new Uint8Array(9), 3, point(NaN,0),point(1,1)),null);
 });
+
+test('chunk reconstruction preserves exact authoritative terrain bytes', async () => {
+  const { decodeTerrainChunks } = await import('../spacetimedb/src/sim/navigation.ts');
+  for(const slots of [2,4,6,8]) {
+    const world = generateDeterministicWorld(222, slots);
+    const restored = decodeTerrainChunks(world.mapCells, world.chunks);
+    assert.deepEqual(restored, world.cells);
+    assert.throws(() => decodeTerrainChunks(world.mapCells, world.chunks.slice(1)), /incomplete/);
+    const duplicate = [...world.chunks]; duplicate[0] = world.chunks[1];
+    assert.throws(() => decodeTerrainChunks(world.mapCells, duplicate), /duplicate/);
+  }
+});
