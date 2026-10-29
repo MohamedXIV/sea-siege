@@ -1,6 +1,7 @@
 import { ScheduleAt } from "spacetimedb";
 import { t } from "spacetimedb/server";
 import spacetimedb, { motionSchedule, constructionSchedule, economySchedule } from "./schema.ts";
+export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
