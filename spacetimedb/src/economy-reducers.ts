@@ -113,9 +113,19 @@ export const advanceEconomy = spacetimedb.reducer(
     if (elapsedUs === 0n && seconds === 0) return;
     const members = Array.from(ctx.db.matchMember.matchId.filter(timer.matchId));
     const balances = new Map(members.map(member => [member.slot, member.salvage]));
+    const lifetimeGathered = new Map(members.map(member => [member.slot, member.totalSalvageGathered]));
     const credit = (slot: number, amount: number) => {
       const previous = balances.get(slot);
-      if (previous !== undefined && amount > 0) balances.set(slot, creditSalvage(previous, amount));
+      const gathered = lifetimeGathered.get(slot);
+      if (previous !== undefined && gathered !== undefined && amount > 0) {
+        const creditedBalance = creditSalvage(previous, amount);
+        const actuallyCredited = creditedBalance - previous;
+        balances.set(slot, creditedBalance);
+        // At saturated balance no additional salvage is received/gathered.
+        const newLifetime = gathered + BigInt(actuallyCredited);
+        if (newLifetime > 0xffff_ffff_ffff_ffffn) throw new Error("Salvage lifetime overflow");
+        lifetimeGathered.set(slot, newLifetime);
+      }
     };
     const structures = Array.from(ctx.db.structure.matchId.filter(timer.matchId))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -280,8 +290,13 @@ export const advanceEconomy = spacetimedb.reducer(
 
     for (const member of members) {
       const balance = balances.get(member.slot);
-      if (balance !== undefined && balance !== member.salvage)
-        ctx.db.matchMember.id.update({ ...member, salvage: balance });
+      const gathered = lifetimeGathered.get(member.slot);
+      if (balance !== undefined && gathered !== undefined &&
+          (balance !== member.salvage || gathered !== member.totalSalvageGathered)) {
+        ctx.db.matchMember.id.update({
+          ...member, salvage: balance, totalSalvageGathered: gathered,
+        });
+      }
     }
     ctx.db.economySchedule.scheduledId.update({
       ...timer, lastTickAt: ctx.timestamp, leftoverUs: microseconds % 1_000_000n,
