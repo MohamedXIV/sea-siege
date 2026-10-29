@@ -267,7 +267,7 @@ export const advanceEconomy = spacetimedb.reducer(
         id: 0n, matchId: timer.matchId, owner: member.identity, kind: job.shipKind,
         hp: definition.hp, radiusCells: definition.radius,
         x: where.x, y: where.y, velocityX: 0, velocityY: 0,
-        hullAngleDeg: 0, turretAngleDeg: 0, lastFiredAtUs: 0n,
+        hullAngleDeg: 0, turretAngleDeg: 0, lastFiredAtUs: -1n,
         targetX: where.x, targetY: where.y, revision: 0n,
         updatedAt: ctx.timestamp,
       });
