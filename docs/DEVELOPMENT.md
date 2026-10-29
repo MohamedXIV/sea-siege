@@ -68,7 +68,7 @@ The `ship_route` table stores authoritative grid-cell paths. The internal schedu
 - `advanceMatchSimulation` explicitly rejects calls lacking `ctx.senderAuth.isInternal`; clients cannot force simulation ticks. The reducer steps all active routes, persists authoritative movement samples and velocities with `ctx.timestamp`, then deletes completed routes/timers.
 - The pure `ship-motion.ts` uses 2 cells/sec, a 150°/sec hull-turn cap, and max 250ms elapsed-time catch-up per invocation, with headings stored in degrees. These values live in `SHIP_MOTION_RULES` and are **tuning defaults**, not guaranteed platform tickrates.
 - Client rendering **does not set or own server positions**. The Phaser interpolation adapter in #5/#19 will read authorized ship snapshots from generated bindings. Scheduled frequency, subscription row-change frequency and Phaser FPS are separate (ADR-0001).
-- No full ship sizes, fleet formations, **live construction-footprint persistence/integration**, fog-aware subscriptions or true sailing physics yet. The collision primitive accepts rectangular building footprints but production reducers do not yet supply them. Please do not characterize this as full naval movement or a multiplayer-ready implementation.
+- No full ship sizes, fleet formations, fog-aware subscriptions or true sailing physics yet. Structure footprints are now read directly from private server-owned structure rows, but ship-specific hull radius and full inter-ship collision recovery are still pending. Please do not characterize this as full naval movement or a multiplayer-ready implementation.
 
 Pure TS smoke verification (no SpacetimeDB dependencies):
 ```bash
@@ -83,12 +83,12 @@ Real datastore/scheduler acceptance tests were prepared in `spacetimedb/src/inde
 
 `spacetimedb/src/sim/collision.ts` implements **pure, conservative swept collision detection** against:
 - static terrain blockers (ruined pillars and shoals, plus unknown impassable terrain codes);
-- rectangular platform/structure footprints via `CollisionEnvironment.footprints` (not yet supplied by building persistence);
+- rectangular platforms/Command Cores from private per-match `structure` rows, including newly constructed platforms;
 - other server-owned vessel bodies with a shared initial scout hull radius `COLLISION_RULES.scoutRadiusCells`.
 
 `issueShipOrder` rejects destinations occupied by other ships through the authoritative A* cell predicate. `advanceMatchSimulation` checks **each segment** before committing the movement, in deterministic ship-ID order using updated positions from earlier ships in that tick. If the new position would intersect a blocker, movement is held and velocity cleared; a reroute toward the original goal is attempted at most once per second per blocked ship. The old route is preserved when no valid alternative exists, so a temporarily congested passage can resume on later ticks.
 
-The current integration is **ship + static terrain only**. **Do not** claim that newly constructed platforms stop real ships yet: the authoritative building table/footprints must be integrated in #8. Avoid allowing construction on top of existing hulls.
+The current server source now supplies **ship + static terrain + per-match surface structure footprints** to collision checks both when ordering and on each movement tick. This has not yet been validated against a running SpacetimeDB module. Construction rejects surface placements intersecting existing hulls.
 
 Run standalone local tests with Node 22:
 ```bash
@@ -97,3 +97,27 @@ tsc --noEmit --strict --target ES2022 --module ESNext \
   --moduleResolution bundler --allowImportingTsExtensions \
   spacetimedb/src/sim/collision.ts
 ```
+
+## Layered construction and connected territory — 29 October 2026
+
+The original Gemini design was referenced for the **3×3 Command Core, six initial floating decks, 2×2 mounted structures, 1×1 cannons, starting salvage (420), build costs and durations**. No fake Gemini authority code was copied.
+
+The pure rules in `spacetimedb/src/sim/construction.ts` enforce:
+- Separate surface and superstructure occupancy: a mounted Workshop/Shipyard/Cannon/Extractor **does not delete its supporting decks**.
+- Platform expansion requires an orthogonally adjacent, connected and completed friendly surface cell. Connection is determined by iterative BFS from the 3×3 Command Core; diagonal-only contacts and enemy decks never connect.
+- Every footprint cell of a mounted building must rest on **its own faction's complete, Core-connected platform**, including 2×2 shapes across 16-cell chunk boundaries. Command Core tiles cannot be repurposed as Workshop support.
+- Water passability, salvage deposits, surface overlap, ships currently occupying the build location, and Shipyard access to orthogonally adjacent open water.
+- One-time faction salvage deduction in the real `placeStructure` reducer transaction. `completeConstruction` uses an internal-only SpacetimeDB one-shot schedule at a server timestamp, not client timers.
+- `demolishStructure` restricts owner and protects the Command Core, refunds exactly once, removes mounted structures that lose any required deck, cancels their pending completion schedules and recalculates connected status for the survivors. Disconnected but still supported territory stays offline; it can reconnect when new completed decks join the Core.
+- On match creation/join, each active participant receives one Command Core + six initial decks and one launching ship **in water left of the Core** (not inside the solid footprint).
+
+All tables remain private until authorized views are designed (#13). The present gameplay slice does not implement passive economy, extraction, structure damage/collapse from combat, build preview UI or ship production (#9/#11/#15).
+
+**Locally executed, package-free checks:**
+```bash
+node --experimental-strip-types --test tests/construction.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler \
+  --allowImportingTsExtensions spacetimedb/src/sim/construction.ts
+```
+
+**8/8 pure construction tests passed** (Node 22), plus standalone strict TypeScript passed. Existing `index.test.ts` now includes unexecuted module-harness tests for atomic salvage/cost/placement, construction completion and authority, one-time demolition refunds and support collapse. These are **not proof that the SpacetimeDB module compiles or the timers execute**. Continue to mark #8 and #9 open until runtime verification and remaining scope.
