@@ -476,7 +476,7 @@ export const placeStructure = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member) throw new Error("Cannot construct in another player's match");
+    if (!member || member.eliminated) throw new Error("Cannot construct in another player's match");
     const definition = structureDefinition(kind);
     if (!definition || kind === "command_core") throw new Error("Unknown or protected structure kind");
     const world = ctx.db.worldConfig.matchId.find(matchId);
@@ -525,7 +525,7 @@ export const demolishStructure = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(target.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.slot !== target.ownerSlot) throw new Error("Cannot demolish another faction's structure");
+    if (!member || member.eliminated || member.slot !== target.ownerSlot) throw new Error("Cannot demolish another faction's structure");
     const definition = structureDefinition(target.kind);
     if (!definition) throw new Error("Unknown stored structure kind");
     const world = ctx.db.worldConfig.matchId.find(target.matchId);
