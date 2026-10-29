@@ -16,3 +16,7 @@
 Initial ready work: [#2 — frontend toolchain](https://github.com/MohamedXIV/sea-siege/issues/2) and [#3 — real SpacetimeDB module](https://github.com/MohamedXIV/sea-siege/issues/3).
 
 Each deliverable must be verified against its issue's acceptance criteria. We will not use a fake browser-local authority as a substitute for SpacetimeDB.
+
+## Original Gemini reference artifacts
+
+The original Gemini web-chat prototype and its 18-file source archive are preserved as **byte-identical reference artifacts** under [`references/gemini/`](./references/gemini/README.md). They are **not** the production runtime or evidence of genuine Phaser/SpacetimeDB integration. Use them to port tested gameplay rules selectively.
