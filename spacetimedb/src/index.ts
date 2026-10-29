@@ -964,6 +964,12 @@ export const advanceEconomy = spacetimedb.reducer(
       }
       const operational = yard.complete && yard.connected && yard.hp > 0;
       if (!operational) continue;
+      // A queued job must NEVER inherit elapsed time accrued before it became
+      // the active FIFO head. Mark the start now and only consume later ticks.
+      if (job.startedAtUs === 0n) {
+        ctx.db.productionOrder.id.update({ ...job, startedAtUs: nowUs });
+        continue;
+      }
       const nextRemaining = advanceProduction(job.remainingUs, elapsedUs, operational);
       if (nextRemaining > 0n) {
         if (nextRemaining !== job.remainingUs || job.startedAtUs === 0n) {
