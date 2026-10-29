@@ -17,7 +17,7 @@ const match = table(
   },
 );
 
-const matchMember = table(
+export const matchMember = table(
   { name: "match_member" },
   {
     id: t.u64().primaryKey().autoInc(),
@@ -29,7 +29,7 @@ const matchMember = table(
 );
 
 /** One independent ledger for EVERY faction, human or AI. Never a fake Identity. */
-const factionState = table(
+export const factionState = table(
   { name: "faction_state" },
   {
     id: t.u64().primaryKey().autoInc(),
@@ -57,7 +57,7 @@ const botController = table(
   },
 );
 
-const ship = table(
+export const ship = table(
   { name: "ship" },
   {
     id: t.u64().primaryKey().autoInc(),
