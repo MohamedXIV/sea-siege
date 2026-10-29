@@ -33,7 +33,7 @@ export const fireWeapon = spacetimedb.reducer(
     if (!definition) throw new Error("Weapon unavailable");
     const nowUs = ctx.timestamp.microsSinceUnixEpoch;
     const lastFiredAtUs = vessel ? vessel.lastFiredAtUs : turret!.lastFiredAtUs;
-    if (lastFiredAtUs !== 0n && !canFire(nowUs, lastFiredAtUs, definition.cooldownMs))
+    if (lastFiredAtUs !== -1n && !canFire(nowUs, lastFiredAtUs, definition.cooldownMs))
       throw new Error("Weapon cooldown");
     const source = vessel
       ? { x: vessel.x, y: vessel.y }
