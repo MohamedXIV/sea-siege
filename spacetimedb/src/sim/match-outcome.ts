@@ -55,3 +55,12 @@ export function deadlineMicroseconds(startUs: bigint): bigint {
   if (startUs < 0n) throw new RangeError('Invalid match start time');
   return startUs + BigInt(MATCH_RULES.durationMs) * 1000n;
 }
+
+/** Reject score-changing commands at and after the actual server deadline, even
+ * if the one-shot deadline reducer is delayed by scheduler load. */
+export function matchStillActive(
+  phase: string, startedAtUs: bigint, nowUs: bigint,
+): boolean {
+  if (nowUs < 0n) throw new RangeError('Invalid server clock');
+  return phase === 'active' && nowUs < deadlineMicroseconds(startedAtUs);
+}
