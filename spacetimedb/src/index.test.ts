@@ -46,11 +46,12 @@ it("prevents guest start and unauthorized ship orders", () => {
   expect(() => test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, { shipId: ownShip.id, targetX: -5, targetY: 30 })))
     .toThrow("out of bounds");
 
-  const guestShip = [...test.db.ship.iter()][1]!;
+  // Other players now count as navigational hull blockers: pick a clear cell
+  // next to the host's protected 3x3 spawn instead of targeting the guest hull.
   test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
-    shipId: ownShip.id, targetX: guestShip.x, targetY: guestShip.y,
+    shipId: ownShip.id, targetX: ownShip.x + 1, targetY: ownShip.y,
   }));
-  expect(test.db.ship.id.find(ownShip.id)?.targetX).toBe(guestShip.x);
+  expect(test.db.ship.id.find(ownShip.id)?.targetX).toBe(ownShip.x + 1);
   expect(test.db.shipRoute.shipId.find(ownShip.id)?.cellPath.length).toBeGreaterThan(0);
 });
 
@@ -124,9 +125,8 @@ it("rejects impassable terrain and keeps an existing ship route unchanged", () =
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
   const own = [...test.db.ship.iter()][0]!;
-  const other = [...test.db.ship.iter()][1]!;
   test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
-    shipId: own.id, targetX: other.x, targetY: other.y,
+    shipId: own.id, targetX: own.x + 1, targetY: own.y,
   }));
   const routeBefore = test.db.shipRoute.shipId.find(own.id)!;
   const seed = test.db.worldConfig.matchId.find(matchId)!.seed;
@@ -227,4 +227,54 @@ it("stop orders are authorized, halt movement, and let the lazy timer expire", (
   );
   expect(test.db.motionSchedule.count()).toBe(0n);
   expect(test.db.ship.id.find(vessel.id)?.x).toBe(stopped.x);
+});
+
+it("never accepts a destination occupied by another ship", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const vessels = [...test.db.ship.iter()];
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.issueShipOrder(ctx, {
+      shipId: vessels[0]!.id, targetX: vessels[1]!.x, targetY: vessels[1]!.y,
+    })
+  )).toThrow("Destination unreachable");
+  expect(test.db.shipRoute.shipId.find(vessels[0]!.id)).toBeUndefined();
+});
+
+it("scheduler holds a vessel if a new dynamic ship blocks its planned segment", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  const bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const [own, other] = [...test.db.ship.iter()];
+  test.withReducerTx(alice, ctx =>
+    moduleExports.issueShipOrder(ctx, {
+      shipId: own!.id, targetX: own!.x + 1, targetY: own!.y,
+    })
+  );
+  const original = test.db.ship.id.find(own!.id)!;
+  // A trusted test-only DB mutation simulates another ship arriving in the
+  // route AFTER issuance but BEFORE the authoritative scheduled tick.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const current = ctx.db.ship.id.find(other!.id)!;
+    ctx.db.ship.id.update({ ...current, x: original.x + 0.3, y: original.y });
+  });
+  test.clock.advance(TimeDuration.fromMillis(100));
+  const schedule = [...test.db.motionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceMatchSimulation(ctx, { arg: schedule })
+  );
+  const after = test.db.ship.id.find(own!.id)!;
+  expect(after.x).toBe(original.x);
+  expect(after.y).toBe(original.y);
+  expect(after.velocityX).toBe(0);
+  expect(test.db.shipRoute.shipId.find(own!.id)).toBeDefined();
 });
