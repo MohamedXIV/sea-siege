@@ -523,7 +523,7 @@ export const placeStructure = spacetimedb.reducer(
       deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
         .map(row => ({ x: row.gridX, y: row.gridY })),
       hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
-        .map(row => ({ x: row.x, y: row.y, radius: COLLISION_RULES.scoutRadiusCells })),
+        .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
     });
     if (error) throw new Error(error);
     // A thrown insertion/schedule error rolls back BOTH cost and placement.
