@@ -195,3 +195,21 @@ Pure tests cover 320 match/slot combinations, invalid slots/IDs, no membership, 
 - Static review of actual connected GitHub module sources found no remaining `ship.owner` / `vessel.owner` / `row.owner.isEqual` usages in the migrated reducers/tests.
 
 **Not verified:** complete `spacetimedb/` TypeScript module build, exact SDK view join type safety, real module harness execution, cross-match subscription negative test and two clients. Since schema changed, generated client bindings must be regenerated later. No bot-only faction/scheduler/economy migration was completed. PR remains Draft, issue #12 remains open; no UI edits or Cloud DB changes.
+
+
+## Independent faction ledger and identity-free Bot seats — 29 Oct 2026
+
+**Exact local verification:** `node --experimental-strip-types --test tests/bot-seats.test.mjs` **4/4 PASS**; `tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler spacetimedb/src/sim/bot-seats.ts` **PASS**. GitHub blobs for locally executed exact files:
+- `spacetimedb/src/sim/bot-seats.ts` — `89147fb0818fdcf781564f38062362178c510942`
+- `tests/bot-seats.test.mjs` — `c5344310b987c700f8cc1078873a4805a8136a6d`
+
+Pure coverage: consistent empty-seat selection and reuse, no duplicate slots, bounded 2–8 lobby, deterministic stable bot seed derivation and invalid input rejection.
+
+**Source code integrated into the Draft PR but not executed:**
+- Private `faction_state` owns per-faction salvage, lifetime earnings and elimination; private `bot_controller` holds bot slot, difficulty, deterministic private seed and next decision timestamp without an Identity.
+- `match_member` now stores only human seat identity and match-scoped faction key; host/join create corresponding human faction-state rows and join respects bot-occupied slots.
+- Host-authorized `addBot` and `removeBot` reducers create/remove complete Bot lobby seats with own Core, six platforms and scout; a 1-human + 1-Bot match may now start.
+- `myFactionStates` identity-filtered semijoin is designed to expose only human-owned ledgers; all relevant gameplay reducers and match outcome use the faction ledger and reject human access to Bot-controlled assets.
+- Module test harness prepared to inspect 1 Human + 3 Bots, private view visibility, forged command denial, full-lobby rejection, Bot removal and slot reuse. The existing economy, workshop and score test cases were migrated to `factionState` rows.
+
+**NOT verified:** official SpacetimeDB 2.x module typecheck/build/publish, scheduled reducers, private view join runtime behavior, real two-client negative tests, generated bindings, client stability or headless Bot match. The Bots remain **idle** because the strategic scheduler/validated execution bridge is not implemented. No Cloud DB or user credentials were touched. Keep PR #20 DRAFT, #12/#13 open and #15 UI design gate intact.
