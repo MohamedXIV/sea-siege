@@ -5,7 +5,7 @@ import { detectBotEnemies, type Sensor } from "./sim/bot-perception.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { isNavigationCellBlocked } from "./sim/collision.ts";
-import { CONSTRUCTION_RULES, structureDefinition, validateStructurePlacement, type StructureKind } from "./sim/construction.ts";
+import { structureDefinition, validateStructurePlacement, type StructureKind } from "./sim/construction.ts";
 import { ECONOMY_RULES, shipDefinition, debitSalvage, inRange, type ShipKind } from "./sim/economy.ts";
 import { COMBAT_RULES, canFire, createProjectile, terrainLineOfSight, weaponDefinition, withinRange, type WeaponKind } from "./sim/combat.ts";
 import { angularDifference, desiredBearing, turretAligned } from "./sim/turret-aim.ts";
@@ -170,10 +170,21 @@ export const advanceBots = spacetimedb.reducer(
         }
       }
       const sortedAnchors = [...anchorCells.values()].sort((a,b) => a.y - b.y || a.x - b.x);
+      // Mounted buildings need 1x1 or 2x2 complete friendly platforms.
+      // Prefer their actual positions before searching general extensions;
+      // otherwise a low search cap could starve the only valid 2x2 site.
+      const supportedAnchors = new Map<string, { x: number; y: number }>();
+      for (const pad of ownStructures.filter(row => row.kind === "platform" && row.complete)) {
+        supportedAnchors.set(pad.gridX + ":" + pad.gridY, { x: pad.gridX, y: pad.gridY });
+      }
+      const mountFirst = [...supportedAnchors.values()].sort((a,b) => a.y - b.y || a.x - b.x);
       const legalBuildCandidates: BotObservation["legalBuildCandidates"][number][] = [];
       for (const kind of ["shipyard","salvage_rig","cannon","platform"] as const) {
         let checked = 0;
-        for (const point of sortedAnchors) {
+        const candidates = kind === "platform" ? sortedAnchors :
+          [...mountFirst, ...sortedAnchors.filter(point =>
+            !supportedAnchors.has(point.x + ":" + point.y))];
+        for (const point of candidates) {
           if (checked++ >= BOT_SERVER_RULES.maxPlacementChecksPerKind) break;
           if (canBuild(kind, bot.slot, point.x, point.y, faction.salvage))
             legalBuildCandidates.push({ kind, gridX: point.x, gridY: point.y });
@@ -298,9 +309,7 @@ export const advanceBots = spacetimedb.reducer(
             ? ctx.db.ship.id.find(intent.targetId) : ctx.db.structure.id.find(intent.targetId);
           if (!target || target.matchId !== match.id ||
               target.ownerSlot === bot.slot || target.hp <= 0) continue;
-          const destination = intent.targetType === "ship"
-            ? { x: seen.position.x, y: seen.position.y } :
-              { x: seen.position.x, y: seen.position.y };
+          const destination = { x: seen.position.x, y: seen.position.y };
           const origin = { x: vessel.x, y: vessel.y };
           if (!withinRange(origin,destination,weapon.range) ||
               !withinRange(origin,destination,weapon.vision) ||
