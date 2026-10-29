@@ -230,9 +230,22 @@ export const combatSchedule = table(
   },
 );
 
+
+/** Ephemeral but persisted rotation intentions. No client-supplied transform updates. */
+const turretAim = table(
+  { name: "turret_aim" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    sourceType: t.string(),
+    sourceId: t.u64(),
+    desiredAngleDeg: t.f64(),
+  },
+);
+
 const spacetimedb = schema({
   match, matchMember, ship, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
-  harvestOrder, productionOrder, economySchedule, projectile, combatSchedule,
+  harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
 });
 export default spacetimedb;
