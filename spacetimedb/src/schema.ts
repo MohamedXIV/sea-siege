@@ -176,6 +176,9 @@ const structure = table(
     width: t.u32(),
     height: t.u32(),
     hp: t.u32(),
+    level: t.u32(),                // Workshop tier (other kinds remain level 1)
+    upgradeRemainingUs: t.i64(),  // 0 when no upgrade is pending
+    upgradeStartedAtUs: t.i64(),  // Server clock, prevents retroactive progress
     complete: t.bool(),
     connected: t.bool(),
     completeAtUs: t.i64(),
