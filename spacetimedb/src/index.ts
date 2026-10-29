@@ -4,6 +4,7 @@ import spacetimedb, {
   motionSchedule, constructionSchedule, economySchedule,
 } from "./schema.ts";
 import { deadlineMicroseconds } from "./sim/match-outcome.ts";
+import { factionKey, mayControlFaction } from "./sim/faction-ownership.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
@@ -73,6 +74,7 @@ export const createMatch = spacetimedb.reducer(
     }
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
+      factionKey: factionKey(created.id, 0),
       salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
@@ -95,7 +97,7 @@ export const createMatch = spacetimedb.reducer(
     ctx.db.ship.insert({
       id: 0n,
       matchId: created.id,
-      owner: ctx.sender,
+      ownerSlot: 0, factionKey: factionKey(created.id, 0),
       kind: "scout", hp: ECONOMY_RULES.ships.scout.hp,
       radiusCells: ECONOMY_RULES.ships.scout.radius,
       x: initialX,
@@ -128,6 +130,7 @@ export const joinMatch = spacetimedb.reducer(
     if (slot === undefined) throw new Error("Lobby full");
     ctx.db.matchMember.insert({
       id: 0n, matchId, identity: ctx.sender, slot,
+      factionKey: factionKey(matchId, slot),
       salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
@@ -150,7 +153,7 @@ export const joinMatch = spacetimedb.reducer(
     ctx.db.ship.insert({
       id: 0n,
       matchId,
-      owner: ctx.sender,
+      ownerSlot: slot, factionKey: factionKey(matchId, slot),
       kind: "scout", hp: ECONOMY_RULES.ships.scout.hp,
       radiusCells: ECONOMY_RULES.ships.scout.radius,
       x,
@@ -199,7 +202,10 @@ export const issueShipOrder = spacetimedb.reducer(
   (ctx, { shipId, targetX, targetY }) => {
     const current = ctx.db.ship.id.find(shipId);
     if (!current) throw new Error("Ship unavailable");
-    if (!current.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
+    const seat = Array.from(ctx.db.matchMember.matchId.filter(current.matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    if (!mayControlFaction(seat?.slot, current.ownerSlot, seat?.eliminated ?? true))
+      throw new Error("Cannot command another player's ship");
     const match = ctx.db.match.id.find(current.matchId);
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) throw new Error("Invalid destination");
@@ -290,7 +296,10 @@ export const issueShipOrder = spacetimedb.reducer(
 export const myShips = spacetimedb.view(
   { name: "my_ships", public: true },
   t.array(ship.rowType),
-  (ctx) => ctx.from.ship.where((row) => row.owner.eq(ctx.sender)),
+  (ctx) => ctx.from.matchMember
+    .where(member => member.identity.eq(ctx.sender))
+    .rightSemijoin(ctx.from.ship, (member, vessel) =>
+      member.factionKey.eq(vessel.factionKey)),
 );
 
 export const myMemberships = spacetimedb.view(
@@ -305,7 +314,10 @@ export const stopShip = spacetimedb.reducer(
   (ctx, { shipId }) => {
     const current = ctx.db.ship.id.find(shipId);
     if (!current) throw new Error("Ship unavailable");
-    if (!current.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
+    const seat = Array.from(ctx.db.matchMember.matchId.filter(current.matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    if (!mayControlFaction(seat?.slot, current.ownerSlot, seat?.eliminated ?? true))
+      throw new Error("Cannot command another player's ship");
     const lobby = ctx.db.match.id.find(current.matchId);
     if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
