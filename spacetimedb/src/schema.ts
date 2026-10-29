@@ -288,10 +288,20 @@ export const matchDeadline = table(
   },
 );
 
+/** Single bounded server-only strategy timer per match, never one per bot. */
+export const botSchedule = table(
+  { name: "bot_schedule" },
+  {
+    scheduledId: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    scheduledAt: t.scheduleAt(),
+  },
+);
+
 const spacetimedb = schema({
   match, matchMember, factionState, botController, ship, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
   harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
-  matchDeadline,
+  matchDeadline, botSchedule,
 });
 export default spacetimedb;
