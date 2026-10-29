@@ -189,7 +189,7 @@ The **real SpacetimeDB module source** adds private `projectile` and lazy `comba
 `advanceCombat` is a private 100ms intended scheduled reducer with an explicit internal-caller check and bounded server elapsed time. It evaluates each projectile once per tick in projectile-ID order; on damage it updates HP or deletes destroyed ships/structures and their harvest/navigation/production/one-shot schedules. Surface-deck destruction removes physically unsupported mounted structures, refreshes Core connectivity, and charges **no peaceful demolition refunds**. When a faction loses its Core, its remaining units/buildings lose authority and are cleaned up. When one Core remains, the match records that faction's slot as winner; if none remain, it records a draw (-1). Active economy and movement schedules are shut down after match finish.
 
 **Scope limits:**
-- This is the **first combat slice**. Turrets currently snap to a server-authorized firing bearing; acceleration/turn-slew and independent target tracking are still needed. Terrain LoS currently uses 4 samples/cell; robust pixel-perfect obstruction and full shared-faction sensing remain #11/#13.
+- This is the **first combat slice**. Turrets now obey server-owned, class-specific bounded turn rates, and a fire command checks the live heading against its actual target. Automatic enemy tracking and turn acceleration remain future work. Terrain LoS currently uses 4 samples/cell; robust pixel-perfect obstruction and full shared-faction sensing remain #11/#13.
 - Private projectiles cannot yet appear in a secure enemy-inclusive client view. Launch/impact effects and final UI/HUD are **not implemented**; the UI design gate #15 remains.
 - Sudden-death timer, deterministic multi-client damage digests, armor balancing, projectile collision against moving targets within the **same** scheduler time slice, bot target selection, performance benchmarking, and SpacetimeDB module compile/publish remain pending.
 - Projectile cap is **512 per match**; there is one lazy combat timer per match, not one timer per shot. Full runtime performance is unmeasured.
@@ -201,4 +201,20 @@ node --experimental-strip-types --test tests/combat.test.mjs
 tsc --noEmit --strict --target ES2022 --module ESNext \
   --moduleResolution bundler --allowImportingTsExtensions \
   spacetimedb/src/sim/combat.ts
+```
+
+## Independent turret slew — 29 October 2026
+
+- `sim/turret-aim.ts` is dependency-free, deterministic angle math. Server-based desired bearing, signed shortest-arc rotation (359→1°), angular tolerance, class-specific maximum turning rates (Scout 180°, Gunboat 125°, Siege 75°, Cannon 100° per second) and at most 250ms progress per scheduled tick are centrally configurable. These are **new initial tuning defaults**.
+- Private `turret_aim` rows hold one pending desired bearing per owned ship or cannon. `aimWeapon` validates a finite canonical [0,360) bearing, real source ownership, match activity and living/online state. It deliberately accepts a **bearing, not a secret target ID**; it cannot by itself be used to guess whether a hidden enemy exists.
+- A single **lazy** per-match combat timer services both projectiles and pending aiming. Each internal tick advances the private ship/cannon turret angle; completed/invalidated intentions are discarded. An aim-only match does not create or keep a projectile row; its timer stops once all bearings are aligned.
+- `fireWeapon` now rejects `Weapon not aligned` unless the current server-owned turret bearing is within 3° of the **target's current authoritative position**. Firing updates only cooldown and projectile data; **no angle snap**. Changing targets or moving targets may require a fresh aim.
+- Destruction removes pending aim commands and match-end cleanup also clears the private table; movement/hull heading is independent from turret heading.
+- Important limitations: no automatic tracking/predictive lead, no turret acceleration curve or firing-arc restrictions, no authorized enemy subscription yet (#13), and no client visuals until collaborative UI/game-presentation review (#15).
+
+Local exact-source checks (Node v22.16, TypeScript v5.8):
+```bash
+node --experimental-strip-types --test tests/turret-aim.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext \
+  --moduleResolution bundler spacetimedb/src/sim/turret-aim.ts
 ```
