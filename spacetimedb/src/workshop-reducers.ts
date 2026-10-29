@@ -22,7 +22,10 @@ export const repairStructure = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(workshop.matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
+      throw new Error("Not your workshop");
     if (!workshop.complete || !workshop.connected || workshop.hp <= 0 ||
         workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
 
@@ -41,8 +44,8 @@ export const repairStructure = spacetimedb.reducer(
       throw new Error("Repair target out of range");
     const maximumHp = maximumStructureHp(targetDef.hp, target.level, target.kind);
     const result = calculateRepair(target.hp, maximumHp, requestedHp, workshop.level);
-    const salvage = debitSalvage(member.salvage, result.salvageCost);
-    ctx.db.matchMember.id.update({ ...member, salvage });
+    const salvage = debitSalvage(faction.salvage, result.salvageCost);
+    ctx.db.factionState.id.update({ ...faction, salvage });
     ctx.db.structure.id.update({ ...target, hp: result.newHp });
   },
 );
@@ -57,7 +60,10 @@ export const repairShip = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(workshop.matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
+      throw new Error("Not your workshop");
     if (!workshop.complete || !workshop.connected || workshop.hp <= 0 ||
         workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
 
@@ -72,8 +78,8 @@ export const repairShip = spacetimedb.reducer(
       { x: target.x, y: target.y }, workshop.level,
     )) throw new Error("Repair target out of range");
     const result = calculateRepair(target.hp, shipDef.hp, requestedHp, workshop.level);
-    const salvage = debitSalvage(member.salvage, result.salvageCost);
-    ctx.db.matchMember.id.update({ ...member, salvage });
+    const salvage = debitSalvage(faction.salvage, result.salvageCost);
+    ctx.db.factionState.id.update({ ...faction, salvage });
     ctx.db.ship.id.update({ ...target, hp: result.newHp, updatedAt: ctx.timestamp });
   },
 );
@@ -91,14 +97,17 @@ export const upgradeWorkshop = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(workshop.matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
+      throw new Error("Not your workshop");
     if (!workshop.complete || !workshop.connected || workshop.hp <= 0)
       throw new Error("Workshop offline");
     if (workshop.upgradeRemainingUs > 0n) throw new Error("Workshop already upgrading");
     const next = nextWorkshopUpgrade(workshop.level);
     if (!next) throw new Error("Workshop already at maximum tier");
-    const salvage = debitSalvage(member.salvage, next.cost);
-    ctx.db.matchMember.id.update({ ...member, salvage });
+    const salvage = debitSalvage(faction.salvage, next.cost);
+    ctx.db.factionState.id.update({ ...faction, salvage });
     ctx.db.structure.id.update({
       ...workshop, upgradeRemainingUs: next.durationUs,
       upgradeStartedAtUs: ctx.timestamp.microsSinceUnixEpoch,
