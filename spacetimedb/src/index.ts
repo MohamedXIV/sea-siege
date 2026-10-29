@@ -1,6 +1,8 @@
+import { ScheduleAt } from "spacetimedb";
 import { schema, table, t } from "spacetimedb/server";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
+import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 
 /**
  * Minimal REAL SpacetimeDB module for Sea Siege (not a browser authority clone).
@@ -113,7 +115,24 @@ const shipRoute = table(
   },
 );
 
-const spacetimedb = schema({ match, matchMember, ship, shipRoute, worldConfig, worldSpawn, worldChunk, salvageNode });
+/**
+ * Lazy per-match timer: a scheduled reducer is not an open websocket client.
+ * There is no timer while a match is idle, and no timer per ship.
+ */
+const motionSchedule = table(
+  { name: "motion_schedule" },
+  {
+    scheduledId: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    scheduledAt: t.scheduleAt(),
+    lastTickAt: t.timestamp(),
+  },
+);
+
+const spacetimedb = schema({
+  match, matchMember, ship, shipRoute, motionSchedule,
+  worldConfig, worldSpawn, worldChunk, salvageNode,
+});
 export default spacetimedb;
 
 /** Creates lobby + host's ship atomically. Join/start rules will expand in #4/#14. */
@@ -260,7 +279,9 @@ export const issueShipOrder = spacetimedb.reducer(
       point => Math.floor(point.y) * config.mapCells + Math.floor(point.x),
     );
     const existing = ctx.db.shipRoute.shipId.find(shipId);
-    if (existing) {
+    if (cellPath.length === 0) {
+      if (existing) ctx.db.shipRoute.shipId.delete(shipId);
+    } else if (existing) {
       ctx.db.shipRoute.shipId.update({
         ...existing, cellPath, cursor: 0, revision: nextRevision,
       });
@@ -270,13 +291,36 @@ export const issueShipOrder = spacetimedb.reducer(
         cellPath, cursor: 0, revision: nextRevision,
       });
     }
+    // The navigation grid is cell-centered. Store the precise actual destination
+    // that the server can reach, rather than a misleading arbitrary cursor pixel.
+    const finalX = Math.floor(targetX) + 0.5;
+    const finalY = Math.floor(targetY) + 0.5;
     ctx.db.ship.id.update({
       ...current,
-      targetX,
-      targetY,
+      targetX: finalX,
+      targetY: finalY,
+      velocityX: cellPath.length === 0 ? 0 : current.velocityX,
+      velocityY: cellPath.length === 0 ? 0 : current.velocityY,
       revision: nextRevision,
       updatedAt: ctx.timestamp,
     });
+    if (cellPath.length > 0) {
+      // Schedule on demand, exactly once per live match. Another order in the
+      // same transaction stream observes the existing timer.
+      let hasTimer = false;
+      for (const _row of ctx.db.motionSchedule.matchId.filter(current.matchId)) {
+        hasTimer = true;
+        break;
+      }
+      if (!hasTimer) {
+        ctx.db.motionSchedule.insert({
+          scheduledId: 0n,
+          matchId: current.matchId,
+          scheduledAt: ScheduleAt.interval(SHIP_MOTION_RULES.tickMicroseconds),
+          lastTickAt: ctx.timestamp,
+        });
+      }
+    }
   },
 );
 
@@ -291,4 +335,93 @@ export const myMemberships = spacetimedb.view(
   { name: "my_memberships", public: true },
   t.array(matchMember.rowType),
   (ctx) => ctx.from.matchMember.where((row) => row.identity.eq(ctx.sender)),
+);
+
+/** Cancel a route without teleportation; callers may only stop their own units. */
+export const stopShip = spacetimedb.reducer(
+  { shipId: t.u64() },
+  (ctx, { shipId }) => {
+    const current = ctx.db.ship.id.find(shipId);
+    if (!current) throw new Error("Ship unavailable");
+    if (!current.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
+    const lobby = ctx.db.match.id.find(current.matchId);
+    if (!lobby || lobby.phase !== "active") throw new Error("Match is not active");
+    ctx.db.shipRoute.shipId.delete(shipId);
+    ctx.db.ship.id.update({
+      ...current,
+      velocityX: 0, velocityY: 0,
+      targetX: current.x, targetY: current.y,
+      revision: current.revision + 1n,
+      updatedAt: ctx.timestamp,
+    });
+  },
+);
+
+/**
+ * The *real* scheduled SpacetimeDB reducer, owned by the database scheduler.
+ * Delayed ticks use measured elapsed time (bounded to 250ms), not idealized
+ * 100ms steps. Idle matches have no schedule row; a finished route removes it.
+ *
+ * The ship table is PRIVATE. A later view will disclose only visible enemies.
+ */
+export const advanceMatchSimulation = spacetimedb.reducer(
+  { onSchedule: motionSchedule },
+  { arg: motionSchedule.rowType },
+  (ctx, { arg }) => {
+    // Scheduled reducers can otherwise be called by network clients. Never
+    // let an untrusted caller impersonate the authoritative simulation.
+    if (!ctx.senderAuth.isInternal) throw new Error("Scheduled simulation is internal-only");
+    const timer = ctx.db.motionSchedule.scheduledId.find(arg.scheduledId);
+    if (!timer) return;
+    const active = ctx.db.match.id.find(timer.matchId);
+    if (!active || active.phase !== "active") {
+      ctx.db.motionSchedule.scheduledId.delete(timer.scheduledId);
+      return;
+    }
+    const seconds = boundedDeltaSeconds(
+      timer.lastTickAt.microsSinceUnixEpoch,
+      ctx.timestamp.microsSinceUnixEpoch,
+    );
+    if (seconds === 0) return;
+    const world = ctx.db.worldConfig.matchId.find(timer.matchId);
+    if (!world) throw new Error("World configuration missing for active match");
+
+    let routesRemaining = 0;
+    for (const vessel of ctx.db.ship.matchId.filter(timer.matchId)) {
+      const route = ctx.db.shipRoute.shipId.find(vessel.id);
+      if (!route) continue;
+      // Stale orders must never outlive their ship's current command revision.
+      if (route.revision !== vessel.revision || route.matchId !== timer.matchId) {
+        ctx.db.shipRoute.shipId.delete(vessel.id);
+        continue;
+      }
+      const stepped = advanceShipOnRoute(
+        vessel, route.cellPath, route.cursor, world.mapCells, seconds,
+      );
+      if (stepped.arrived) {
+        ctx.db.shipRoute.shipId.delete(vessel.id);
+      } else {
+        routesRemaining++;
+        if (stepped.cursor !== route.cursor) {
+          ctx.db.shipRoute.shipId.update({ ...route, cursor: stepped.cursor });
+        }
+      }
+      if (stepped.changed) {
+        ctx.db.ship.id.update({
+          ...vessel,
+          ...stepped.ship,
+          updatedAt: ctx.timestamp,
+        });
+      }
+    }
+    // Running one periodic reducer per *moving match* is much cheaper than
+    // one schedule row per ship or an always-on tick for every empty lobby.
+    if (routesRemaining === 0) {
+      ctx.db.motionSchedule.scheduledId.delete(timer.scheduledId);
+    } else {
+      ctx.db.motionSchedule.scheduledId.update({
+        ...timer, lastTickAt: ctx.timestamp,
+      });
+    }
+  },
 );
