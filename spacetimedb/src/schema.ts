@@ -180,6 +180,7 @@ const structure = table(
     height: t.u32(),
     hp: t.u32(),
     lastFiredAtUs: t.i64(),
+    turretAngleDeg: t.f64(),
     level: t.u32(),                // Workshop tier (other kinds remain level 1)
     upgradeRemainingUs: t.i64(),  // 0 when no upgrade is pending
     upgradeStartedAtUs: t.i64(),  // Server clock, prevents retroactive progress
