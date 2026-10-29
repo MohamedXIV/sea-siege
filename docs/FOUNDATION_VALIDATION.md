@@ -32,3 +32,12 @@ Official references: https://spacetimedb.com/docs/how-to/unit-testing/ and https
 
 ### Security guard
 Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` to public tables as a convenience: an attacker could reconstruct hidden spawns and salvage. Before client/world rendering, implement authorized discovery projections with the needed security invariants (#13). Public match metadata deliberately excludes the seed.
+
+## Backend world, route, and authorization work — execution batch
+- Generated world's **actual** seed is selected inside the reducer via `ctx.random.integerInRange` (never accepted from client input); persisted in a **private** `world_config`. It is deterministic for replay but not cryptographically secret against a determined timestamp attacker.
+- `createMatch` transaction writes **private** `world_spawn`, `world_chunk`, and `salvage_node` rows. `joinMatch` places ships at persisted legal spawn points rather than hard-coded 8/8 or 12-cell offsets.
+- `issueShipOrder` validates real match bounds, reconstructs real stored chunks, computes an authoritative bounded A* path, rejects blocked/unreachable destinations, and stores a private `ship_route` with revision and cursor.
+- **Important:** this is route validation and storage, **not yet moving ships**. Scheduled server movement, dynamic building occupancy, per-ship hull clearance and fog-filtered world views remain in #8/#10/#13. Avoid treating #7/#10 as completed.
+- Fresh locally executed evidence: **10/10 pure TS Node tests pass** (4 worldgen, 6 navigation); strict TypeScript checks of both pure modules pass with global `tsc`. Additional smoke: 2–8 slots × 1,200 seeds each generated without exceptions.
+- Source integrity: GitHub blob SHA-1 matched exactly the locally tested worldgen, navigation, and their Node tests.
+- SpacetimeDB module test additions are **prepared only**, not run (no npm/CLI connectivity); the schema and reducer execution remain **unverified**. No Cloud database or account credentials were used.
