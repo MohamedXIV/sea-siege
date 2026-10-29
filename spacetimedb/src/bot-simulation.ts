@@ -10,6 +10,7 @@ import { ECONOMY_RULES, shipDefinition, debitSalvage, inRange, type ShipKind } f
 import { COMBAT_RULES, canFire, createProjectile, terrainLineOfSight, weaponDefinition, withinRange, type WeaponKind } from "./sim/combat.ts";
 import { angularDifference, desiredBearing, turretAligned } from "./sim/turret-aim.ts";
 import { SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
+import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts";
 
 /** Bounded work independent of browser framerate and bot count. */
 export const BOT_SERVER_RULES = {
@@ -151,39 +152,19 @@ export const advanceBots = spacetimedb.reducer(
         withinRange(sensor.position, { x, y }, sensor.radius) &&
         terrainLineOfSight(sensor.position, { x, y }, terrain, world.mapCells),
       );
-      const knownDeposits = Array.from(ctx.db.salvageNode.matchId.filter(match.id))
-        .filter(row => row.remaining > 0 && sensorSees(row.gridX + 0.5, row.gridY + 0.5))
-        .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-        .map(row => ({ id: row.id, position: {
-          x: row.gridX + 0.5, y: row.gridY + 0.5,
-        }, remaining: row.remaining }));
+      const knownDeposits = visibleResources(
+        Array.from(ctx.db.salvageNode.matchId.filter(match.id)),
+        sensors,
+        (from,to) => terrainLineOfSight(from,to,terrain,world.mapCells),
+      );
 
       // Candidate locations come only from our own explored connected territory.
       // Each one is validated against the SAME physical construction rules as
       // a human build command. Search is capped per kind per strategic tick.
-      const anchorCells = new Map<string, { x: number; y: number }>();
-      for (const st of ownStructures.filter(row => row.channel === "surface" && row.complete)) {
-        for (let dy = -1; dy <= st.height; dy++) for (let dx = -1; dx <= st.width; dx++) {
-          const x = st.gridX + dx, y = st.gridY + dy;
-          if (x > 0 && y > 0 && x < world.mapCells - 1 && y < world.mapCells - 1)
-            anchorCells.set(x + ":" + y, { x, y });
-        }
-      }
-      const sortedAnchors = [...anchorCells.values()].sort((a,b) => a.y - b.y || a.x - b.x);
-      // Mounted buildings need 1x1 or 2x2 complete friendly platforms.
-      // Prefer their actual positions before searching general extensions;
-      // otherwise a low search cap could starve the only valid 2x2 site.
-      const supportedAnchors = new Map<string, { x: number; y: number }>();
-      for (const pad of ownStructures.filter(row => row.kind === "platform" && row.complete)) {
-        supportedAnchors.set(pad.gridX + ":" + pad.gridY, { x: pad.gridX, y: pad.gridY });
-      }
-      const mountFirst = [...supportedAnchors.values()].sort((a,b) => a.y - b.y || a.x - b.x);
       const legalBuildCandidates: BotObservation["legalBuildCandidates"][number][] = [];
       for (const kind of ["shipyard","salvage_rig","cannon","platform"] as const) {
         let checked = 0;
-        const candidates = kind === "platform" ? sortedAnchors :
-          [...mountFirst, ...sortedAnchors.filter(point =>
-            !supportedAnchors.has(point.x + ":" + point.y))];
+        const candidates = orderedBuildOrigins(ownStructures,world.mapCells,kind !== "platform");
         for (const point of candidates) {
           if (checked++ >= BOT_SERVER_RULES.maxPlacementChecksPerKind) break;
           if (canBuild(kind, bot.slot, point.x, point.y, faction.salvage))
