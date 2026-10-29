@@ -10,31 +10,6 @@ import {
   type ShipCombatBody, type WeaponKind,
 } from "./sim/combat.ts";
 
-/** Build one match-scoped server-owned collision snapshot, never a client collection. */
-function combatBodies(ctx: any, matchId: bigint): CombatBody[] {
-  const members = Array.from(ctx.db.matchMember.matchId.filter(matchId)) as any[];
-  const byIdentity = (identity: any): number | undefined =>
-    members.find(row => row.identity.isEqual(identity))?.slot;
-  const bodies: CombatBody[] = [];
-  for (const vessel of ctx.db.ship.matchId.filter(matchId)) {
-    const faction = byIdentity(vessel.owner);
-    if (faction === undefined || vessel.hp <= 0) continue;
-    bodies.push({
-      entityType: "ship", id: vessel.id, faction, x: vessel.x, y: vessel.y,
-      radius: vessel.radiusCells, hp: vessel.hp, kind: vessel.kind,
-    });
-  }
-  for (const row of ctx.db.structure.matchId.filter(matchId)) {
-    if (row.hp <= 0) continue;
-    bodies.push({
-      entityType: "structure", id: row.id, faction: row.ownerSlot,
-      x: row.gridX, y: row.gridY, width: row.width, height: row.height,
-      hp: row.hp, kind: row.kind,
-    });
-  }
-  return bodies;
-}
-
 /** Fire at a current server-observed target; no raw point-and-click blind attacks. */
 export const fireWeapon = spacetimedb.reducer(
   { sourceType: t.string(), sourceId: t.u64(), targetType: t.string(), targetId: t.u64() },
@@ -123,87 +98,111 @@ export const fireWeapon = spacetimedb.reducer(
   },
 );
 
-/** Combat deaths never pay peaceful demolition refunds. */
-function destroyShip(ctx: any, id: bigint): void {
-  ctx.db.harvestOrder.shipId.delete(id);
-  ctx.db.shipRoute.shipId.delete(id);
-  ctx.db.ship.id.delete(id);
-}
-function destroyStructure(ctx: any, id: bigint): void {
-  const row = ctx.db.structure.id.find(id);
-  if (!row) return;
-  ctx.db.structure.id.delete(id);
-  for (const timer of ctx.db.constructionSchedule.structureId.filter(id))
-    ctx.db.constructionSchedule.scheduledId.delete(timer.scheduledId);
-  if (row.kind === "shipyard") {
-    for (const order of ctx.db.productionOrder.yardId.filter(id))
-      ctx.db.productionOrder.id.delete(order.id);
-  }
-}
-
-/** Immediately propagate support loss, then refresh all online flags. */
-function reconcileSupport(ctx: any, matchId: bigint): void {
-  const config = ctx.db.worldConfig.matchId.find(matchId);
-  if (!config) throw new Error("Missing combat world");
-  const rows = Array.from(ctx.db.structure.matchId.filter(matchId)) as any[];
-  const platforms = rows.filter(row => row.kind === "platform" && row.complete && row.hp > 0);
-  for (const st of rows) {
-    if (st.channel !== "superstructure") continue;
-    let supported = true;
-    for (let dy = 0; dy < st.height && supported; dy++) for (let dx = 0; dx < st.width; dx++) {
-      const x = st.gridX + dx, y = st.gridY + dy;
-      if (!platforms.some(deck => deck.ownerSlot === st.ownerSlot &&
-          x >= deck.gridX && x < deck.gridX + deck.width &&
-          y >= deck.gridY && y < deck.gridY + deck.height)) {
-        supported = false;
-        break;
-      }
-    }
-    if (!supported) destroyStructure(ctx, st.id);
-  }
-  const surviving = Array.from(ctx.db.structure.matchId.filter(matchId)) as any[];
-  const shapes = surviving.map(row => ({ ...row, kind: row.kind as StructureKind }));
-  for (const st of surviving) {
-    const connected = structureOnline({ ...st, kind: st.kind as StructureKind },
-      shapes, config.mapCells);
-    if (st.connected !== connected) ctx.db.structure.id.update({ ...st, connected });
-  }
-}
-
-/** An eliminated faction cannot retain controllable units or paid job queues. */
-function reconcileEliminations(ctx: any, matchId: bigint): void {
-  const members = Array.from(ctx.db.matchMember.matchId.filter(matchId)) as any[];
-  const cores = Array.from(ctx.db.structure.matchId.filter(matchId))
-    .filter((row: any) => row.kind === "command_core" && row.hp > 0);
-  const living = new Set(cores.map((row: any) => row.ownerSlot));
-  for (const member of members) {
-    if (living.has(member.slot) || member.eliminated) continue;
-    ctx.db.matchMember.id.update({ ...member, eliminated: true });
-    for (const ship of ctx.db.ship.matchId.filter(matchId))
-      if (ship.owner.isEqual(member.identity)) destroyShip(ctx, ship.id);
-    for (const st of ctx.db.structure.matchId.filter(matchId))
-      if (st.ownerSlot === member.slot) destroyStructure(ctx, st.id);
-  }
-  if (living.size > 1) return;
-  const match = ctx.db.match.id.find(matchId);
-  if (!match || match.phase !== "active") return;
-  ctx.db.match.id.update({
-    ...match, phase: "finished", winnerSlot: living.size === 1 ? [...living][0]! : -1,
-  });
-  // No further periodic economy / movement / combat activity after match finish.
-  for (const job of ctx.db.economySchedule.matchId.filter(matchId))
-    ctx.db.economySchedule.scheduledId.delete(job.scheduledId);
-  for (const job of ctx.db.motionSchedule.matchId.filter(matchId))
-    ctx.db.motionSchedule.scheduledId.delete(job.scheduledId);
-  for (const job of ctx.db.projectile.matchId.filter(matchId))
-    ctx.db.projectile.id.delete(job.id);
-}
-
 /** Impact-time projectiles; exactly one bounded tick per *moving match*. */
 export const advanceCombat = spacetimedb.reducer(
   { onSchedule: combatSchedule },
   { arg: combatSchedule.rowType },
   (ctx, { arg }) => {
+    /** Build one match-scoped server-owned collision snapshot, never a client collection. */
+    function combatBodies(matchId: bigint): CombatBody[] {
+      const members = Array.from(ctx.db.matchMember.matchId.filter(matchId));
+      const byIdentity = (identity: (typeof ctx.sender)): number | undefined =>
+        members.find(row => row.identity.isEqual(identity))?.slot;
+      const bodies: CombatBody[] = [];
+      for (const vessel of ctx.db.ship.matchId.filter(matchId)) {
+        const faction = byIdentity(vessel.owner);
+        if (faction === undefined || vessel.hp <= 0) continue;
+        bodies.push({
+          entityType: "ship", id: vessel.id, faction, x: vessel.x, y: vessel.y,
+          radius: vessel.radiusCells, hp: vessel.hp, kind: vessel.kind,
+        });
+      }
+      for (const row of ctx.db.structure.matchId.filter(matchId)) {
+        if (row.hp <= 0) continue;
+        bodies.push({
+          entityType: "structure", id: row.id, faction: row.ownerSlot,
+          x: row.gridX, y: row.gridY, width: row.width, height: row.height,
+          hp: row.hp, kind: row.kind,
+        });
+      }
+      return bodies;
+    }
+
+    /** Combat deaths never pay peaceful demolition refunds. */
+    function destroyShip(id: bigint): void {
+      ctx.db.harvestOrder.shipId.delete(id);
+      ctx.db.shipRoute.shipId.delete(id);
+      ctx.db.ship.id.delete(id);
+    }
+    function destroyStructure(id: bigint): void {
+      const row = ctx.db.structure.id.find(id);
+      if (!row) return;
+      ctx.db.structure.id.delete(id);
+      for (const timer of ctx.db.constructionSchedule.structureId.filter(id))
+        ctx.db.constructionSchedule.scheduledId.delete(timer.scheduledId);
+      if (row.kind === "shipyard") {
+        for (const order of ctx.db.productionOrder.yardId.filter(id))
+          ctx.db.productionOrder.id.delete(order.id);
+      }
+    }
+    
+    /** Immediately propagate support loss, then refresh all online flags. */
+    function reconcileSupport(matchId: bigint): void {
+      const config = ctx.db.worldConfig.matchId.find(matchId);
+      if (!config) throw new Error("Missing combat world");
+      const rows = Array.from(ctx.db.structure.matchId.filter(matchId));
+      const platforms = rows.filter(row => row.kind === "platform" && row.complete && row.hp > 0);
+      for (const st of rows) {
+        if (st.channel !== "superstructure") continue;
+        let supported = true;
+        for (let dy = 0; dy < st.height && supported; dy++) for (let dx = 0; dx < st.width; dx++) {
+          const x = st.gridX + dx, y = st.gridY + dy;
+          if (!platforms.some(deck => deck.ownerSlot === st.ownerSlot &&
+              x >= deck.gridX && x < deck.gridX + deck.width &&
+              y >= deck.gridY && y < deck.gridY + deck.height)) {
+            supported = false;
+            break;
+          }
+        }
+        if (!supported) destroyStructure(st.id);
+      }
+      const surviving = Array.from(ctx.db.structure.matchId.filter(matchId));
+      const shapes = surviving.map(row => ({ ...row, kind: row.kind as StructureKind }));
+      for (const st of surviving) {
+        const connected = structureOnline({ ...st, kind: st.kind as StructureKind },
+          shapes, config.mapCells);
+        if (st.connected !== connected) ctx.db.structure.id.update({ ...st, connected });
+      }
+    }
+    
+    /** An eliminated faction cannot retain controllable units or paid job queues. */
+    function reconcileEliminations(matchId: bigint): void {
+      const members = Array.from(ctx.db.matchMember.matchId.filter(matchId));
+      const cores = Array.from(ctx.db.structure.matchId.filter(matchId))
+        .filter((row) => row.kind === "command_core" && row.hp > 0);
+      const living = new Set(cores.map((row) => row.ownerSlot));
+      for (const member of members) {
+        if (living.has(member.slot) || member.eliminated) continue;
+        ctx.db.matchMember.id.update({ ...member, eliminated: true });
+        for (const ship of ctx.db.ship.matchId.filter(matchId))
+          if (ship.owner.isEqual(member.identity)) destroyShip(ship.id);
+        for (const st of ctx.db.structure.matchId.filter(matchId))
+          if (st.ownerSlot === member.slot) destroyStructure(st.id);
+      }
+      if (living.size > 1) return;
+      const match = ctx.db.match.id.find(matchId);
+      if (!match || match.phase !== "active") return;
+      ctx.db.match.id.update({
+        ...match, phase: "finished", winnerSlot: living.size === 1 ? [...living][0]! : -1,
+      });
+      // No further periodic economy / movement / combat activity after match finish.
+      for (const job of ctx.db.economySchedule.matchId.filter(matchId))
+        ctx.db.economySchedule.scheduledId.delete(job.scheduledId);
+      for (const job of ctx.db.motionSchedule.matchId.filter(matchId))
+        ctx.db.motionSchedule.scheduledId.delete(job.scheduledId);
+      for (const job of ctx.db.projectile.matchId.filter(matchId))
+        ctx.db.projectile.id.delete(job.id);
+    }
     if (!ctx.senderAuth.isInternal) throw new Error("Combat scheduler is internal-only");
     const timer = ctx.db.combatSchedule.scheduledId.find(arg.scheduledId);
     if (!timer) return;
@@ -221,7 +220,7 @@ export const advanceCombat = spacetimedb.reducer(
     let changedStructure = false;
     for (const row of projectiles) {
       // Re-read bodies after each impact to avoid double-counting dead targets.
-      const bodies = combatBodies(ctx, timer.matchId);
+      const bodies = combatBodies(timer.matchId);
       const output = advanceProjectile({
         x: row.x, y: row.y, vx: row.vx, vy: row.vy,
         sourceFaction: row.sourceFaction, damage: row.damage, splash: row.splash,
@@ -232,12 +231,12 @@ export const advanceCombat = spacetimedb.reducer(
           if (hit.entityType === "ship") {
             const vessel = ctx.db.ship.id.find(hit.id);
             if (!vessel) continue;
-            if (hit.damage >= vessel.hp) destroyShip(ctx, hit.id);
+            if (hit.damage >= vessel.hp) destroyShip(hit.id);
             else ctx.db.ship.id.update({ ...vessel, hp: vessel.hp - hit.damage });
           } else {
             const structure = ctx.db.structure.id.find(hit.id);
             if (!structure) continue;
-            if (hit.damage >= structure.hp) destroyStructure(ctx, hit.id);
+            if (hit.damage >= structure.hp) destroyStructure(hit.id);
             else ctx.db.structure.id.update({ ...structure, hp: structure.hp - hit.damage });
             changedStructure = true;
           }
@@ -250,8 +249,8 @@ export const advanceCombat = spacetimedb.reducer(
       });
     }
     if (changedStructure) {
-      reconcileSupport(ctx, timer.matchId);
-      reconcileEliminations(ctx, timer.matchId);
+      reconcileSupport(timer.matchId);
+      reconcileEliminations(timer.matchId);
     }
     const remaining = Array.from(ctx.db.projectile.matchId.filter(timer.matchId)).length;
     if (remaining === 0) ctx.db.combatSchedule.scheduledId.delete(timer.scheduledId);
