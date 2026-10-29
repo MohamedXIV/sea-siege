@@ -1,4 +1,3 @@
-import { t } from "spacetimedb/server";
 import spacetimedb, { matchDeadline } from "./schema.ts";
 import { resolveMatchOutcome } from "./sim/match-outcome.ts";
 
