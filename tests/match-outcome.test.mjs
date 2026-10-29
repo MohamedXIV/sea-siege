@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MATCH_RULES, dominanceScore5, resolveMatchOutcome, deadlineMicroseconds }
+import { MATCH_RULES, dominanceScore5, resolveMatchOutcome, deadlineMicroseconds, matchStillActive }
   from '../spacetimedb/src/sim/match-outcome.ts';
 const side = (slot, coreHp=1000, structures=4, ships=3, totalSalvageGathered=100n) =>
   ({ slot, coreHp, structures, ships, totalSalvageGathered });
@@ -37,4 +37,10 @@ test('rejects duplicate slots, negative values and bad timestamps', () => {
   assert.throws(()=>dominanceScore5(side(0,-1)),RangeError);
   assert.throws(()=>dominanceScore5(side(0,1000,2,3,-1n)),RangeError);
   assert.throws(()=>deadlineMicroseconds(-1n),RangeError);
+});
+
+test('late or simultaneous commands cannot change a score past the deadline', () => {
+  assert.equal(matchStillActive('active', 100n, 100n + 719_999_999n),true);
+  assert.equal(matchStillActive('active', 100n, 100n + 720_000_000n),false);
+  assert.equal(matchStillActive('finished', 100n, 200n),false);
 });
