@@ -22,7 +22,7 @@ export const repairStructure = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
+    if (!member || member.eliminated || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
     if (!workshop.complete || !workshop.connected || workshop.hp <= 0 ||
         workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
 
@@ -57,7 +57,7 @@ export const repairShip = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
+    if (!member || member.eliminated || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
     if (!workshop.complete || !workshop.connected || workshop.hp <= 0 ||
         workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
 
@@ -91,7 +91,7 @@ export const upgradeWorkshop = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
+    if (!member || member.eliminated || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
     if (!workshop.complete || !workshop.connected || workshop.hp <= 0)
       throw new Error("Workshop offline");
     if (workshop.upgradeRemainingUs > 0n) throw new Error("Workshop already upgrading");
