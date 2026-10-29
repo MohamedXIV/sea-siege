@@ -1190,3 +1190,32 @@ it("finalizing the match cancels all strategic bots and preserves the outcome", 
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
   expect(test.db.botSchedule.count()).toBe(0n);
 });
+
+
+it("one human can own a real eight-faction lobby with seven identity-free strategic bots", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("host", 1n);
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 8 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  for (let i = 0; i < 7; i++) {
+    const difficulty = (["easy", "normal", "hard"] as const)[i % 3]!;
+    test.withReducerTx(host, ctx => moduleExports.addBot(ctx, { matchId, difficulty }));
+  }
+  const factions = [...test.db.factionState.matchId.filter(matchId)]
+    .sort((a,b)=>a.slot-b.slot);
+  expect(factions).toHaveLength(8);
+  expect(factions.map(row => row.slot)).toEqual([0,1,2,3,4,5,6,7]);
+  expect(factions.filter(row=>row.controller === "bot")).toHaveLength(7);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.botController.matchId.filter(matchId)]).toHaveLength(7);
+  expect([...test.db.ship.matchId.filter(matchId)]).toHaveLength(8);
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+  expect(test.db.botSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const schedule = [...test.db.botSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceBots(ctx, { arg: schedule }));
+  expect([...test.db.botController.matchId.filter(matchId)]
+    .every(row=>row.nextDecisionUs>0n)).toBe(true);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+});
