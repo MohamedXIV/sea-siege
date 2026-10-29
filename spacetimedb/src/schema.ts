@@ -24,6 +24,7 @@ const matchMember = table(
     matchId: t.u64().index("btree"),
     identity: t.identity().index("btree"),
     slot: t.u32(),
+    factionKey: t.string().index("btree"),
     salvage: t.u32(),
     totalSalvageGathered: t.u64(),
     eliminated: t.bool(),
@@ -35,7 +36,8 @@ const ship = table(
   {
     id: t.u64().primaryKey().autoInc(),
     matchId: t.u64().index("btree"),
-    owner: t.identity().index("btree"),
+    ownerSlot: t.u32(),
+    factionKey: t.string().index("btree"),
     kind: t.string(),
     hp: t.u32(),
     radiusCells: t.f64(),
