@@ -1,5 +1,6 @@
 import { schema, table, t } from "spacetimedb/server";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
+import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 
 /**
  * Minimal REAL SpacetimeDB module for Sea Siege (not a browser authority clone).
@@ -100,7 +101,19 @@ const salvageNode = table(
   },
 );
 
-const spacetimedb = schema({ match, matchMember, ship, worldConfig, worldSpawn, worldChunk, salvageNode });
+/** Server-owned navigation route, not published to unauthorized players. */
+const shipRoute = table(
+  { name: "ship_route" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    cellPath: t.array(t.u32()),
+    cursor: t.u32(),
+    revision: t.u64(),
+  },
+);
+
+const spacetimedb = schema({ match, matchMember, ship, shipRoute, worldConfig, worldSpawn, worldChunk, salvageNode });
 export default spacetimedb;
 
 /** Creates lobby + host's ship atomically. Join/start rules will expand in #4/#14. */
@@ -213,8 +226,9 @@ export const startMatch = spacetimedb.reducer(
   },
 );
 
-/** Order assignment is authoritative; does NOT teleport or move ships. Scheduled
- * steering and collision simulation will consume targetX/targetY in #10. */
+/** Orders are owner-validated and route-planned against stored static terrain.
+ * Ships still await the scheduled movement simulation in #10. Future dynamic
+ * structure occupancy must become part of the server-side route predicate. */
 export const issueShipOrder = spacetimedb.reducer(
   { shipId: t.u64(), targetX: t.f64(), targetY: t.f64() },
   (ctx, { shipId, targetX, targetY }) => {
@@ -229,11 +243,38 @@ export const issueShipOrder = spacetimedb.reducer(
     if (targetX < 0 || targetY < 0 || targetX >= config.mapCells || targetY >= config.mapCells) {
       throw new Error("Destination out of bounds");
     }
+    // Decode real authoritative stored chunks. Rebuilding from browser-visible
+    // seeds would leak the unexplored map; there is no client-owned routing.
+    const terrain = decodeTerrainChunks(
+      config.mapCells,
+      Array.from(ctx.db.worldChunk.matchId.filter(current.matchId)),
+    );
+    const route = findTerrainPath(
+      terrain, config.mapCells,
+      { x: current.x, y: current.y },
+      { x: targetX, y: targetY },
+    );
+    if (!route) throw new Error("Destination unreachable");
+    const nextRevision = current.revision + 1n;
+    const cellPath = route.waypoints.slice(1).map(
+      point => Math.floor(point.y) * config.mapCells + Math.floor(point.x),
+    );
+    const existing = ctx.db.shipRoute.shipId.find(shipId);
+    if (existing) {
+      ctx.db.shipRoute.shipId.update({
+        ...existing, cellPath, cursor: 0, revision: nextRevision,
+      });
+    } else {
+      ctx.db.shipRoute.insert({
+        shipId, matchId: current.matchId,
+        cellPath, cursor: 0, revision: nextRevision,
+      });
+    }
     ctx.db.ship.id.update({
       ...current,
       targetX,
       targetY,
-      revision: current.revision + 1n,
+      revision: nextRevision,
       updatedAt: ctx.timestamp,
     });
   },
