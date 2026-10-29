@@ -72,7 +72,6 @@ test('rejects invalid positions, corrupted routes and invalid budgets', () => {
   assert.equal(advanceShipOnRoute(ship(),[2],0,8,0).changed,false);
 });
 
-
 test('5, 10 and 20 Hz server stepping give matching constant-velocity travel', () => {
   const path=route(16,[2,1],[3,1],[4,1],[5,1],[6,1]);
   const endpoints=[];
