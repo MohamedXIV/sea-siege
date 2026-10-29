@@ -59,7 +59,7 @@ npm run test:unit
 node --experimental-strip-types --test tests/*.test.mjs
 ```
 
-The `ship_route` table stores the ordered grid cells for a move; **nothing advances the cursor/ship position yet**. Scheduled steering, collision with dynamic buildings and ship-specific radius constraints belong to #10. Visibility-aware views are mandatory before publishing hidden chunks or resource data to any clients (#13). The match seed is now server generated (not a `createMatch` input).
+The `ship_route` table stores authoritative grid-cell paths. The internal scheduled reducer advances vessel position/cursor; swept collision handling and temporary congestion rerouting are now present. Future construction footprints, hull-class-specific radii and full fleet traffic resolution remain pending (#8/#10). Visibility-aware views are mandatory before publishing hidden chunks or resource data to any clients (#13). The match seed is now server generated (not a `createMatch` input).
 
 ## Authoritative ship movement — scheduled reducer slice (#10)
 
@@ -68,7 +68,7 @@ The `ship_route` table stores the ordered grid cells for a move; **nothing advan
 - `advanceMatchSimulation` explicitly rejects calls lacking `ctx.senderAuth.isInternal`; clients cannot force simulation ticks. The reducer steps all active routes, persists authoritative movement samples and velocities with `ctx.timestamp`, then deletes completed routes/timers.
 - The pure `ship-motion.ts` uses 2 cells/sec, a 150°/sec hull-turn cap, and max 250ms elapsed-time catch-up per invocation, with headings stored in degrees. These values live in `SHIP_MOTION_RULES` and are **tuning defaults**, not guaranteed platform tickrates.
 - Client rendering **does not set or own server positions**. The Phaser interpolation adapter in #5/#19 will read authorized ship snapshots from generated bindings. Scheduled frequency, subscription row-change frequency and Phaser FPS are separate (ADR-0001).
-- No full ship sizes, fleet formation, dynamic building collision, fog-aware subscriptions or true sailing physics yet. Please do not characterize this as full naval movement or a multiplayer-ready implementation.
+- No full ship sizes, fleet formations, **live construction-footprint persistence/integration**, fog-aware subscriptions or true sailing physics yet. The collision primitive accepts rectangular building footprints but production reducers do not yet supply them. Please do not characterize this as full naval movement or a multiplayer-ready implementation.
 
 Pure TS smoke verification (no SpacetimeDB dependencies):
 ```bash
@@ -78,3 +78,22 @@ tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler
 ```
 
 Real datastore/scheduler acceptance tests were prepared in `spacetimedb/src/index.test.ts`, but **remain unexecuted** until the actual SpacetimeDB module packages/runtime can run. The test harness invokes scheduled reducers as `TestAuth.internal()`; it does not run a wall-clock scheduler. It cannot prove deployment/subscriptions or security on a real server.
+
+## Swept hull collision and congestion rerouting — October 29, 2026
+
+`spacetimedb/src/sim/collision.ts` implements **pure, conservative swept collision detection** against:
+- static terrain blockers (ruined pillars and shoals, plus unknown impassable terrain codes);
+- rectangular platform/structure footprints via `CollisionEnvironment.footprints` (not yet supplied by building persistence);
+- other server-owned vessel bodies with a shared initial scout hull radius `COLLISION_RULES.scoutRadiusCells`.
+
+`issueShipOrder` rejects destinations occupied by other ships through the authoritative A* cell predicate. `advanceMatchSimulation` checks **each segment** before committing the movement, in deterministic ship-ID order using updated positions from earlier ships in that tick. If the new position would intersect a blocker, movement is held and velocity cleared; a reroute toward the original goal is attempted at most once per second per blocked ship. The old route is preserved when no valid alternative exists, so a temporarily congested passage can resume on later ticks.
+
+The current integration is **ship + static terrain only**. **Do not** claim that newly constructed platforms stop real ships yet: the authoritative building table/footprints must be integrated in #8. Avoid allowing construction on top of existing hulls.
+
+Run standalone local tests with Node 22:
+```bash
+node --experimental-strip-types --test tests/collision.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext \
+  --moduleResolution bundler --allowImportingTsExtensions \
+  spacetimedb/src/sim/collision.ts
+```
