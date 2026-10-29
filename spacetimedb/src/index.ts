@@ -17,10 +17,10 @@ import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import {
   CONSTRUCTION_RULES, initialStructures, structureDefinition, structureOnline,
-  validateStructurePlacement, type StructureKind, type StructureShape,
+  type StructureKind, type StructureShape,
 } from "./sim/construction.ts";
 import {
-  canSweepVessel, isNavigationCellBlocked, COLLISION_RULES,
+  canSweepVessel, isNavigationCellBlocked,
 } from "./sim/collision.ts";
 
 /**
