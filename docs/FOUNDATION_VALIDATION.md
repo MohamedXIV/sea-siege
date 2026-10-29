@@ -163,3 +163,17 @@ Coverage: exact 12-minute microsecond deadline, integer-fifths dominance score (
 **Semantic note:** Gemini calls the 12-minute immediate score termination “Sudden Death,” but does not include a special overtime state. This implementation follows that reference, not an invented damage-acceleration phase. Exact equal-score outcomes use the lowest slot, and mutual Core destruction records a draw (-1).
 
 **Unverified:** `npm install` / `spacetime build` / scheduled SDK execution, test-utils harness run, end-to-end two-client match result consistency, encrypted or fog-filtered subscribers and UI. PR #20 remains Draft, issues remain open. No Cloud DB or account credentials were used.
+
+## Bot strategic policy and perception (29 Oct 2026)
+
+**Executed local verification:** `node --experimental-strip-types --test tests/bot-policy.test.mjs tests/bot-perception.test.mjs` — **14/14 PASS** on Node 22.16.0. Isolated `tsc --noEmit --strict` on both new pure modules **PASS** with TypeScript 5.8.3. These exercises used locally available compatible combat/turret rule modules and a minimal economy fixture, **not a checked-out complete GitHub HEAD**; the exact new policy/perception sources and tests were separately verified byte-for-byte by Git blob SHA.
+
+New exact HEAD Git blob SHA-1:
+- `spacetimedb/src/sim/bot-policy.ts`: `3f6cc2aba310d7d58c23a89b91e8a86de17f39d3`
+- `tests/bot-policy.test.mjs`: `1ad7a9006fc7ac9926faa30800c629403ca478e5`
+- `spacetimedb/src/sim/bot-perception.ts`: `15aad5b3e98be57c5ef120eb2732748143c62d84`
+- `tests/bot-perception.test.mjs`: `e06502f9d6e40fd35c7f1c62b368207203f6a534`
+
+Pure policy covers exact difficulty strategic intervals/order caps, visible-enemy aim/fire, stale or hidden intel denial, resource and legal construction decisions, queue budgets, input-order determinism, exploration frontiers, and invalid observation rejection. Sensor filter covers friendly/dead exclusion, distance, blocked terrain LoS, multi-sensor stable union, and zero-sensor denials.
+
+**NOT implemented/verified in SpacetimeDB:** canonical bot faction slots independent of human `Identity`, bot account-less seat creation, server scheduler, reducer validation bridge, bot-only match execution, secure subscriber projections, 1-human-vs-7-bots session, full SDK build/typecheck. No claim of real bots playing. See `docs/BOT_SERVER_INTEGRATION.md`. All prior module compilation/security gates remain open; #12 and #13 must not be closed.
