@@ -2,6 +2,7 @@ import { ScheduleAt } from "spacetimedb";
 import { t } from "spacetimedb/server";
 import spacetimedb, { combatSchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
+import { matchStillActive } from "./sim/match-outcome.ts";
 import { structureOnline, type StructureKind } from "./sim/construction.ts";
 import { boundedDeltaSeconds } from "./sim/ship-motion.ts";
 import {
@@ -31,7 +32,7 @@ export const aimWeapon = spacetimedb.reducer(
     if (!vessel && (!cannon || cannon.kind !== "cannon")) throw new Error("Weapon unavailable");
     const matchId = vessel ? vessel.matchId : cannon!.matchId;
     const match = ctx.db.match.id.find(matchId);
-    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.eliminated ||
@@ -74,7 +75,7 @@ export const fireWeapon = spacetimedb.reducer(
     if (!vessel && (!turret || turret.kind !== "cannon")) throw new Error("Weapon unavailable");
     const matchId = vessel ? vessel.matchId : turret!.matchId;
     const match = ctx.db.match.id.find(matchId);
-    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.eliminated || (vessel ? !vessel.owner.isEqual(ctx.sender) : turret!.ownerSlot !== member.slot))
@@ -256,7 +257,7 @@ export const advanceCombat = spacetimedb.reducer(
       }
       if (living.size > 1) return;
       const match = ctx.db.match.id.find(matchId);
-      if (!match || match.phase !== "active") return;
+      if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) return;
       ctx.db.match.id.update({
         ...match, phase: "finished",
         winnerSlot: living.size === 1 ? [...living][0]! : -1,
@@ -281,7 +282,7 @@ export const advanceCombat = spacetimedb.reducer(
     const timer = ctx.db.combatSchedule.scheduledId.find(arg.scheduledId);
     if (!timer) return;
     const match = ctx.db.match.id.find(timer.matchId);
-    if (!match || match.phase !== "active") {
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) {
       ctx.db.combatSchedule.scheduledId.delete(timer.scheduledId);
       return;
     }
