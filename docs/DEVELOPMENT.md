@@ -218,3 +218,34 @@ node --experimental-strip-types --test tests/turret-aim.test.mjs
 tsc --noEmit --strict --target ES2022 --module ESNext \
   --moduleResolution bundler spacetimedb/src/sim/turret-aim.ts
 ```
+
+
+## Match deadline and naval dominance outcome — 29 October 2026
+
+The archived Gemini gameplay reference explicitly specifies a **12-minute match duration**, after which the match ends **immediately** by a Naval Dominance tiebreaker. Despite its `SUDDEN_DEATH_TIME_MS` name, the reference does **not** implement an overtime phase with accelerated damage or resource depletion. This slice preserves that behavior; don't imply extra sudden-death phases.
+
+`spacetimedb/src/sim/match-outcome.ts` implements the source formula without floating point:
+```
+Score = Core HP + 80 × active structures + 100 × active ships
+        + 0.2 × total lifetime Salvage gathered
+Exact score5 = 5 × Core HP + 400 × structures + 500 × ships + gatheredSalvage
+```
+
+Surviving factions are ranked by score; an exact tie is resolved by **lowest living player slot** (an explicit stable version of Gemini's first-surviving-slot rule). A sole living Core wins immediately; zero living Cores yields a **draw (-1)**, correcting the reference's ambiguous zero-for-draw sentinel.
+
+**Server-source contract:**
+- On `startMatch`, the host creates exactly one private `match_deadline` row with `ScheduleAt.time(startUs + 720_000_000n)`. `match` also records `startedAtUs`, `endedAtUs`, `victoryReason`, `winnerSlot` and `winningScore5`. Deadline/score are server-owned, not client time.
+- `match_member.totalSalvageGathered` is a private **u64 lifetime earned ledger**. The economy's Core/Rig/harvest credits increment the ledger atomically with actual salvage credited, without decreasing it when resources are spent. Combat kill bounties and bonus accounting remain unimplemented.
+- `finishMatchAtDeadline` requires an internal scheduler caller, verifies the persisted one-shot deadline actually elapsed, constructs server-owned surviving Core/structure/ship counts and lifetime credits, resolves the winner and tears down active gameplay schedules/projectiles/aims. Completed state is stable against later calls.
+- Normal Combat Core-elimination victory now persists the same match end timestamp/reason fields and cancels its outstanding deadline timer, preventing a later timeout from overriding an earlier win.
+- **Critical race guard:** all existing active-gameplay command/tick entrypoints use `matchStillActive(phase, startTime, serverNow)`. At or after the absolute deadline, new combat, building, repairs, harvesting, production and simulated ticks cannot change the scores even if scheduled deadline execution is delayed. Construction completion is also deadline gated. This makes scoreboard cutoff independent of dispatch ordering.
+- Persisted result metadata can later be presented through the agreed UI design; no UI has been modified (#15).
+
+Package-free tests:
+```bash
+node --experimental-strip-types --test tests/match-outcome.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler \
+  spacetimedb/src/sim/match-outcome.ts
+```
+
+**Outstanding gates:** match deadline module build, actual scheduled reducer/one-shot lifecycle, integrated 2-client results and Clock behavior, serialized final scoreboard subscriptions, kill-bounty accounting, player surrender flow (not added here), and real-match balance. No Cloud account/database was used.
