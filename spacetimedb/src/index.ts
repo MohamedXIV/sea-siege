@@ -4,6 +4,7 @@ import spacetimedb, { motionSchedule, constructionSchedule, economySchedule } fr
 export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
+import { nextWorkshopUpgrade } from "./sim/workshop.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import {
@@ -501,6 +502,12 @@ export const demolishStructure = spacetimedb.reducer(
     if (!world) throw new Error("Missing authoritative world");
     const refund = Math.floor(definition.cost * (target.complete ? 0.5 : 0.75));
     let newSalvage = creditSalvage(member.salvage, refund);
+    // An uncompleted tier upgrade is refunded if the Workshop is demolished.
+    // The pending paid work is deleted with the same structure transaction.
+    if (target.kind === "workshop" && target.upgradeRemainingUs > 0n) {
+      const pending = nextWorkshopUpgrade(target.level);
+      if (pending) newSalvage = creditSalvage(newSalvage, pending.cost);
+    }
     const removedYards = new Set<bigint>();
     if (target.kind === "shipyard") removedYards.add(target.id);
     if (newSalvage > 0xffffffff) throw new Error("Salvage overflow");
@@ -527,6 +534,10 @@ export const demolishStructure = spacetimedb.reducer(
       })();
       if (!stillSupported) {
         if (row.kind === "shipyard") removedYards.add(row.id);
+        if (row.kind === "workshop" && row.upgradeRemainingUs > 0n) {
+          const pending = nextWorkshopUpgrade(row.level);
+          if (pending) newSalvage = creditSalvage(newSalvage, pending.cost);
+        }
         ctx.db.structure.id.delete(row.id);
         for (const pending of ctx.db.constructionSchedule.structureId.filter(row.id)) {
           ctx.db.constructionSchedule.scheduledId.delete(pending.scheduledId);
