@@ -396,7 +396,12 @@ export const advanceMatchSimulation = spacetimedb.reducer(
         continue;
       }
       const stepped = advanceShipOnRoute(
-        vessel, route.cellPath, route.cursor, world.mapCells, seconds,
+        {
+          x: vessel.x, y: vessel.y,
+          velocityX: vessel.velocityX, velocityY: vessel.velocityY,
+          hullAngleDeg: vessel.hullAngleDeg,
+        },
+        route.cellPath, route.cursor, world.mapCells, seconds,
       );
       if (stepped.arrived) {
         ctx.db.shipRoute.shipId.delete(vessel.id);
