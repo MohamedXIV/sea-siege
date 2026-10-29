@@ -9,6 +9,7 @@
 ## Project planning
 
 - [Roadmap and delivery gates](./ROADMAP.md)
+- [ADR-0001: Server-authoritative motion and smooth ship rendering](./docs/adr/0001-multiplayer-motion-tickrate.md)
 - [Master implementation epic (#1)](https://github.com/MohamedXIV/sea-siege/issues/1)
 - [All implementation issues](https://github.com/MohamedXIV/sea-siege/issues)
 
