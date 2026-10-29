@@ -75,6 +75,10 @@ export const createMatch = spacetimedb.reducer(
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       factionKey: factionKey(created.id, 0),
+    });
+    ctx.db.factionState.insert({
+      id: 0n, matchId: created.id, slot: 0,
+      factionKey: factionKey(created.id, 0), controller: "human",
       salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
@@ -121,17 +125,20 @@ export const joinMatch = spacetimedb.reducer(
   (ctx, { matchId }) => {
     const lobby = ctx.db.match.id.find(matchId);
     if (!lobby || lobby.phase !== "lobby") throw new Error("Lobby unavailable");
-    const occupied = new Set<number>();
+    const occupied = new Set(Array.from(ctx.db.factionState.matchId.filter(matchId))
+      .map(row => row.slot));
     for (const member of ctx.db.matchMember.matchId.filter(matchId)) {
       if (member.identity.isEqual(ctx.sender)) return; // reconnect / idempotent join
-      occupied.add(member.slot);
     }
     const slot = Array.from({ length: lobby.maxSlots }, (_, index) => index).find(index => !occupied.has(index));
     if (slot === undefined) throw new Error("Lobby full");
     ctx.db.matchMember.insert({
       id: 0n, matchId, identity: ctx.sender, slot,
       factionKey: factionKey(matchId, slot),
-      salvage: CONSTRUCTION_RULES.startingSalvage,
+    });
+    ctx.db.factionState.insert({
+      id: 0n, matchId, slot, factionKey: factionKey(matchId, slot),
+      controller: "human", salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
@@ -177,9 +184,8 @@ export const startMatch = spacetimedb.reducer(
     const lobby = ctx.db.match.id.find(matchId);
     if (!lobby || lobby.phase !== "lobby") throw new Error("Lobby unavailable");
     if (!lobby.host.isEqual(ctx.sender)) throw new Error("Only the host may start");
-    let count = 0;
-    for (const _member of ctx.db.matchMember.matchId.filter(matchId)) count++;
-    if (count < 2) throw new Error("Need at least two actual members");
+    const occupiedFactions = Array.from(ctx.db.factionState.matchId.filter(matchId));
+    if (occupiedFactions.length < 2) throw new Error("Need at least two actual members");
     const startUs = ctx.timestamp.microsSinceUnixEpoch;
     ctx.db.match.id.update({ ...lobby, phase: "active", startedAtUs: startUs });
     const deadlineUs = deadlineMicroseconds(startUs);
@@ -204,7 +210,10 @@ export const issueShipOrder = spacetimedb.reducer(
     if (!current) throw new Error("Ship unavailable");
     const seat = Array.from(ctx.db.matchMember.matchId.filter(current.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!mayControlFaction(seat?.slot, current.ownerSlot, seat?.eliminated ?? true))
+    const faction = Array.from(ctx.db.factionState.matchId.filter(current.matchId))
+      .find(row => row.slot === current.ownerSlot);
+    if (!mayControlFaction(seat?.slot, current.ownerSlot,
+      faction?.eliminated ?? true) || faction?.controller !== "human")
       throw new Error("Cannot command another player's ship");
     const match = ctx.db.match.id.find(current.matchId);
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
@@ -316,7 +325,10 @@ export const stopShip = spacetimedb.reducer(
     if (!current) throw new Error("Ship unavailable");
     const seat = Array.from(ctx.db.matchMember.matchId.filter(current.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!mayControlFaction(seat?.slot, current.ownerSlot, seat?.eliminated ?? true))
+    const faction = Array.from(ctx.db.factionState.matchId.filter(current.matchId))
+      .find(row => row.slot === current.ownerSlot);
+    if (!mayControlFaction(seat?.slot, current.ownerSlot,
+      faction?.eliminated ?? true) || faction?.controller !== "human")
       throw new Error("Cannot command another player's ship");
     const lobby = ctx.db.match.id.find(current.matchId);
     if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
@@ -476,7 +488,9 @@ export const placeStructure = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated) throw new Error("Cannot construct in another player's match");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated) throw new Error("Cannot construct in another player's match");
     const definition = structureDefinition(kind);
     if (!definition || kind === "command_core") throw new Error("Unknown or protected structure kind");
     const world = ctx.db.worldConfig.matchId.find(matchId);
@@ -487,7 +501,7 @@ export const placeStructure = spacetimedb.reducer(
     const existing = Array.from(ctx.db.structure.matchId.filter(matchId));
     const error = validateStructurePlacement({
       kind: kind as StructureKind, ownerSlot: member.slot, gridX, gridY,
-      salvage: member.salvage, mapCells: world.mapCells, terrain,
+      salvage: faction.salvage, mapCells: world.mapCells, terrain,
       structures: existing.map(row => ({ ...row, kind: row.kind as StructureKind })),
       deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
         .map(row => ({ x: row.gridX, y: row.gridY })),
@@ -496,7 +510,7 @@ export const placeStructure = spacetimedb.reducer(
     });
     if (error) throw new Error(error);
     // A thrown insertion/schedule error rolls back BOTH cost and placement.
-    ctx.db.matchMember.id.update({ ...member, salvage: member.salvage - definition.cost });
+    ctx.db.factionState.id.update({ ...faction, salvage: faction.salvage - definition.cost });
     const deadline = ctx.timestamp.microsSinceUnixEpoch + BigInt(definition.buildMs) * 1000n;
     const placed = ctx.db.structure.insert({
       id: 0n, matchId, ownerSlot: member.slot, kind,
@@ -525,13 +539,16 @@ export const demolishStructure = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(target.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || member.slot !== target.ownerSlot) throw new Error("Cannot demolish another faction's structure");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(target.matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated || faction.slot !== target.ownerSlot)
+      throw new Error("Cannot demolish another faction's structure");
     const definition = structureDefinition(target.kind);
     if (!definition) throw new Error("Unknown stored structure kind");
     const world = ctx.db.worldConfig.matchId.find(target.matchId);
     if (!world) throw new Error("Missing authoritative world");
     const refund = Math.floor(definition.cost * (target.complete ? 0.5 : 0.75));
-    let newSalvage = creditSalvage(member.salvage, refund);
+    let newSalvage = creditSalvage(faction.salvage, refund);
     // An uncompleted tier upgrade is refunded if the Workshop is demolished.
     // The pending paid work is deleted with the same structure transaction.
     if (target.kind === "workshop" && target.upgradeRemainingUs > 0n) {
@@ -595,7 +612,7 @@ export const demolishStructure = spacetimedb.reducer(
       newSalvage = creditSalvage(newSalvage, definition.cost);
       ctx.db.productionOrder.id.delete(order.id);
     }
-    ctx.db.matchMember.id.update({ ...member, salvage: newSalvage });
+    ctx.db.factionState.id.update({ ...faction, salvage: newSalvage });
   },
 );
 
