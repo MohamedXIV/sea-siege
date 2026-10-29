@@ -612,4 +612,4 @@ export {
   repairStructure, repairShip, upgradeWorkshop,
 } from "./workshop-reducers.ts";
 
-export { fireWeapon, advanceCombat } from "./combat-reducers.ts";
+export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
