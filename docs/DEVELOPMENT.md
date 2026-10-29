@@ -172,3 +172,33 @@ tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler
 ```
 
 **Real module execution still deferred:** `spacetimedb/src/index.test.ts` has prepared but unexecuted tests for owner, cost, range, server-timed progress, support loss and refunds. A real `spacetime build`, datastore harness run, publisher, generated client bindings and two-client E2E remain outstanding and must gate issue closure.
+
+
+## Combat Foundation — server-authoritative projectile slice (29 October 2026)
+
+The archived Gemini balance is used for the initial **Scout / Gunboat / Siege / Cannon** weapons in `spacetimedb/src/sim/combat.ts`: ranges **5.5 / 7.2 / 11 / 8.5** cells, damage **18 / 44 / 115 / 48**, cooldowns **950 / 1350 / 2600 / 1400 ms**, projectile speeds **18 / 15 / 12 / 16 cells/s**. Ship armor is **2 / 7 / 12**; ship damage versus structures uses the weapon-specific multiplier (Siege 1.65). Siege has **1.35-cell splash radius**. These are balance inputs, not validated multiplayer feel.
+
+The **pure combat rules** provide:
+- launch-time velocity/heading and finite range, no target-ID homing;
+- swept server impact checks against **actual ship/structure positions at impact time**, stable earliest-hit tie-breaking, friendly-fire exclusion, armor and bounded HP loss;
+- splash against actual affected enemy bodies, without re-hitting intact platform deck cells already covered by mounted structures;
+- terrain line-of-sight and source weapon range/vision checks. Full fog-of-war lifecycle and identity-visible projections are still #13.
+
+The **real SpacetimeDB module source** adds private `projectile` and lazy `combat_schedule` rows, signed microsecond last-fired stamps, turret orientation and match elimination/winner state. `fireWeapon` requires caller ownership, active match, a living source, actual server-observed enemy in source vision, actual weapon range and legal cooldown. It **does not accept client-computed damage or spawn positions**. The projectile's launch timestamp and velocity are persisted for eventual visual reconstruction in the authorized client views.
+
+`advanceCombat` is a private 100ms intended scheduled reducer with an explicit internal-caller check and bounded server elapsed time. It evaluates each projectile once per tick in projectile-ID order; on damage it updates HP or deletes destroyed ships/structures and their harvest/navigation/production/one-shot schedules. Surface-deck destruction removes physically unsupported mounted structures, refreshes Core connectivity, and charges **no peaceful demolition refunds**. When a faction loses its Core, its remaining units/buildings lose authority and are cleaned up. When one Core remains, the match records that faction's slot as winner; if none remain, it records a draw (-1). Active economy and movement schedules are shut down after match finish.
+
+**Scope limits:**
+- This is the **first combat slice**. Turrets currently snap to a server-authorized firing bearing; acceleration/turn-slew and independent target tracking are still needed. Terrain LoS currently uses 4 samples/cell; robust pixel-perfect obstruction and full shared-faction sensing remain #11/#13.
+- Private projectiles cannot yet appear in a secure enemy-inclusive client view. Launch/impact effects and final UI/HUD are **not implemented**; the UI design gate #15 remains.
+- Sudden-death timer, deterministic multi-client damage digests, armor balancing, projectile collision against moving targets within the **same** scheduler time slice, bot target selection, performance benchmarking, and SpacetimeDB module compile/publish remain pending.
+- Projectile cap is **512 per match**; there is one lazy combat timer per match, not one timer per shot. Full runtime performance is unmeasured.
+- The module is **NOT integration-tested**. The official test harness cases in `index.test.ts` are prepared for ownership, cooldowns, evasion, damage and Core victory, but have not been executed due to missing SDK/CLI dependency availability.
+
+Standalone local smoke tests:
+```bash
+node --experimental-strip-types --test tests/combat.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext \
+  --moduleResolution bundler --allowImportingTsExtensions \
+  spacetimedb/src/sim/combat.ts
+```
