@@ -6,11 +6,12 @@ import { matchStillActive } from "./sim/match-outcome.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { isNavigationCellBlocked } from "./sim/collision.ts";
 import { structureDefinition, validateStructurePlacement, type StructureKind } from "./sim/construction.ts";
-import { ECONOMY_RULES, shipDefinition, debitSalvage, inRange, type ShipKind } from "./sim/economy.ts";
+import { ECONOMY_RULES, debitSalvage, type ShipKind } from "./sim/economy.ts";
 import { COMBAT_RULES, canFire, createProjectile, terrainLineOfSight, weaponDefinition, withinRange, type WeaponKind } from "./sim/combat.ts";
 import { angularDifference, desiredBearing, turretAligned } from "./sim/turret-aim.ts";
 import { SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts";
+import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
 
 /**
  * One server-owned strategic scheduler per active match.
@@ -206,22 +207,28 @@ export const advanceBots = spacetimedb.reducer(
         if (intent.type === "harvest") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
           const node = ctx.db.salvageNode.id.find(intent.nodeId);
-          const spec = vessel ? shipDefinition(vessel.kind) : null;
-          if (!vessel || vessel.ownerSlot !== bot.slot || vessel.matchId !== match.id ||
-              !node || node.matchId !== match.id || node.remaining <= 0 ||
-              !knownDeposits.some(seen => seen.id === node.id) ||
-              !spec || spec.harvestPerSecond <= 0 || ctx.db.harvestOrder.shipId.find(vessel.id) ||
-              !inRange({ x: vessel.x, y: vessel.y },
-                { x: node.gridX + 0.5, y: node.gridY + 0.5 }, ECONOMY_RULES.harvestRangeCells)) continue;
-          ctx.db.shipRoute.shipId.delete(vessel.id);
-          ctx.db.harvestOrder.insert({
-            shipId: vessel.id, matchId: match.id, nodeId: node.id, assignedAtUs: nowUs,
+          const result = dispatchHarvest({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: faction.eliminated },
+            ship: vessel ?? null, node: node ?? null, nowUs,
+            observable: knownDeposits.some(seen => seen.id === intent.nodeId),
+          }, {
+            clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
+            upsertOrder: order => {
+              const current = ctx.db.harvestOrder.shipId.find(order.shipId);
+              if (current) ctx.db.harvestOrder.shipId.update({ ...current, ...order });
+              else ctx.db.harvestOrder.insert(order);
+            },
+            stopForHarvest: (id, revision) => {
+              if (!vessel) throw new Error("Harvest ship disappeared in transaction");
+              ctx.db.ship.id.update({
+                ...vessel, velocityX: 0, velocityY: 0,
+                targetX: vessel.x, targetY: vessel.y,
+                revision, updatedAt: ctx.timestamp,
+              });
+            },
           });
-          ctx.db.ship.id.update({
-            ...vessel, velocityX: 0, velocityY: 0,
-            targetX: vessel.x, targetY: vessel.y,
-            revision: vessel.revision + 1n, updatedAt: ctx.timestamp,
-          });
+          if (!result.ok) continue;
         } else if (intent.type === "move") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
           if (!vessel || vessel.ownerSlot !== bot.slot || vessel.matchId !== match.id ||
@@ -302,21 +309,23 @@ export const advanceBots = spacetimedb.reducer(
         } else if (intent.type === "enqueue") {
           const yard = ctx.db.structure.id.find(intent.yardId);
           const factionNow = ctx.db.factionState.id.find(faction.id);
-          const spec = shipDefinition(intent.shipKind);
-          if (!yard || yard.matchId !== match.id || yard.ownerSlot !== bot.slot ||
-              yard.kind !== "shipyard" || !yard.complete || !yard.connected || yard.hp <= 0 ||
-              !factionNow || factionNow.eliminated || !spec ||
-              Array.from(ctx.db.productionOrder.yardId.filter(yard.id)).length >=
-                Math.min(ECONOMY_RULES.shipyardQueueLimit,difficultyRule.queueLimit) ||
-              factionNow.salvage < spec.cost) continue;
-          ctx.db.factionState.id.update({
-            ...factionNow, salvage: debitSalvage(factionNow.salvage,spec.cost),
+          if (!factionNow) continue;
+          const result = dispatchProduction({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: factionNow.eliminated },
+            yard: yard ?? null, kind: intent.shipKind, salvage: factionNow.salvage,
+            queued: Array.from(ctx.db.productionOrder.yardId.filter(intent.yardId)).length,
+            queueCap: Math.min(ECONOMY_RULES.shipyardQueueLimit, difficultyRule.queueLimit),
+            nowUs,
+          }, {
+            setBalance: salvage => {
+              ctx.db.factionState.id.update({ ...factionNow, salvage });
+            },
+            enqueue: order => {
+              ctx.db.productionOrder.insert({ id: 0n, ...order });
+            },
           });
-          ctx.db.productionOrder.insert({
-            id: 0n, matchId: match.id, yardId: yard.id, ownerSlot: bot.slot,
-            shipKind: intent.shipKind, remainingUs: BigInt(spec.buildMs)*1_000n,
-            queuedAtUs: nowUs, startedAtUs: 0n,
-          });
+          if (!result.ok) continue;
         } else if (intent.type === "build") {
           const factionNow = ctx.db.factionState.id.find(faction.id);
           const def = structureDefinition(intent.kind);
