@@ -1,6 +1,7 @@
 import { t } from "spacetimedb/server";
 import spacetimedb, { economySchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
+import { matchStillActive } from "./sim/match-outcome.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
   ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
@@ -16,7 +17,7 @@ export const orderHarvest = spacetimedb.reducer(
     if (!vessel) throw new Error("Ship unavailable");
     if (!vessel.owner.isEqual(ctx.sender)) throw new Error("Cannot command another player's ship");
     const matchRow = ctx.db.match.id.find(vessel.matchId);
-    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const definition = shipDefinition(vessel.kind);
     if (!definition || definition.harvestPerSecond === 0) throw new Error("Ship cannot harvest");
     const node = ctx.db.salvageNode.id.find(nodeId);
@@ -52,7 +53,7 @@ export const enqueueShip = spacetimedb.reducer(
     const yard = ctx.db.structure.id.find(shipyardId);
     if (!yard || yard.kind !== "shipyard") throw new Error("Shipyard unavailable");
     const matchRow = ctx.db.match.id.find(yard.matchId);
-    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(yard.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.slot !== yard.ownerSlot) throw new Error("Not your shipyard");
@@ -80,7 +81,7 @@ export const cancelShipProduction = spacetimedb.reducer(
     const order = ctx.db.productionOrder.id.find(orderId);
     if (!order) throw new Error("Production order unavailable");
     const matchRow = ctx.db.match.id.find(order.matchId);
-    if (!matchRow || matchRow.phase !== "active") throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(order.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.slot !== order.ownerSlot) throw new Error("Not your production order");
@@ -102,7 +103,7 @@ export const advanceEconomy = spacetimedb.reducer(
     const timer = ctx.db.economySchedule.scheduledId.find(arg.scheduledId);
     if (!timer) return;
     const matchRow = ctx.db.match.id.find(timer.matchId);
-    if (!matchRow || matchRow.phase !== "active") {
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) {
       ctx.db.economySchedule.scheduledId.delete(timer.scheduledId);
       return;
     }
