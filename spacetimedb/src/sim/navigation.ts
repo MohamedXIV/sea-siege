@@ -146,3 +146,45 @@ export function findTerrainPath(
   }
   return null;
 }
+
+export type EncodedTerrainChunk = Readonly<{
+  chunkX: number;
+  chunkY: number;
+  terrain: readonly number[];
+}>;
+
+/** Reconstitutes the authoritative map used by route validation from DB chunks. */
+export function decodeTerrainChunks(
+  mapCells: number,
+  chunks: readonly EncodedTerrainChunk[],
+  chunkSize = 16,
+): Uint8Array {
+  if (!Number.isInteger(mapCells) || mapCells < 2 || !Number.isInteger(chunkSize) || chunkSize < 1) {
+    throw new RangeError("invalid terrain dimensions");
+  }
+  const expectedCount = Math.ceil(mapCells / chunkSize);
+  if (chunks.length !== expectedCount * expectedCount) throw new Error("incomplete terrain chunk set");
+  const result = new Uint8Array(mapCells * mapCells);
+  const seen = new Uint8Array(expectedCount * expectedCount);
+  for (const chunk of chunks) {
+    const { chunkX, chunkY, terrain } = chunk;
+    if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY) ||
+        chunkX < 0 || chunkY < 0 || chunkX >= expectedCount || chunkY >= expectedCount ||
+        terrain.length !== chunkSize * chunkSize) throw new Error("invalid terrain chunk");
+    const chunkId = chunkY * expectedCount + chunkX;
+    if (seen[chunkId]) throw new Error("duplicate terrain chunk");
+    seen[chunkId] = 1;
+    for (let localY = 0; localY < chunkSize; localY++) {
+      for (let localX = 0; localX < chunkSize; localX++) {
+        const x = chunkX * chunkSize + localX;
+        const y = chunkY * chunkSize + localY;
+        const tile = terrain[localY * chunkSize + localX]!;
+        if (!Number.isInteger(tile) || tile < TERRAIN.DEEP_WATER || tile > TERRAIN.WRECKAGE_SHOAL) {
+          throw new Error("unknown terrain value");
+        }
+        if (x < mapCells && y < mapCells) result[y * mapCells + x] = tile;
+      }
+    }
+  }
+  return result;
+}
