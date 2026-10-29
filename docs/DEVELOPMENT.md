@@ -279,3 +279,14 @@ Both `myShips` and the new `myFactionStates` are identity-filtered views joining
 All construction, repair, resource income, shipyard production, combat elimination and Naval Dominance score now read/write `faction_state`. Client commands still require a valid human membership and a non-eliminated human-controlled faction. See `docs/BOT_SERVER_INTEGRATION.md` for the shared-validator and strategic scheduler work still needed.
 
 Pure Bot seat tests `tests/bot-seats.test.mjs`: **4/4 passed** on Node 22.16 with strict standalone TypeScript (5.8.3) passing. These do **not** prove the integrated reducers compile or that Bots are playable. No UI/HUD edits were made.
+
+
+## Active Strategic Bot Scheduler — 29 October 2026
+
+A running match with Bot factions now schedules one internal 1-second `bot_schedule` row. The `advanceBots` source reducer processes only Bots due to think, in faction-slot order, with difficulty-specific intervals/action budgets. Each observation is constructed from server-owned sensor + terrain-LoS visible contacts, discovered deposits, own resources, bounded legal building locations and nearby exploration frontiers.
+
+Bot suggestions can lead to authoritative `harvest_order`, A* `ship_route`, `turret_aim`, projectile, construction and `production_order` rows. Every decision is checked at application time against current ownership, real resource balance and the existing pure movement/build/weapon validators; there are no fake identities or client connections. Finished matches clear the strategic schedule.
+
+**Caveats:** This is real module *source code*, not proof of execution. Server-side transaction orchestration is not yet a fully shared module with human reducer entrypoints, even though physical/balance validation helpers are reused. Complete SpacetimeDB SDK module build, official reducer harness, bot-only headless and 1-human/7-bot live matches remain pending. Full Fog of War/subscription authorization also remains #13.
+
+Standalone `bot-observation` pure tests: **5/5 PASS**, exact Git blobs match locally executed files, strict TypeScript PASS. No UI/HUD changes; owner design review #15 still required.
