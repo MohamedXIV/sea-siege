@@ -139,9 +139,10 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
   }
 
   // Server-validated construction candidates only: no free-build AI cheats.
-  const connected = obs.structures.filter(s => s.complete && s.connected);
-  const shipyards = connected.filter(s => s.kind === 'shipyard');
-  const rigs = connected.filter(s => s.kind === 'salvage_rig');
+  // Count incomplete buildings toward expansion goals so a bot does not
+  // queue duplicate shipyards/rigs while its first project is still building.
+  const shipyards = obs.structures.filter(s => s.kind === 'shipyard');
+  const rigs = obs.structures.filter(s => s.kind === 'salvage_rig');
   const preference: LegalBuildCandidate['kind'][] =
     shipyards.length === 0 ? ['shipyard', 'platform'] :
     rigs.length === 0 ? ['salvage_rig', 'platform', 'cannon'] : ['cannon', 'platform'];
