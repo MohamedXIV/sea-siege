@@ -110,7 +110,8 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     if (!canAdd()) break;
     const weapon = COMBAT_RULES.weapons[ship.kind as WeaponKind];
     if (!weapon) continue;
-    const target = liveEnemies.filter(e => distance(ship.position, e.position) <=
+    const target = liveEnemies.filter(e => distance(ship.position, e.position) > 0 &&
+      distance(ship.position, e.position) <=
       Math.min(weapon.range, weapon.vision) * rule.defenseRangeScale)
       .sort((a, b) => distance(ship.position, a.position) - distance(ship.position, b.position) ||
         sortBigint(a.id, b.id))[0];
