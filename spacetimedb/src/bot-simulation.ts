@@ -13,6 +13,7 @@ import { SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts";
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
+import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-command-dispatch.ts";
 
 /**
  * One server-owned strategic scheduler per active match.
@@ -271,55 +272,90 @@ export const advanceBots = spacetimedb.reducer(
         } else if (intent.type === "aim") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
           const weapon = vessel ? weaponDefinition(vessel.kind) : null;
-          if (!vessel || vessel.ownerSlot !== bot.slot || vessel.matchId !== match.id ||
-              vessel.hp <= 0 || !weapon || !Number.isFinite(intent.angleDeg)) continue;
-          const validTarget = visibleEnemies.some(enemy => {
-            const distance = Math.hypot(enemy.position.x-vessel.x,enemy.position.y-vessel.y);
+          if (!vessel || !weapon) continue;
+          const allowedBearing = visibleEnemies.some(enemy => {
+            const distance = Math.hypot(enemy.position.x - vessel.x,
+              enemy.position.y - vessel.y);
             return distance > 0 && distance <= Math.min(weapon.range,weapon.vision) &&
               Math.abs(angularDifference(intent.angleDeg,
                 desiredBearing({x:vessel.x,y:vessel.y},enemy.position))) <= 0.001;
           });
-          if (!validTarget || turretAligned(vessel.turretAngleDeg, intent.angleDeg)) continue;
-          const existing = Array.from(ctx.db.turretAim.matchId.filter(match.id))
-            .find(row => row.sourceType === "ship" && row.sourceId === vessel.id);
-          if (existing) ctx.db.turretAim.id.update({ ...existing, desiredAngleDeg: intent.angleDeg });
-          else ctx.db.turretAim.insert({
-            id: 0n, matchId: match.id, sourceType: "ship", sourceId: vessel.id,
-            desiredAngleDeg: intent.angleDeg,
+          if (!allowedBearing) continue;
+          const source: WeaponSource = {
+            type: "ship", id: vessel.id, matchId: vessel.matchId,
+            ownerSlot: vessel.ownerSlot, kind: vessel.kind, x: vessel.x, y: vessel.y,
+            hp: vessel.hp, complete: true, connected: true,
+            turretAngleDeg: vessel.turretAngleDeg,
+            lastFiredAtUs: vessel.lastFiredAtUs,
+          };
+          const result = dispatchAim({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: faction.eliminated },
+            source, desiredAngleDeg: intent.angleDeg,
+          }, {
+            clearAim: (type,id) => {
+              for (const row of Array.from(ctx.db.turretAim.matchId.filter(match.id)))
+                if (row.sourceType === type && row.sourceId === id)
+                  ctx.db.turretAim.id.delete(row.id);
+            },
+            upsertAim: (type,id,angle) => {
+              const old = Array.from(ctx.db.turretAim.matchId.filter(match.id))
+                .find(row => row.sourceType === type && row.sourceId === id);
+              if (old) ctx.db.turretAim.id.update({ ...old, desiredAngleDeg: angle });
+              else ctx.db.turretAim.insert({
+                id: 0n, matchId: match.id, sourceType: type, sourceId: id,
+                desiredAngleDeg: angle,
+              });
+            },
+            ensureCombatTick: startCombat,
           });
-          startCombat();
+          if (!result.ok) continue;
         } else if (intent.type === "fire") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
-          const weapon = vessel ? weaponDefinition(vessel.kind) : null;
+          if (!vessel) continue;
           const seen = visibleEnemies.find(row =>
             row.id === intent.targetId && row.entityType === intent.targetType);
-          if (!vessel || vessel.ownerSlot !== bot.slot || vessel.matchId !== match.id ||
-              vessel.hp <= 0 || !weapon || !seen ||
-              (vessel.lastFiredAtUs !== -1n &&
-                !canFire(nowUs, vessel.lastFiredAtUs, weapon.cooldownMs)) ||
-              Array.from(ctx.db.projectile.matchId.filter(match.id)).length >=
-                COMBAT_RULES.maxProjectilesPerMatch) continue;
-          const target = intent.targetType === "ship"
-            ? ctx.db.ship.id.find(intent.targetId) : ctx.db.structure.id.find(intent.targetId);
-          if (!target || target.matchId !== match.id ||
-              target.ownerSlot === bot.slot || target.hp <= 0) continue;
-          const destination = { x: seen.position.x, y: seen.position.y };
-          const origin = { x: vessel.x, y: vessel.y };
-          if (!withinRange(origin,destination,weapon.range) ||
-              !withinRange(origin,destination,weapon.vision) ||
-              !terrainLineOfSight(origin,destination,terrain,world.mapCells) ||
-              !turretAligned(vessel.turretAngleDeg,desiredBearing(origin,destination))) continue;
-          const shot = createProjectile(origin,destination,vessel.kind as WeaponKind,bot.slot);
-          ctx.db.ship.id.update({ ...vessel, lastFiredAtUs: nowUs, updatedAt: ctx.timestamp });
-          ctx.db.projectile.insert({
-            id: 0n, matchId: match.id, sourceFaction: bot.slot,
-            sourceId: vessel.id, sourceType: "ship", firedAtUs: nowUs,
-            x: shot.x, y: shot.y, vx: shot.vx, vy: shot.vy,
-            damage: shot.damage, splash: shot.splash,
-            structureMultiplier: shot.structureMultiplier,
-            remainingRange: shot.remainingRange,
+          if (!seen) continue;
+          const enemyShip = intent.targetType === "ship" ?
+            ctx.db.ship.id.find(intent.targetId) : undefined;
+          const enemyStructure = intent.targetType === "structure" ?
+            ctx.db.structure.id.find(intent.targetId) : undefined;
+          const source: WeaponSource = {
+            type: "ship", id: vessel.id, matchId: vessel.matchId,
+            ownerSlot: vessel.ownerSlot, kind: vessel.kind, x: vessel.x, y: vessel.y,
+            hp: vessel.hp, complete: true, connected: true,
+            turretAngleDeg: vessel.turretAngleDeg,
+            lastFiredAtUs: vessel.lastFiredAtUs,
+          };
+          const target = enemyShip
+            ? { id: enemyShip.id, matchId: enemyShip.matchId,
+                ownerSlot: enemyShip.ownerSlot, type: "ship" as const,
+                x: enemyShip.x, y: enemyShip.y, hp: enemyShip.hp }
+            : enemyStructure
+              ? { id: enemyStructure.id, matchId: enemyStructure.matchId,
+                  ownerSlot: enemyStructure.ownerSlot, type: "structure" as const,
+                  x: enemyStructure.gridX + enemyStructure.width / 2,
+                  y: enemyStructure.gridY + enemyStructure.height / 2,
+                  hp: enemyStructure.hp }
+              : null;
+          const result = dispatchFire({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: faction.eliminated },
+            source, target, nowUs, terrain, mapCells: world.mapCells,
+            targetVisible: Boolean(seen && target),
+            projectileCount: Array.from(ctx.db.projectile.matchId.filter(match.id)).length,
+          }, {
+            markFired: (_,atUs) => {
+              ctx.db.ship.id.update({
+                ...vessel, lastFiredAtUs: atUs, updatedAt: ctx.timestamp,
+              });
+            },
+            insertProjectile: shot => {
+              ctx.db.projectile.insert({ id: 0n, ...shot });
+            },
+            ensureCombatTick: startCombat,
           });
-          startCombat();
+          if (!result.ok) continue;
         } else if (intent.type === "enqueue") {
           const yard = ctx.db.structure.id.find(intent.yardId);
           const factionNow = ctx.db.factionState.id.find(faction.id);
