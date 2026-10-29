@@ -274,6 +274,8 @@ export const advanceCombat = spacetimedb.reducer(
         ctx.db.economySchedule.scheduledId.delete(job.scheduledId);
       for (const job of Array.from(ctx.db.motionSchedule.matchId.filter(matchId)))
         ctx.db.motionSchedule.scheduledId.delete(job.scheduledId);
+      for (const job of Array.from(ctx.db.botSchedule.matchId.filter(matchId)))
+        ctx.db.botSchedule.scheduledId.delete(job.scheduledId);
       for (const job of Array.from(ctx.db.projectile.matchId.filter(matchId)))
         ctx.db.projectile.id.delete(job.id);
       for (const job of Array.from(ctx.db.turretAim.matchId.filter(matchId)))
