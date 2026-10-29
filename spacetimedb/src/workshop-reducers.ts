@@ -2,6 +2,7 @@ import { t } from "spacetimedb/server";
 import spacetimedb from "./schema.ts";
 import { structureDefinition } from "./sim/construction.ts";
 import { debitSalvage, shipDefinition } from "./sim/economy.ts";
+import { matchStillActive } from "./sim/match-outcome.ts";
 import {
   calculateRepair, maximumStructureHp, nextWorkshopUpgrade,
   withinWorkshopRange,
@@ -18,7 +19,7 @@ export const repairStructure = spacetimedb.reducer(
     const workshop = ctx.db.structure.id.find(workshopId);
     if (!workshop || workshop.kind !== "workshop") throw new Error("Workshop unavailable");
     const match = ctx.db.match.id.find(workshop.matchId);
-    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
@@ -53,7 +54,7 @@ export const repairShip = spacetimedb.reducer(
     const workshop = ctx.db.structure.id.find(workshopId);
     if (!workshop || workshop.kind !== "workshop") throw new Error("Workshop unavailable");
     const match = ctx.db.match.id.find(workshop.matchId);
-    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
@@ -87,7 +88,7 @@ export const upgradeWorkshop = spacetimedb.reducer(
     const workshop = ctx.db.structure.id.find(workshopId);
     if (!workshop || workshop.kind !== "workshop") throw new Error("Workshop unavailable");
     const match = ctx.db.match.id.find(workshop.matchId);
-    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.slot !== workshop.ownerSlot) throw new Error("Not your workshop");
