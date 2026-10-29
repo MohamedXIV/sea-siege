@@ -121,3 +121,16 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - Demolition and collapsed support refund paid but uncompleted Workshop upgrades once. Prepared official harness tests in `index.test.ts` cover repairs, access control, missing support, time progression and refunds.
 
 **Not verified:** actual SpacetimeDB module typecheck/build or V8 reducer execution, scheduled tick integration, two independent client subscriptions, combat damage input, UI. Keep the relevant P0/P1 issues and Draft PR #20 open until live verification. Workshop tier balancing is **new provisional design**, not asserted as a value from Gemini reference files.
+
+
+## Combat Foundation slice — 29 October 2026
+
+**Local, package-free verification:** a matching standalone implementation of the pure `combat.ts` geometry passed **8/8 Node 22 tests** and standalone strict TypeScript. The committed repository `tests/combat.test.mjs` exercises the same eight scenarios. **Important evidence limitation:** the locally executed prototype and GitHub-committed combat source/tests are not byte-identical; the exact committed versions have NOT been re-executed in the current VM. Do not advertise 8/8 as a verified Git HEAD build. The scenarios exercised evasion of fixed-heading shots, swept nearest collision, friendly exclusion, ruin-blocked sight, armor, siege splash, covered support decks and projectile expiry.
+
+**Prepared and committed, but not verified inside SpacetimeDB:**
+- Authoritative `fireWeapon` with real caller authentication, ownership, cooldown, observed-target checks and range, deterministic initial velocity and private launched projectile timestamp.
+- Private per-moving-match `combat_schedule`, internal-only `advanceCombat`, authoritative HP/destroyed unit cleanup, support collapse and Core-based victory/draw.
+- The `ship`, `structure`, `match_member`, `match` and `projectile` schemas carry required combat data; all ship/structure constructors now initialize last-fired state (sentinel -1n) and turret bearing.
+- Four new official module-harness cases cover foreign/friendly fire rejection, cooldown, evasion after launch, single resolved damage and Core elimination. These tests are **prepared only**, not executed.
+
+**Remaining release blockers:** exact-HEAD pure Node tests, a full `npm install && npm run typecheck && npm test` under `spacetimedb/`, `spacetime build/publish`, scheduled tick and fog-security proof on a real module, two independent authoritative clients, client-generated bindings and Phaser renderer, and benchmarks of 2–8 faction matches. No Cloud credentials or Cloud database were touched. All Issues stay open until acceptance evidence is actually obtained.
