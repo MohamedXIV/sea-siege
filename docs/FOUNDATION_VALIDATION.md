@@ -87,3 +87,19 @@ Do not move `worldConfig`, `worldChunk`, `worldSpawn`, `salvageNode`, or `ship` 
 - Prepared (not executed) actual-module harness tests for construction price, authorization, completion timing, support removal, timer cancellation and refunds.
 
 **Not yet complete:** actual module build/publish, datastore/scheduler execution, 2-browser subscriptions and anti-cheat testing; optimized occupancy indexes for large match sizes, structural damage from combat, repair, passive salvage income, production queues, fog-visible map projections, and full connected UI. No design/implementation of final UI was started (issue #15 review gate).
+
+
+## Salvage + production batch — verified and deferred gates (29 October 2026)
+
+**Locally executed, actual evidence:**
+- `node --experimental-strip-types --test tests/economy.test.mjs` — **9/9 PASS**; strict TypeScript standalone check of `sim/economy.ts` — **PASS**.
+- The pure unit-test exercise uses a local compatible `collision.ts` implementation while the GitHub branch includes its own tested collision implementation from an earlier batch; **this is not a SpacetimeDB end-to-end test**.
+- Git blob SHA verified exact content of uploaded locally tested files: `economy.ts` `da638481e2ac29620d8263f456e23701aba80235`; `economy.test.mjs` `61ab359021d4f8801a83a3b214a6b4f287096d20`.
+- Tests check reference balance, u32 overflow and insufficient funds, conserving shared salvage, regeneration, rig bonus depletion, paused FIFO work, 5s delayed-tick cap, and launch positions clear of terrain/buildings/other hulls.
+
+**Prepared in real SpacetimeDB source, but NOT executed:**
+- Private match-scoped `harvest_order`, `production_order` and one-per-active-match `economy_schedule` tables in `schema.ts`; protected periodic `advanceEconomy`, `orderHarvest`, `enqueueShip`, `cancelShipProduction` reducers in `economy-reducers.ts`.
+- The server ledger computes node regen, Core/Rig passive income, per-ship harvest, deterministic FIFO ship production and one-time ship row insert + paid queue removal. Paid jobs pause when Shipyard offline or launch location blocked and are refunded if user demolition/collapse destroys the Shipyard.
+- `index.test.ts` includes additional **unexecuted** module-harness cases for internal-only economy ticks, range/owner restrictions, no pre-enqueue production time, FIFO launches, cancellation/refunds and incomplete rigs.
+
+**Release blockers:** no actual `npm install`, `spacetime build`, V8 module execution, scheduled clock run, generated bindings, independent client connections, or live authorization/visibility audit. Source validity at SDK level and 2-player operation are **not proven**; keep #3/#4/#9/#17 open. Workshop repair/upgrades and client-visible authorized production state are still outstanding. The UI design gate #15 remains intact.
