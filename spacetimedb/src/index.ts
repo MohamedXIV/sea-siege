@@ -218,6 +218,7 @@ export const createMatch = spacetimedb.reducer(
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       salvage: CONSTRUCTION_RULES.startingSalvage,
     });
+    const initial = world.spawns[0]!;
     for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
       const definition = CONSTRUCTION_RULES.definitions[base.kind];
       ctx.db.structure.insert({
@@ -228,7 +229,6 @@ export const createMatch = spacetimedb.reducer(
         completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
       });
     }
-    const initial = world.spawns[0]!;
     // The launch vessel must NOT spawn inside its solid 3×3 Command Core.
     const initialX = initial.gridX - 1.5;
     const initialY = initial.gridY + 1.5;
