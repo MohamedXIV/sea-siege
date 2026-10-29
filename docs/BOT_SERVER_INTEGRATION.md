@@ -139,3 +139,18 @@ The scheduler interprets and **revalidates** every proposed intent against curre
 - `tests/bot-observation.test.mjs`: `8e54161148e3b85e9bf21ab8f8ccae47fdb79319`
 
 **Prepared but not executed:** official SpacetimeDB module-harness tests for internal-only strategic tick, one shared timer for 2–7 Bot seats, zero fake human memberships, human inability to control Bot fleets, sensor-hidden contact denial, resource conservation and bot-timer cleanup at victory. The actual 1-human + 7-Bot scheduled loop, headless Bot-only match, fog subscription security, full SDK compile/build, performance and two-client gameplay **are NOT VERIFIED**. Regenerate bindings and run the SDK test harness before calling bots playable. The UI/HUD review gate #15 remains intact.
+
+
+## Phase 4, slice A — shared human/Bot Harvest and Shipyard transaction dispatcher (30 October 2026)
+
+`spacetimedb/src/sim/command-dispatch.ts` is the first **actual shared command mutation path**, not merely a second use of physics helpers. Both authenticated human reducers (`economy-reducers.ts`) and the internal Bot scheduler (`bot-simulation.ts`) now invoke:
+- `dispatchHarvest`: server-provided authenticated faction capability and current ship/node, match+ownership checks, harvest-capable ship, current deposit availability and caller-specific server visibility, server distance check, then the SAME route cancellation, harvest-order insert/update and ship revision/stop operations through transaction-bound ports.
+- `dispatchProduction`: current paid faction balance, real functioning friendly shipyard and queue size/cap, canonical `shipDefinition`, then the SAME single debit and FIFO production insert through transaction-bound ports. Bot difficulty may only **lower**, not exceed, the global queue cap.
+
+Human `orderHarvest` now computes terrain-based source-to-deposit Line of Sight against decoded **server-owned terrain**, rather than accepting a guessed in-range hidden deposit ID with no occlusion check. Bot harvest requires the node already be in its server-projected `knownDeposits`.
+
+Both wrappers keep their distinct security boundary: a human needs real authenticated membership and `controller=human`; a Bot must be reached only from the internal `advanceBots` scheduled reducer with `controller=bot`. Both wrappers already require the active match to be before the deadline. The shared dispatcher itself neither grants a client Identity nor accepts an untrusted claim of ownership. Under SpacetimeDB reducer transactions, an unexpected DB write failure is expected to roll back the entire transaction; **this SDK rollback has not been exercised**.
+
+**Verified locally:** exact file bytes on branch for `command-dispatch.ts` and `tests/command-dispatch.test.mjs` (Git blobs `a1b6b5e4cd7274100b0c486949edf8848ff98997` and `31c45c8093318efa620eb02005c9415fafdc4f6b`) passed **10/10 Node 22 standalone tests**, isolated strict TypeScript passed. The local test environment used a **minimal Economy compatibility stub** matching relevant production costs, harvest range, queue size and helper semantics; this is not a full GitHub module build.
+
+**Remaining:** movement, building, aiming, firing and workshop commands still require an equivalent shared transaction dispatch refactor. The full SpacetimeDB SDK, real `advanceBots` execution, database rollback, authoritative two-client subscription tests, headless bot-only match and deterministic full-match digest are NOT verified. Keep #12/#13/#9 open and PR #20 Draft. No UI/HUD edits.
