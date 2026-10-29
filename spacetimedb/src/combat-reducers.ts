@@ -3,6 +3,7 @@ import { t } from "spacetimedb/server";
 import spacetimedb, { combatSchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
+import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { structureOnline, type StructureKind } from "./sim/construction.ts";
 import { boundedDeltaSeconds } from "./sim/ship-motion.ts";
 import {
@@ -36,7 +37,7 @@ export const aimWeapon = spacetimedb.reducer(
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     if (!member || member.eliminated ||
-        (vessel ? !vessel.owner.isEqual(ctx.sender) : cannon!.ownerSlot !== member.slot))
+        (vessel ? !mayControlFaction(member.slot, vessel.ownerSlot, member.eliminated) : cannon!.ownerSlot !== member.slot))
       throw new Error("Weapon unavailable");
     if (vessel ? vessel.hp <= 0 : (!cannon!.complete || !cannon!.connected || cannon!.hp <= 0))
       throw new Error("Weapon offline");
@@ -78,7 +79,7 @@ export const fireWeapon = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || (vessel ? !vessel.owner.isEqual(ctx.sender) : turret!.ownerSlot !== member.slot))
+    if (!member || member.eliminated || (vessel ? !mayControlFaction(member.slot, vessel.ownerSlot, member.eliminated) : turret!.ownerSlot !== member.slot))
       throw new Error("Weapon unavailable");
     if (vessel ? vessel.hp <= 0 : (!turret!.complete || !turret!.connected || turret!.hp <= 0))
       throw new Error("Weapon offline");
@@ -99,12 +100,9 @@ export const fireWeapon = spacetimedb.reducer(
     const targetMatchId = hostileShip?.matchId ?? hostileStructure?.matchId;
     if (targetMatchId !== matchId || (hostileShip?.hp ?? hostileStructure?.hp ?? 0) <= 0)
       throw new Error("Target not visible or unavailable");
-    if (hostileShip?.owner.isEqual(ctx.sender) || hostileStructure?.ownerSlot === member.slot)
+    if (hostileShip?.ownerSlot === member.slot || hostileStructure?.ownerSlot === member.slot)
       throw new Error("Target not visible or unavailable");
-    const targetFaction = hostileShip
-      ? Array.from(ctx.db.matchMember.matchId.filter(matchId))
-          .find(row => row.identity.isEqual(hostileShip.owner))?.slot
-      : hostileStructure!.ownerSlot;
+    const targetFaction = hostileShip ? hostileShip.ownerSlot : hostileStructure!.ownerSlot;
     if (targetFaction === undefined || targetFaction === member.slot)
       throw new Error("Target not visible or unavailable");
     const destination = hostileShip
@@ -161,13 +159,11 @@ export const advanceCombat = spacetimedb.reducer(
   (ctx, { arg }) => {
     /** Build one match-scoped server-owned collision snapshot, never a client collection. */
     function combatBodies(matchId: bigint): CombatBody[] {
-      const members = Array.from(ctx.db.matchMember.matchId.filter(matchId));
-      const byIdentity = (identity: (typeof ctx.sender)): number | undefined =>
-        members.find(row => row.identity.isEqual(identity))?.slot;
+
       const bodies: CombatBody[] = [];
       for (const vessel of ctx.db.ship.matchId.filter(matchId)) {
-        const faction = byIdentity(vessel.owner);
-        if (faction === undefined || vessel.hp <= 0) continue;
+        const faction = vessel.ownerSlot;
+        if (vessel.hp <= 0) continue;
         bodies.push({
           entityType: "ship", id: vessel.id, faction, x: vessel.x, y: vessel.y,
           radius: vessel.radiusCells, hp: vessel.hp, kind: vessel.kind,
@@ -251,7 +247,7 @@ export const advanceCombat = spacetimedb.reducer(
         if (living.has(member.slot) || member.eliminated) continue;
         ctx.db.matchMember.id.update({ ...member, eliminated: true });
         for (const ship of Array.from(ctx.db.ship.matchId.filter(matchId)))
-          if (ship.owner.isEqual(member.identity)) destroyShip(ship.id);
+          if (ship.ownerSlot === member.slot) destroyShip(ship.id);
         for (const st of Array.from(ctx.db.structure.matchId.filter(matchId)))
           if (st.ownerSlot === member.slot) destroyStructure(st.id);
       }
