@@ -249,3 +249,11 @@ tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler
 ```
 
 **Outstanding gates:** match deadline module build, actual scheduled reducer/one-shot lifecycle, integrated 2-client results and Clock behavior, serialized final scoreboard subscriptions, kill-bounty accounting, player surrender flow (not added here), and real-match balance. No Cloud account/database was used.
+
+## Server-owned bot policy (standalone slice)
+
+- `spacetimedb/src/sim/bot-policy.ts` is a pure deterministic decision policy: easy/normal/hard modes, bounded strategic intervals (4/2/1 seconds) and max intents (1/2/3 per interval). Can propose visible-target aim/fire, discovered-node harvest/move, legal-platform/building placement, shipyard queueing and frontier exploration.
+- `spacetimedb/src/sim/bot-perception.ts` restricts enemy contacts to those detected via **server-owned sensor radius and terrain line of sight**. The bot policy takes **only** this reduced observation: no omniscient DB table access or browser-only authority.
+- Policy intents are NOT trusted direct commands. All must be revalidated by the same authority layer as human actions; construction and fleet intentions must never alter the ledger directly.
+- **Important:** the current schema ties ships to a human `Identity`, so this is **NOT** a functioning bot faction. Never assign the human host's identity to bot ships, fake connection IDs, or bypass human permission checks for internal reducers. Before integration, migrate canonical faction ownership to slot/controller mapping and create one per-match bot scheduler, then run a truly bot-only headless match.
+- The migration sequence and complete negative-test/acceptance matrix are in `docs/BOT_SERVER_INTEGRATION.md`. The standalone Node tests passed 14/14 with strict TypeScript checks; complete SpacetimeDB module tests have not been executed.
