@@ -76,3 +76,19 @@ identity-to-faction migration is merged by this slice. Private tables and server
 intent signatures are **not** proof of fog security or actual playability. The new policy's
 difficulty/priority choices are initial tuning defaults. No UI or HUD work begins before
 the owner reviews its visual direction (Issue #15).
+
+
+## Ownership migration phase 1 — actual implementation (29 October 2026)
+
+**Implemented (source code, pending SpacetimeDB module build):**
+- Every `ship` row now persists **`ownerSlot: u32`** and **`factionKey: indexed string`** rather than a `ship.owner: Identity` field. Each human `match_member` row persists the same indexed `factionKey`, derived **on the server** from its match ID and slot (e.g. `4:0`). Neither component is accepted from a client as authoritative input.
+- `myShips` now uses an identity-filtered, indexed **right semijoin** from `matchMember` to `ship` on `factionKey`, not just `ownerSlot`. This prevents a slot-0 player in one match seeing slot-0 ships in another match, while preserving the per-identity view API.
+- All starting and shipyard-produced ships receive the canonical slot/key; moving/stopping/harvesting/aiming/firing/repairing, combat victim faction lookup/elimination, passive harvesting and deadline ship counts now use match-scoped faction slots rather than `ship.owner.isEqual(humanIdentity)`.
+- Human reducers check *actual membership in the ship's match* and exact faction slot. Elimination is enforced for human structure/build/production/repair commands as well.
+- `sim/faction-ownership.ts` supplies a standalone tested key builder and human-only authorization primitive.
+
+**Still intentionally incomplete — don't mark bots playable:** Human `match_member` still owns the salvage ledger, and all lobby seat initialization creates human-owned members. There is **no bot-only controller row, bot ledger, server AI scheduler, bot-owned starting fleet, headless bot match or shared AI command execution adapter yet**. This is the first *ship ownership separation* milestone, **not** the full controller/economy migration.
+
+**Required phase 2:** move shared faction resources/elimination accounting into a canonical per-match faction state table (independent of human identity); keep human seat associations separate; add server-owned bot controllers with no fake `Identity`. Then refactor human reducers to delegate to shared authoritative command validators used also by bot scheduler, and test both 1 human + 7 bots and bot-only matches. After that implement actual bot sensing/projections and #13 security tests.
+
+**SDK caveat:** Full SpacetimeDB module build and live indexed-semijoin subscription have **not** been executed here. Check SDK 2.x query builder and row-type constraints before release. Existing generated client bindings from before schema migration are stale and MUST be regenerated when integration testing begins.
