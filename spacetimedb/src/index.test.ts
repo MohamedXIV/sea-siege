@@ -894,3 +894,69 @@ it("a destroyed weapon loses its pending aim and releases its lazy timer", () =>
   expect(test.db.turretAim.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
+
+
+it("match deadline rejects external/early calls and resolves the reference tiebreaker", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  expect(test.db.matchDeadline.count()).toBe(1n);
+  const deadline = [...test.db.matchDeadline.iter()][0]!;
+  expect(deadline.deadlineUs - test.db.match.id.find(matchId)!.startedAtUs)
+    .toBe(720_000_000n);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  )).toThrow("internal-only");
+  expect(() => test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  )).toThrow("has not elapsed");
+
+  // Test-only damage creates an unambiguous ranking, with no real combat API.
+  const hostCore = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(TestAuth.internal(), ctx => ctx.db.structure.id.update({
+    ...hostCore, hp: 2100,
+  }));
+  test.clock.advance(TimeDuration.fromMillis(720_000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  );
+  const finished = test.db.match.id.find(matchId)!;
+  expect(finished.phase).toBe("finished");
+  expect(finished.winnerSlot).toBe(1);
+  expect(finished.victoryReason).toBe("time_limit");
+  expect(finished.winningScore5).toBeGreaterThan(0n);
+  expect(test.db.economySchedule.count()).toBe(0n);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.startMatch(ctx, { matchId })
+  )).toThrow("Lobby unavailable");
+});
+
+it("lifetime salvage is credited by server production even when balance is spent", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const host = [...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 0)!;
+  expect(host.totalSalvageGathered).toBe(0n);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, {
+    arg: [...test.db.economySchedule.iter()][0]!,
+  }));
+  const earned = test.db.matchMember.id.find(host.id)!;
+  expect(earned.totalSalvageGathered).toBe(4n);
+  expect(earned.salvage).toBe(424);
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "platform", gridX: core.gridX + 3, gridY: core.gridY + 1,
+  }));
+  const after = test.db.matchMember.id.find(host.id)!;
+  expect(after.salvage).toBe(399);
+  expect(after.totalSalvageGathered).toBe(4n);
+});
