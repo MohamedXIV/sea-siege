@@ -268,3 +268,32 @@ The exact new four source/test files were verified byte-for-byte by local Git-bl
 **Source-only new authorization views:** `spacetimedb/src/visibility-views.ts` defines `myVisibleEnemies` (minimal current sensor/terrain-LoS-projected enemy contact ID, type and position) and `myStructures` (only caller-owned private structure rows). Their underlying tables remain PRIVATE. View code uses only match-scoped indexed reads. Three additional official module-harness negative subscription tests are checked into `spacetimedb/src/index.test.ts` but were NOT run. Full discovered terrain, last-known enemy positions, spectators, client interpolation, and performant incremental view behavior are NOT done.
 
 **External SDK verification:** official SpacetimeDB 2.x docs support authenticated procedural views and `rightSemijoin`, private table isolation, `ScheduleAt.time/interval` and private scheduled reducers. However `npm install`, `spacetime build`, real module typechecking/publishing and the official Vitest datastore harness **remain blocked by absent SDK/CLI and unavailable npm registry DNS**. An alternate shell execution tunnel was also unavailable. This is an explicit release blocker, not evidence of a passing integration build. No GitHub Actions minutes were consumed, no Cloud database was touched and no UI/HUD was modified.
+
+
+## 30 October 2026 — Shared Commands, Workshop, Fog contacts, traced motion
+
+**Actual local executions (Node v22, isolated TypeScript):**
+- `tests/command-dispatch.test.mjs` (Harvest/Production) — **10/10 PASS**
+- `tests/world-command-dispatch.test.mjs` (Move/Build) — **9/9 PASS**
+- `tests/combat-command-dispatch.test.mjs` (Aim/Fire) — **8/8 PASS**
+- `tests/workshop-command-dispatch.test.mjs` (Repair/Upgrade) — **9/9 PASS**
+- `tests/ship-motion.test.mjs` (including 3 new exact-leg trace cases) — **11/11 PASS**
+- **Combined command + motion suite: 47/47 PASS**, no failures, cancellations or skips.
+- Standalone `tsc --noEmit --strict` for all FIVE pure source modules — **PASS**.
+
+**Verified byte-identical source AND tests against connected GitHub branch (Git SHA-1 blobs):**
+- `sim/command-dispatch.ts`: `a1b6b5e4cd7274100b0c486949edf8848ff98997`; `tests/command-dispatch.test.mjs`: `31c45c8093318efa620eb02005c9415fafdc4f6b`.
+- `sim/world-command-dispatch.ts`: `c0458889a1449f7d691157919a426c95be307341`; `tests/world-command-dispatch.test.mjs`: `573e007735cd3bfa8a821b89ed1f3199f118c6cf`.
+- `sim/combat-command-dispatch.ts`: `d0e1fcdf4ce77cef527a52fa40da0b1e8916b827`; `tests/combat-command-dispatch.test.mjs`: `429a3a5cb33ffa0a89b3ad8de3b393ea2802d208`.
+- `sim/workshop-command-dispatch.ts`: `07c7dc7277231e40a032aed1b6ceee8f612d4157`; `tests/workshop-command-dispatch.test.mjs`: `247a95605592e79eeb8204edee3ca5559110bb49`.
+- `sim/ship-motion.ts`: `800030d41c62e74aa2684b3998636c693b490837`; `tests/ship-motion.test.mjs`: `9fe5fe7b87408b065d3284982beb86ca7d0acce5`.
+
+**Important qualification:** the standalone dispatcher tests use simplified compatibility fixtures of some actual `economy`, `navigation`, `collision`, `construction`, `combat`, `turret` and `workshop` dependencies (not a complete real-source dependency tree). The exact ship-motion source and exact ship-motion tests were run directly with no stubs. These results **do not establish** full SpacetimeDB SDK compilation, actual reducer atomicity, scheduler tick execution, headless match success or secure client subscriptions.
+
+**Code changes (source-only; module not built):**
+- Human + bot actions now go through shared pure validation and transactional callbacks for **harvest, production, movement, construction, aiming and firing**. Human Workshop repair ship/structure and upgrade use a dedicated shared dispatcher; Bot policy does not yet propose repair or upgrade intents.
+- `advanceShipOnRoute` now returns every real travelled `traversedSegments` leg. Motion scheduler collision checks all legs instead of an incorrect single start/end chord; this addresses corner false positives/negatives on multi-waypoint ticks without increasing physics frequency.
+- New authenticated private-data projections: `myVisibleEnemies` returns only current sensor+terrain-LoS detected enemy ID/type/position, and `myStructures` returns only the caller's own full structure rows. Underlying ship/structure/orders/bot/resource tables stay PRIVATE.
+- Three additional official `index.test.ts` SDK harness tests prepared for cross-match own structures and unauthorized spectators, enemy contact secret-field exclusion, and bot isolation. **Not run**.
+
+**Release blockers still open:** no locally installed `spacetimedb` SDK or `spacetime` binary, npm registry access unavailable and external ShellWarden tunnel disconnected. Consequently **full module TypeScript build, actual schedule execution, cross-identity negative subscriptions, client binding regeneration, two-client consistency and headless bot-only simulation have not been executed**. Procedural per-user sensor views may be expensive with frequent motion ticks; profile 2–8 factions on a real server before production. No GitHub Actions consumed, no Cloud credentials/deployment used, no UI/HUD edited. Keep Draft PR #20 open and issues #8–#13 pending.
