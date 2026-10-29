@@ -397,14 +397,12 @@ export const advanceMatchSimulation = spacetimedb.reducer(
         route.cellPath, route.cursor, world.mapCells, seconds,
       );
 
-      // Never trust an old path after another ship has changed position.
-      // Swept validation rejects crossing a blocker even when both endpoints
-      // themselves are navigable (no tunneling on a delayed tick).
-      const clear = canSweepVessel(
-        { x: vessel.x, y: vessel.y },
-        { x: stepped.ship.x, y: stepped.ship.y },
-        vessel.radiusCells, env, vessel.id,
-      );
+      // Validate EACH actual travelled leg. A single start/end chord is not
+      // equivalent when a tick passes a waypoint and turns; it can wrongly
+      // cross blocked corners or miss real intermediate collisions.
+      const clear = stepped.traversedSegments.every(segment =>
+        canSweepVessel(segment.from, segment.to,
+          vessel.radiusCells, env, vessel.id));
       if (!clear) {
         routesRemaining++;
         const nowUs = ctx.timestamp.microsSinceUnixEpoch;
