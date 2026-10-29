@@ -3,6 +3,7 @@ import spacetimedb, { economySchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
+import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
   ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
@@ -24,31 +25,28 @@ export const orderHarvest = spacetimedb.reducer(
       throw new Error("Cannot command another player's ship");
     const matchRow = ctx.db.match.id.find(vessel.matchId);
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
-    const definition = shipDefinition(vessel.kind);
-    if (!definition || definition.harvestPerSecond === 0) throw new Error("Ship cannot harvest");
     const node = ctx.db.salvageNode.id.find(nodeId);
-    if (!node || node.matchId !== vessel.matchId) throw new Error("Salvage node unavailable");
-    if (!inRange(
-      { x: vessel.x, y: vessel.y },
-      { x: node.gridX + 0.5, y: node.gridY + 0.5 },
-      ECONOMY_RULES.harvestRangeCells,
-    )) throw new Error("Salvage node out of range");
-    // Only one locomotion/harvest command may control a ship.
-    ctx.db.shipRoute.shipId.delete(shipId);
-    const old = ctx.db.harvestOrder.shipId.find(shipId);
-    if (old) ctx.db.harvestOrder.shipId.update({
-      ...old, nodeId, assignedAtUs: ctx.timestamp.microsSinceUnixEpoch,
+    const result = dispatchHarvest({
+      faction: { matchId: vessel.matchId, slot: faction!.slot, controller: "human",
+        eliminated: faction!.eliminated },
+      ship: vessel, node: node ?? null,
+      nowUs: ctx.timestamp.microsSinceUnixEpoch, observable: true,
+    }, {
+      clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
+      upsertOrder: order => {
+        const existing = ctx.db.harvestOrder.shipId.find(order.shipId);
+        if (existing) ctx.db.harvestOrder.shipId.update({ ...existing, ...order });
+        else ctx.db.harvestOrder.insert(order);
+      },
+      stopForHarvest: (id, revision) => {
+        ctx.db.ship.id.update({
+          ...vessel, velocityX: 0, velocityY: 0,
+          targetX: vessel.x, targetY: vessel.y,
+          revision, updatedAt: ctx.timestamp,
+        });
+      },
     });
-    else ctx.db.harvestOrder.insert({
-      shipId, matchId: vessel.matchId, nodeId,
-      assignedAtUs: ctx.timestamp.microsSinceUnixEpoch,
-    });
-    ctx.db.ship.id.update({
-      ...vessel, velocityX: 0, velocityY: 0,
-      targetX: vessel.x, targetY: vessel.y,
-      revision: vessel.revision + 1n,
-      updatedAt: ctx.timestamp,
-    });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
@@ -66,20 +64,21 @@ export const enqueueShip = spacetimedb.reducer(
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== yard.ownerSlot)
       throw new Error("Not your shipyard");
-    if (!yard.complete || !yard.connected || yard.hp <= 0) throw new Error("Shipyard offline");
-    const definition = shipDefinition(kind);
-    if (!definition) throw new Error("Unknown ship kind");
-    const queueLength = Array.from(ctx.db.productionOrder.yardId.filter(shipyardId)).length;
-    if (queueLength >= ECONOMY_RULES.shipyardQueueLimit) throw new Error("Shipyard queue full");
-    const salvage = debitSalvage(faction.salvage, definition.cost);
-    ctx.db.factionState.id.update({ ...faction, salvage });
-    ctx.db.productionOrder.insert({
-      id: 0n, matchId: yard.matchId, yardId: shipyardId,
-      ownerSlot: member.slot, shipKind: kind,
-      remainingUs: BigInt(definition.buildMs) * 1_000n,
-      queuedAtUs: ctx.timestamp.microsSinceUnixEpoch,
-      startedAtUs: 0n,
+    const result = dispatchProduction({
+      faction: { matchId: yard.matchId, slot: faction.slot, controller: "human",
+        eliminated: faction.eliminated },
+      yard, kind, salvage: faction.salvage,
+      queued: Array.from(ctx.db.productionOrder.yardId.filter(shipyardId)).length,
+      nowUs: ctx.timestamp.microsSinceUnixEpoch,
+    }, {
+      setBalance: salvage => {
+        ctx.db.factionState.id.update({ ...faction, salvage });
+      },
+      enqueue: order => {
+        ctx.db.productionOrder.insert({ id: 0n, ...order });
+      },
     });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
