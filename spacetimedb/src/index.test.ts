@@ -150,9 +150,7 @@ it("scheduled ship movement advances only under internal authority and expires w
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
-  const vessel = [...test.db.ship.iter()].find(row => row.owner.isEqual(
-    [...test.db.match.iter()][0]!.host
-  ))!;
+  const vessel = [...test.db.ship.iter()].find(row => row.ownerSlot === 0)!;
 
   // A spawn's 3x3 area is clear by construction, so the adjacent cell is legal.
   const targetX = vessel.x + 1;
@@ -406,7 +404,7 @@ it("harvest orders require the owner and actual node range; economy credits only
   const lobby = [...test.db.match.iter()][0]!;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: lobby.id }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: lobby.id }));
-  const vessel = [...test.db.ship.iter()].find(row => row.owner.isEqual(lobby.host))!;
+  const vessel = [...test.db.ship.iter()].find(row => row.ownerSlot === 0)!;
   const node = [...test.db.salvageNode.matchId.filter(lobby.id)][0]!;
   expect(() => test.withReducerTx(bob, ctx =>
     moduleExports.orderHarvest(ctx, { shipId: vessel.id, nodeId: node.id })
@@ -480,7 +478,7 @@ it("shipyard charges once, respects FIFO, then produces only after time and a sa
     );
   }
   expect(test.db.productionOrder.count()).toBe(0n);
-  const ships = [...test.db.ship.matchId.filter(lobby.id)].filter(row => row.owner.isEqual(lobby.host));
+  const ships = [...test.db.ship.matchId.filter(lobby.id)].filter(row => row.ownerSlot === 0);
   expect(ships).toHaveLength(2);
   expect(ships.some(row => row.kind === "scout" && row.hp === 210)).toBe(true);
 });
@@ -576,7 +574,7 @@ it("workshop repairs owned hulls and structures only at range with exact salvage
     moduleExports.completeConstruction(ctx, { arg: completion })
   );
   const vessel = [...test.db.ship.matchId.filter(match.id)].find(row =>
-    row.owner.isEqual(match.host)
+    row.ownerSlot === 0
   )!;
   test.withReducerTx(TestAuth.internal(), ctx => {
     ctx.db.structure.id.update({ ...core, hp: 2100 });
@@ -703,8 +701,8 @@ it("fire authorization rejects foreign weapons, friendly targets, and cooldown b
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
   const host = [...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 0)!;
-  const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.owner.isEqual(host.identity))!;
-  const defender = [...test.db.ship.matchId.filter(matchId)].find(row => !row.owner.isEqual(host.identity))!;
+  const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot === host.slot)!;
+  const defender = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot !== host.slot)!;
   // Internal test authority moves the defender into visible fire range only.
   test.withReducerTx(TestAuth.internal(), ctx => {
     ctx.db.ship.id.update({
@@ -826,9 +824,9 @@ it("turrets slew gradually under internal authority; premature fire and foreign 
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
   const attacker = [...test.db.ship.matchId.filter(matchId)]
-    .find(row => row.owner.isEqual(test.db.match.id.find(matchId)!.host))!;
+    .find(row => row.ownerSlot === 0)!;
   const defender = [...test.db.ship.matchId.filter(matchId)]
-    .find(row => !row.owner.isEqual(attacker.owner))!;
+    .find(row => row.ownerSlot !== attacker.ownerSlot)!;
   test.withReducerTx(TestAuth.internal(), ctx =>
     ctx.db.ship.id.update({ ...defender, x: attacker.x, y: attacker.y + 2 })
   );
@@ -881,7 +879,7 @@ it("a destroyed weapon loses its pending aim and releases its lazy timer", () =>
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
   const host = test.db.match.id.find(matchId)!.host;
-  const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.owner.isEqual(host))!;
+  const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot === 0)!;
   test.withReducerTx(alice, ctx => moduleExports.aimWeapon(ctx, {
     sourceType: "ship", sourceId: attacker.id, desiredAngleDeg: 180,
   }));
