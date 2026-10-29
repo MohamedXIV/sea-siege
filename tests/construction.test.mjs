@@ -70,3 +70,16 @@ test('supports cross-chunk 2x2 placement, protects source anchor and checks cost
  assert.equal(CONSTRUCTION_RULES.startingSalvage,420);
  assert.match(validateStructurePlacement(request('command_core',5,5,base)),/Cannot manually/);
 });
+
+test('removing any supporting deck makes a mounted workshop unsupported',()=>{
+ const pads=initial();
+ const work={id:500n,ownerSlot:0,kind:'workshop',gridX:4,gridY:7,width:2,height:2,complete:true};
+ assert.equal(structureOnline(work,[...pads,work],size),true);
+ const without= pads.filter(s=> !(s.kind==='platform' && s.gridX===5 && s.gridY===8));
+ assert.equal(structureOnline(work,[...without,work],size),false);
+});
+
+test('cannot mount buildings over an enemy faction even when foreign support is connected',()=>{
+ const enemy=initialStructures(1,14,14).map((s,i)=>({...s,id:BigInt(100+i)}));
+ assert.match(validateStructurePlacement(request('workshop',14,17,enemy)),/Requires complete connected friendly/);
+});
