@@ -5,10 +5,63 @@ import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { structureOnline, type StructureKind } from "./sim/construction.ts";
 import { boundedDeltaSeconds } from "./sim/ship-motion.ts";
 import {
+  advanceTurret, desiredBearing, normalizeBearing, turretAligned, type TurretKind,
+} from "./sim/turret-aim.ts";
+import {
   COMBAT_RULES, advanceProjectile, canFire, createProjectile, terrainLineOfSight,
   weaponDefinition, withinRange, type CombatBody, type StructureCombatBody,
   type ShipCombatBody, type WeaponKind,
 } from "./sim/combat.ts";
+
+
+/**
+ * Clients may request a bearing but may not update turret angles directly.
+ * This command intentionally does not accept/read enemy target IDs, so aiming
+ * alone cannot be abused as a hidden-unit discovery oracle.
+ */
+export const aimWeapon = spacetimedb.reducer(
+  { sourceType: t.string(), sourceId: t.u64(), desiredAngleDeg: t.f64() },
+  (ctx, { sourceType, sourceId, desiredAngleDeg }) => {
+    if (!Number.isFinite(desiredAngleDeg) || desiredAngleDeg < 0 || desiredAngleDeg >= 360)
+      throw new Error("Invalid aim bearing");
+    if (sourceType !== "ship" && sourceType !== "structure")
+      throw new Error("Weapon unavailable");
+    const vessel = sourceType === "ship" ? ctx.db.ship.id.find(sourceId) : undefined;
+    const cannon = sourceType === "structure" ? ctx.db.structure.id.find(sourceId) : undefined;
+    if (!vessel && (!cannon || cannon.kind !== "cannon")) throw new Error("Weapon unavailable");
+    const matchId = vessel ? vessel.matchId : cannon!.matchId;
+    const match = ctx.db.match.id.find(matchId);
+    if (!match || match.phase !== "active") throw new Error("Match is not active");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    if (!member || member.eliminated ||
+        (vessel ? !vessel.owner.isEqual(ctx.sender) : cannon!.ownerSlot !== member.slot))
+      throw new Error("Weapon unavailable");
+    if (vessel ? vessel.hp <= 0 : (!cannon!.complete || !cannon!.connected || cannon!.hp <= 0))
+      throw new Error("Weapon offline");
+    const kind = vessel ? vessel.kind : "cannon";
+    if (!weaponDefinition(kind)) throw new Error("Weapon unavailable");
+    const angle = normalizeBearing(desiredAngleDeg);
+    const current = vessel ? vessel.turretAngleDeg : cannon!.turretAngleDeg;
+    const existing = Array.from(ctx.db.turretAim.matchId.filter(matchId))
+      .find(row => row.sourceType === sourceType && row.sourceId === sourceId);
+    if (turretAligned(current, angle, 0)) {
+      if (existing) ctx.db.turretAim.id.delete(existing.id);
+      return;
+    }
+    if (existing) ctx.db.turretAim.id.update({ ...existing, desiredAngleDeg: angle });
+    else ctx.db.turretAim.insert({
+      id: 0n, matchId, sourceType, sourceId, desiredAngleDeg: angle,
+    });
+    if (!Array.from(ctx.db.combatSchedule.matchId.filter(matchId)).length) {
+      ctx.db.combatSchedule.insert({
+        scheduledId: 0n, matchId,
+        scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
+        lastTickAt: ctx.timestamp,
+      });
+    }
+  },
+);
 
 /** Fire at a current server-observed target; no raw point-and-click blind attacks. */
 export const fireWeapon = spacetimedb.reducer(
@@ -68,17 +121,19 @@ export const fireWeapon = spacetimedb.reducer(
         !terrainLineOfSight(source, destination, terrain, world.mapCells))
       throw new Error("Target not visible or unavailable");
 
+    // Shooting never turns a turret. The current *authoritative* angle must
+    // already point toward the target's current server-observed position.
+    const bearing = desiredBearing(source, destination);
+    if (!turretAligned(vessel ? vessel.turretAngleDeg : turret!.turretAngleDeg, bearing))
+      throw new Error("Weapon not aligned");
     if (Array.from(ctx.db.projectile.matchId.filter(matchId)).length >=
         COMBAT_RULES.maxProjectilesPerMatch) throw new Error("Match projectile cap");
     const shot = createProjectile(source, destination, kind, member.slot);
-    const angle = ((Math.atan2(shot.vy, shot.vx) * 180 / Math.PI) % 360 + 360) % 360;
-    // Both ammo bookkeeping and projectile creation are one DB transaction.
+    // Both cooldown bookkeeping and projectile creation are one DB transaction.
     if (vessel) {
-      ctx.db.ship.id.update({
-        ...vessel, lastFiredAtUs: nowUs, turretAngleDeg: angle, updatedAt: ctx.timestamp,
-      });
+      ctx.db.ship.id.update({ ...vessel, lastFiredAtUs: nowUs, updatedAt: ctx.timestamp });
     } else {
-      ctx.db.structure.id.update({ ...turret!, lastFiredAtUs: nowUs, turretAngleDeg: angle });
+      ctx.db.structure.id.update({ ...turret!, lastFiredAtUs: nowUs });
     }
     ctx.db.projectile.insert({
       id: 0n, matchId, sourceFaction: member.slot,
@@ -128,8 +183,17 @@ export const advanceCombat = spacetimedb.reducer(
       return bodies;
     }
 
+    /** Remove obsolete steering intent when a source is eliminated. */
+    function clearAim(sourceType: string, sourceId: bigint): void {
+      for (const aim of Array.from(ctx.db.turretAim.matchId.filter(timer.matchId))) {
+        if (aim.sourceType === sourceType && aim.sourceId === sourceId)
+          ctx.db.turretAim.id.delete(aim.id);
+      }
+    }
+
     /** Combat deaths never pay peaceful demolition refunds. */
     function destroyShip(id: bigint): void {
+      clearAim("ship", id);
       ctx.db.harvestOrder.shipId.delete(id);
       ctx.db.shipRoute.shipId.delete(id);
       ctx.db.ship.id.delete(id);
@@ -137,6 +201,7 @@ export const advanceCombat = spacetimedb.reducer(
     function destroyStructure(id: bigint): void {
       const row = ctx.db.structure.id.find(id);
       if (!row) return;
+      clearAim("structure", id);
       ctx.db.structure.id.delete(id);
       for (const timer of Array.from(ctx.db.constructionSchedule.structureId.filter(id)))
         ctx.db.constructionSchedule.scheduledId.delete(timer.scheduledId);
@@ -202,6 +267,8 @@ export const advanceCombat = spacetimedb.reducer(
         ctx.db.motionSchedule.scheduledId.delete(job.scheduledId);
       for (const job of Array.from(ctx.db.projectile.matchId.filter(matchId)))
         ctx.db.projectile.id.delete(job.id);
+      for (const job of Array.from(ctx.db.turretAim.matchId.filter(matchId)))
+        ctx.db.turretAim.id.delete(job.id);
     }
     if (!ctx.senderAuth.isInternal) throw new Error("Combat scheduler is internal-only");
     const timer = ctx.db.combatSchedule.scheduledId.find(arg.scheduledId);
@@ -215,6 +282,32 @@ export const advanceCombat = spacetimedb.reducer(
       timer.lastTickAt.microsSinceUnixEpoch, ctx.timestamp.microsSinceUnixEpoch,
     );
     if (seconds === 0) return;
+    const aiming = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    for (const order of aiming) {
+      const vessel = order.sourceType === "ship" ? ctx.db.ship.id.find(order.sourceId) : undefined;
+      const cannon = order.sourceType === "structure" ? ctx.db.structure.id.find(order.sourceId) : undefined;
+      if ((!vessel && !cannon) || (vessel && vessel.hp <= 0) ||
+          (cannon && (cannon.kind !== "cannon" || !cannon.complete ||
+                      !cannon.connected || cannon.hp <= 0))) {
+        ctx.db.turretAim.id.delete(order.id);
+        continue;
+      }
+      const kind = vessel ? vessel.kind : "cannon";
+      if (!weaponDefinition(kind)) {
+        ctx.db.turretAim.id.delete(order.id);
+        continue;
+      }
+      const current = vessel ? vessel.turretAngleDeg : cannon!.turretAngleDeg;
+      const stepped = advanceTurret(current, order.desiredAngleDeg, kind as TurretKind, seconds);
+      if (stepped.angle !== current) {
+        if (vessel) ctx.db.ship.id.update({
+          ...vessel, turretAngleDeg: stepped.angle, updatedAt: ctx.timestamp,
+        });
+        else ctx.db.structure.id.update({ ...cannon!, turretAngleDeg: stepped.angle });
+      }
+      if (stepped.aligned) ctx.db.turretAim.id.delete(order.id);
+    }
     const projectiles = Array.from(ctx.db.projectile.matchId.filter(timer.matchId))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     let changedStructure = false;
@@ -253,7 +346,8 @@ export const advanceCombat = spacetimedb.reducer(
       reconcileEliminations(timer.matchId);
     }
     const remaining = Array.from(ctx.db.projectile.matchId.filter(timer.matchId)).length;
-    if (remaining === 0) ctx.db.combatSchedule.scheduledId.delete(timer.scheduledId);
+    const pendingAim = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId)).length;
+    if (remaining === 0 && pendingAim === 0) ctx.db.combatSchedule.scheduledId.delete(timer.scheduledId);
     else ctx.db.combatSchedule.scheduledId.update({
       ...timer, lastTickAt: ctx.timestamp,
     });
