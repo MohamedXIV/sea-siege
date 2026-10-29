@@ -18,7 +18,9 @@ export const orderHarvest = spacetimedb.reducer(
     if (!vessel) throw new Error("Ship unavailable");
     const member = Array.from(ctx.db.matchMember.matchId.filter(vessel.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!mayControlFaction(member?.slot, vessel.ownerSlot, member?.eliminated ?? true))
+    const faction = Array.from(ctx.db.factionState.matchId.filter(vessel.matchId))
+      .find(row => row.slot === vessel.ownerSlot && row.controller === "human");
+    if (!mayControlFaction(member?.slot, vessel.ownerSlot, faction?.eliminated ?? true))
       throw new Error("Cannot command another player's ship");
     const matchRow = ctx.db.match.id.find(vessel.matchId);
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
@@ -60,14 +62,17 @@ export const enqueueShip = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(yard.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || member.slot !== yard.ownerSlot) throw new Error("Not your shipyard");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(yard.matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated || faction.slot !== yard.ownerSlot)
+      throw new Error("Not your shipyard");
     if (!yard.complete || !yard.connected || yard.hp <= 0) throw new Error("Shipyard offline");
     const definition = shipDefinition(kind);
     if (!definition) throw new Error("Unknown ship kind");
     const queueLength = Array.from(ctx.db.productionOrder.yardId.filter(shipyardId)).length;
     if (queueLength >= ECONOMY_RULES.shipyardQueueLimit) throw new Error("Shipyard queue full");
-    const salvage = debitSalvage(member.salvage, definition.cost);
-    ctx.db.matchMember.id.update({ ...member, salvage });
+    const salvage = debitSalvage(faction.salvage, definition.cost);
+    ctx.db.factionState.id.update({ ...faction, salvage });
     ctx.db.productionOrder.insert({
       id: 0n, matchId: yard.matchId, yardId: shipyardId,
       ownerSlot: member.slot, shipKind: kind,
@@ -88,12 +93,15 @@ export const cancelShipProduction = spacetimedb.reducer(
     if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(order.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
-    if (!member || member.eliminated || member.slot !== order.ownerSlot) throw new Error("Not your production order");
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(order.matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated || faction.slot !== order.ownerSlot)
+      throw new Error("Not your production order");
     const definition = shipDefinition(order.shipKind);
     if (!definition) throw new Error("Unknown ship kind");
     ctx.db.productionOrder.id.delete(order.id);
-    ctx.db.matchMember.id.update({
-      ...member, salvage: creditSalvage(member.salvage, definition.cost),
+    ctx.db.factionState.id.update({
+      ...faction, salvage: creditSalvage(faction.salvage, definition.cost),
     });
   },
 );
@@ -116,9 +124,9 @@ export const advanceEconomy = spacetimedb.reducer(
     const microseconds = elapsedUs + timer.leftoverUs;
     const seconds = Number(microseconds / 1_000_000n);
     if (elapsedUs === 0n && seconds === 0) return;
-    const members = Array.from(ctx.db.matchMember.matchId.filter(timer.matchId));
-    const balances = new Map(members.map(member => [member.slot, member.salvage]));
-    const lifetimeGathered = new Map(members.map(member => [member.slot, member.totalSalvageGathered]));
+    const factions = Array.from(ctx.db.factionState.matchId.filter(timer.matchId));
+    const balances = new Map(factions.map(row => [row.slot, row.salvage]));
+    const lifetimeGathered = new Map(factions.map(row => [row.slot, row.totalSalvageGathered]));
     const credit = (slot: number, amount: number) => {
       const previous = balances.get(slot);
       const gathered = lifetimeGathered.get(slot);
@@ -173,9 +181,9 @@ export const advanceEconomy = spacetimedb.reducer(
         const vessel = ctx.db.ship.id.find(order.shipId);
         const node = ctx.db.salvageNode.id.find(order.nodeId);
         const definition = vessel ? shipDefinition(vessel.kind) : null;
-        const member = vessel ? members.find(row => row.slot === vessel.ownerSlot) : null;
+        const faction = vessel ? factions.find(row => row.slot === vessel.ownerSlot) : null;
         if (!vessel || !node || node.matchId !== timer.matchId ||
-            !member || !definition || definition.harvestPerSecond <= 0 ||
+            !faction || faction.eliminated || !definition || definition.harvestPerSecond <= 0 ||
             !inRange({ x: vessel.x, y: vessel.y },
               { x: node.gridX + 0.5, y: node.gridY + 0.5 },
               ECONOMY_RULES.harvestRangeCells)) {
@@ -189,7 +197,7 @@ export const advanceEconomy = spacetimedb.reducer(
           remaining.get(node.id) ?? 0, definition.harvestPerSecond * eligibleSeconds,
         );
         remaining.set(node.id, drawn.remaining);
-        credit(member.slot, drawn.taken);
+        credit(faction.slot, drawn.taken);
       }
 
       for (const rig of structures) {
@@ -230,10 +238,10 @@ export const advanceEconomy = spacetimedb.reducer(
       if (jobsHandled.has(job.yardId)) continue;
       jobsHandled.add(job.yardId);
       const yard = ctx.db.structure.id.find(job.yardId);
-      const member = members.find(row => row.slot === job.ownerSlot);
+      const faction = factions.find(row => row.slot === job.ownerSlot);
       const definition = shipDefinition(job.shipKind);
       if (!yard || yard.matchId !== timer.matchId || yard.kind !== "shipyard" ||
-          yard.ownerSlot !== job.ownerSlot || !member || !definition) {
+          yard.ownerSlot !== job.ownerSlot || !faction || faction.eliminated || !definition) {
         // Invalid or destroyed queues are canceled; never fabricate a new ship.
         // Real demolition cancels/refunds valid outstanding orders transactionally.
         ctx.db.productionOrder.id.delete(job.id);
@@ -279,8 +287,8 @@ export const advanceEconomy = spacetimedb.reducer(
         continue; // Completed work waits for a navigable launch berth.
       }
       const launched = ctx.db.ship.insert({
-        id: 0n, matchId: timer.matchId, ownerSlot: member.slot,
-        factionKey: member.factionKey, kind: job.shipKind,
+        id: 0n, matchId: timer.matchId, ownerSlot: faction.slot,
+        factionKey: faction.factionKey, kind: job.shipKind,
         hp: definition.hp, radiusCells: definition.radius,
         x: where.x, y: where.y, velocityX: 0, velocityY: 0,
         hullAngleDeg: 0, turretAngleDeg: 0, lastFiredAtUs: -1n,
@@ -294,13 +302,13 @@ export const advanceEconomy = spacetimedb.reducer(
       ctx.db.productionOrder.id.delete(job.id);
     }
 
-    for (const member of members) {
-      const balance = balances.get(member.slot);
-      const gathered = lifetimeGathered.get(member.slot);
+    for (const faction of factions) {
+      const balance = balances.get(faction.slot);
+      const gathered = lifetimeGathered.get(faction.slot);
       if (balance !== undefined && gathered !== undefined &&
-          (balance !== member.salvage || gathered !== member.totalSalvageGathered)) {
-        ctx.db.matchMember.id.update({
-          ...member, salvage: balance, totalSalvageGathered: gathered,
+          (balance !== faction.salvage || gathered !== faction.totalSalvageGathered)) {
+        ctx.db.factionState.id.update({
+          ...faction, salvage: balance, totalSalvageGathered: gathered,
         });
       }
     }
