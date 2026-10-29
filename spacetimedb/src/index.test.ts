@@ -817,3 +817,80 @@ it("destroying the last hostile Command Core eliminates its faction and ends the
   expect(test.db.match.id.find(matchId)?.winnerSlot).toBe(0);
   expect([...test.db.matchMember.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
 });
+
+it("turrets slew gradually under internal authority; premature fire and foreign aim fail", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const attacker = [...test.db.ship.matchId.filter(matchId)]
+    .find(row => row.owner.isEqual(test.db.match.id.find(matchId)!.host))!;
+  const defender = [...test.db.ship.matchId.filter(matchId)]
+    .find(row => !row.owner.isEqual(attacker.owner))!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({ ...defender, x: attacker.x, y: attacker.y + 2 })
+  );
+  const fire = { sourceType: "ship", sourceId: attacker.id,
+    targetType: "ship", targetId: defender.id };
+  const aim = { sourceType: "ship", sourceId: attacker.id, desiredAngleDeg: 90 };
+
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.fireWeapon(ctx, fire)
+  )).toThrow("Weapon not aligned");
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.aimWeapon(ctx, aim)
+  )).toThrow("Weapon unavailable");
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.aimWeapon(ctx, { ...aim, desiredAngleDeg: 360 })
+  )).toThrow("Invalid aim bearing");
+  test.withReducerTx(alice, ctx => moduleExports.aimWeapon(ctx, aim));
+  expect(test.db.turretAim.count()).toBe(1n);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(100));
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
+    arg: [...test.db.combatSchedule.iter()][0]!,
+  }));
+  expect(test.db.ship.id.find(attacker.id)?.turretAngleDeg).toBe(18);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.fireWeapon(ctx, fire)
+  )).toThrow("Weapon not aligned");
+  for (let step = 0; step < 4; step++) {
+    test.clock.advance(TimeDuration.fromMillis(100));
+    test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
+      arg: [...test.db.combatSchedule.iter()][0]!,
+    }));
+  }
+  expect(test.db.ship.id.find(attacker.id)?.turretAngleDeg).toBe(90);
+  expect(test.db.turretAim.count()).toBe(0n);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+  test.withReducerTx(alice, ctx => moduleExports.fireWeapon(ctx, fire));
+  expect(test.db.projectile.count()).toBe(1n);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.fireWeapon(ctx, fire)
+  )).toThrow("cooldown");
+});
+
+it("a destroyed weapon loses its pending aim and releases its lazy timer", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const host = test.db.match.id.find(matchId)!.host;
+  const attacker = [...test.db.ship.matchId.filter(matchId)].find(row => row.owner.isEqual(host))!;
+  test.withReducerTx(alice, ctx => moduleExports.aimWeapon(ctx, {
+    sourceType: "ship", sourceId: attacker.id, desiredAngleDeg: 180,
+  }));
+  expect(test.db.turretAim.count()).toBe(1n);
+  test.withReducerTx(TestAuth.internal(), ctx => ctx.db.ship.id.delete(attacker.id));
+  test.clock.advance(TimeDuration.fromMillis(100));
+  test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
+    arg: [...test.db.combatSchedule.iter()][0]!,
+  }));
+  expect(test.db.turretAim.count()).toBe(0n);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+});
