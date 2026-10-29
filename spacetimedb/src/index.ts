@@ -2,6 +2,7 @@ import { ScheduleAt } from "spacetimedb";
 import { t } from "spacetimedb/server";
 import spacetimedb, {
   motionSchedule, constructionSchedule, economySchedule,
+  ship, matchMember, factionState,
 } from "./schema.ts";
 import { deadlineMicroseconds } from "./sim/match-outcome.ts";
 import { factionKey, mayControlFaction } from "./sim/faction-ownership.ts";
@@ -315,6 +316,16 @@ export const myMemberships = spacetimedb.view(
   { name: "my_memberships", public: true },
   t.array(matchMember.rowType),
   (ctx) => ctx.from.matchMember.where((row) => row.identity.eq(ctx.sender)),
+);
+
+/** Only authenticated human seats may subscribe to their own faction ledger. */
+export const myFactionStates = spacetimedb.view(
+  { name: "my_faction_states", public: true },
+  t.array(factionState.rowType),
+  (ctx) => ctx.from.matchMember
+    .where(member => member.identity.eq(ctx.sender))
+    .rightSemijoin(ctx.from.factionState, (member, faction) =>
+      member.factionKey.eq(faction.factionKey)),
 );
 
 /** Cancel a route without teleportation; callers may only stop their own units. */
@@ -657,3 +668,5 @@ export {
 export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
+
+export { addBot, removeBot } from "./bot-reducers.ts";
