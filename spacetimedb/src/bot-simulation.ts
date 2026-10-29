@@ -12,14 +12,6 @@ import { angularDifference, desiredBearing, turretAligned } from "./sim/turret-a
 import { SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts";
 
-/** Bounded work independent of browser framerate and bot count. */
-export const BOT_SERVER_RULES = {
-  tickUs: 1_000_000n,
-  maxPlacementChecksPerKind: 16,
-  maxFrontiersPerShip: 8,
-  coreSensorRadius: 6,
-} as const;
-
 /**
  * One server-owned strategic scheduler per active match.
  *
@@ -128,7 +120,7 @@ export const advanceBots = spacetimedb.reducer(
               x: structure.gridX + structure.width / 2,
               y: structure.gridY + structure.height / 2,
             },
-            radius: structure.kind === "command_core" ? BOT_SERVER_RULES.coreSensorRadius :
+            radius: structure.kind === "command_core" ? BOT_RULES.coreSensorRadius :
               COMBAT_RULES.weapons.cannon.vision,
           });
         }
@@ -166,7 +158,7 @@ export const advanceBots = spacetimedb.reducer(
         let checked = 0;
         const candidates = orderedBuildOrigins(ownStructures,world.mapCells,kind !== "platform");
         for (const point of candidates) {
-          if (checked++ >= BOT_SERVER_RULES.maxPlacementChecksPerKind) break;
+          if (checked++ >= BOT_RULES.maxPlacementChecksPerKind) break;
           if (canBuild(kind, bot.slot, point.x, point.y, faction.salvage))
             legalBuildCandidates.push({ kind, gridX: point.x, gridY: point.y });
         }
@@ -179,7 +171,7 @@ export const advanceBots = spacetimedb.reducer(
         const directions = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
         let count = 0;
         for (const [dx, dy] of directions) {
-          if (count++ >= BOT_SERVER_RULES.maxFrontiersPerShip) break;
+          if (count++ >= BOT_RULES.maxFrontiersPerShip) break;
           const x = Math.floor(ship.x + dx! * 4), y = Math.floor(ship.y + dy! * 4);
           if (x <= 0 || y <= 0 || x >= world.mapCells - 1 || y >= world.mapCells - 1) continue;
           if (isNavigationCellBlocked(x, y, ship.radiusCells, env, ship.id)) continue;
