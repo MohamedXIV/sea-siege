@@ -60,3 +60,21 @@ node --experimental-strip-types --test tests/*.test.mjs
 ```
 
 The `ship_route` table stores the ordered grid cells for a move; **nothing advances the cursor/ship position yet**. Scheduled steering, collision with dynamic buildings and ship-specific radius constraints belong to #10. Visibility-aware views are mandatory before publishing hidden chunks or resource data to any clients (#13). The match seed is now server generated (not a `createMatch` input).
+
+## Authoritative ship movement — scheduled reducer slice (#10)
+
+- The private `ship_route` table holds the A* cell path/cursor and order revision. Only the authenticated ship owner may issue a path or `stopShip` command.
+- `issueShipOrder` starts **one private `motion_schedule` timer per moving match**, using the official `ScheduleAt.interval(100_000n)` / `onSchedule` API. A stopped or completed match naturally drops the timer once there are no active routes. Idle matches do not consume 10 reducer transactions per second.
+- `advanceMatchSimulation` explicitly rejects calls lacking `ctx.senderAuth.isInternal`; clients cannot force simulation ticks. The reducer steps all active routes, persists authoritative movement samples and velocities with `ctx.timestamp`, then deletes completed routes/timers.
+- The pure `ship-motion.ts` uses 2 cells/sec, a 150°/sec hull-turn cap, and max 250ms elapsed-time catch-up per invocation, with headings stored in degrees. These values live in `SHIP_MOTION_RULES` and are **tuning defaults**, not guaranteed platform tickrates.
+- Client rendering **does not set or own server positions**. The Phaser interpolation adapter in #5/#19 will read authorized ship snapshots from generated bindings. Scheduled frequency, subscription row-change frequency and Phaser FPS are separate (ADR-0001).
+- No full ship sizes, fleet formation, dynamic building collision, fog-aware subscriptions or true sailing physics yet. Please do not characterize this as full naval movement or a multiplayer-ready implementation.
+
+Pure TS smoke verification (no SpacetimeDB dependencies):
+```bash
+node --experimental-strip-types --test tests/ship-motion.test.mjs
+tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler \
+  spacetimedb/src/sim/ship-motion.ts
+```
+
+Real datastore/scheduler acceptance tests were prepared in `spacetimedb/src/index.test.ts`, but **remain unexecuted** until the actual SpacetimeDB module packages/runtime can run. The test harness invokes scheduled reducers as `TestAuth.internal()`; it does not run a wall-clock scheduler. It cannot prove deployment/subscriptions or security on a real server.
