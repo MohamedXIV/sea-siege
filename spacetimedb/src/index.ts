@@ -75,6 +75,7 @@ export const createMatch = spacetimedb.reducer(
         id: 0n, matchId: created.id, ownerSlot: base.ownerSlot,
         kind: base.kind, channel: definition.channel, gridX: base.gridX, gridY: base.gridY,
         width: base.width, height: base.height, hp: definition.hp,
+        level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
         complete: true, connected: true,
         completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
       });
@@ -127,6 +128,7 @@ export const joinMatch = spacetimedb.reducer(
         id: 0n, matchId, ownerSlot: slot,
         kind: base.kind, channel: definition.channel, gridX: base.gridX, gridY: base.gridY,
         width: base.width, height: base.height, hp: definition.hp,
+        level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
         complete: true, connected: true,
         completeAtUs: ctx.timestamp.microsSinceUnixEpoch,
       });
@@ -469,7 +471,8 @@ export const placeStructure = spacetimedb.reducer(
       id: 0n, matchId, ownerSlot: member.slot, kind,
       channel: definition.channel, gridX, gridY,
       width: definition.width, height: definition.height,
-      hp: definition.hp, complete: false,
+      hp: definition.hp, level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
+      complete: false,
       connected: definition.channel === "superstructure",
       completeAtUs: deadline,
     });
@@ -586,3 +589,7 @@ export const completeConstruction = spacetimedb.reducer(
 export {
   orderHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
 } from "./economy-reducers.ts";
+
+export {
+  repairStructure, repairShip, upgradeWorkshop,
+} from "./workshop-reducers.ts";
