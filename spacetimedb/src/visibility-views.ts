@@ -76,7 +76,7 @@ export const myVisibleEnemies = spacetimedb.view(
         })),
       ];
       for (const contact of detectBotEnemies(member.slot,
-        ctx.timestamp.microsSinceUnixEpoch, sensors, contacts, terrain, world.mapCells)) {
+        0n, sensors, contacts, terrain, world.mapCells)) {
         output.push({
           contactKey: member.matchId.toString() + ":" + contact.entityType + ":" + contact.id.toString(),
           matchId: member.matchId, entityId: contact.id,
@@ -92,16 +92,12 @@ export const myVisibleEnemies = spacetimedb.view(
 export const myStructures = spacetimedb.view(
   { name: "my_structures", public: true },
   t.array(structure.rowType),
-  (ctx) => {
-    const result: typeof structure.rowType.type[] = [];
-    for (const member of ctx.db.matchMember.identity.filter(ctx.sender)) {
-      const faction = Array.from(ctx.db.factionState.factionKey.filter(member.factionKey))
-        .find(row => row.matchId === member.matchId && row.slot === member.slot &&
-          row.controller === "human");
-      if (!faction) continue;
-      for (const st of ctx.db.structure.matchId.filter(member.matchId))
-        if (st.ownerSlot === member.slot) result.push(st);
-    }
-    return result;
-  },
+  (ctx) => Array.from(ctx.db.matchMember.identity.filter(ctx.sender)).flatMap(member => {
+    const faction = Array.from(ctx.db.factionState.factionKey.filter(member.factionKey))
+      .find(row => row.matchId === member.matchId &&
+        row.slot === member.slot && row.controller === "human");
+    if (!faction) return [];
+    return Array.from(ctx.db.structure.matchId.filter(member.matchId))
+      .filter(st => st.ownerSlot === member.slot);
+  }),
 );
