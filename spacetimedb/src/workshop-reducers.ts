@@ -3,6 +3,7 @@ import spacetimedb from "./schema.ts";
 import { structureDefinition } from "./sim/construction.ts";
 import { debitSalvage, shipDefinition } from "./sim/economy.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
+import { dispatchWorkshopRepair, dispatchWorkshopUpgrade } from "./sim/workshop-command-dispatch.ts";
 import {
   calculateRepair, maximumStructureHp, nextWorkshopUpgrade,
   withinWorkshopRange,
@@ -26,27 +27,28 @@ export const repairStructure = spacetimedb.reducer(
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
       throw new Error("Not your workshop");
-    if (!workshop.complete || !workshop.connected || workshop.hp <= 0 ||
-        workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
-
     const target = ctx.db.structure.id.find(structureId);
-    if (!target || target.matchId !== workshop.matchId ||
-        target.ownerSlot !== member.slot) throw new Error("Structure not owned by this faction");
-    if (!target.complete || !target.connected || target.hp <= 0)
-      throw new Error("Cannot repair an incomplete, disconnected or destroyed structure");
-    const targetDef = structureDefinition(target.kind);
-    if (!targetDef) throw new Error("Invalid structure type");
-    const workshopPosition = {
-      x: workshop.gridX + workshop.width / 2, y: workshop.gridY + workshop.height / 2,
-    };
-    const targetPosition = { x: target.gridX + target.width / 2, y: target.gridY + target.height / 2 };
-    if (!withinWorkshopRange(workshopPosition, targetPosition, workshop.level))
-      throw new Error("Repair target out of range");
-    const maximumHp = maximumStructureHp(targetDef.hp, target.level, target.kind);
-    const result = calculateRepair(target.hp, maximumHp, requestedHp, workshop.level);
-    const salvage = debitSalvage(faction.salvage, result.salvageCost);
-    ctx.db.factionState.id.update({ ...faction, salvage });
-    ctx.db.structure.id.update({ ...target, hp: result.newHp });
+    const result = dispatchWorkshopRepair({
+      faction: { matchId: workshop.matchId, slot: faction.slot,
+        controller: "human", eliminated: faction.eliminated },
+      workshop, target: target ? {
+        id: target.id, matchId: target.matchId, ownerSlot: target.ownerSlot,
+        type: "structure", kind: target.kind, hp: target.hp, level: target.level,
+        complete: target.complete, connected: target.connected,
+        x: target.gridX + target.width / 2,
+        y: target.gridY + target.height / 2,
+      } : null,
+      requestedHp, salvage: faction.salvage,
+    }, {
+      setBalance: salvage => {
+        ctx.db.factionState.id.update({ ...faction, salvage });
+      },
+      setTargetHp: (_,hp) => {
+        if (!target) throw new Error("Structure disappeared during repair");
+        ctx.db.structure.id.update({ ...target, hp });
+      },
+    });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
@@ -64,23 +66,26 @@ export const repairShip = spacetimedb.reducer(
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
       throw new Error("Not your workshop");
-    if (!workshop.complete || !workshop.connected || workshop.hp <= 0 ||
-        workshop.upgradeRemainingUs > 0n) throw new Error("Workshop offline or upgrading");
-
     const target = ctx.db.ship.id.find(shipId);
-    if (!target || target.matchId !== workshop.matchId || target.ownerSlot !== member.slot)
-      throw new Error("Ship not owned by this faction");
-    if (target.hp <= 0) throw new Error("Cannot repair destroyed ship");
-    const shipDef = shipDefinition(target.kind);
-    if (!shipDef) throw new Error("Invalid ship type");
-    if (!withinWorkshopRange(
-      { x: workshop.gridX + workshop.width / 2, y: workshop.gridY + workshop.height / 2 },
-      { x: target.x, y: target.y }, workshop.level,
-    )) throw new Error("Repair target out of range");
-    const result = calculateRepair(target.hp, shipDef.hp, requestedHp, workshop.level);
-    const salvage = debitSalvage(faction.salvage, result.salvageCost);
-    ctx.db.factionState.id.update({ ...faction, salvage });
-    ctx.db.ship.id.update({ ...target, hp: result.newHp, updatedAt: ctx.timestamp });
+    const result = dispatchWorkshopRepair({
+      faction: { matchId: workshop.matchId, slot: faction.slot,
+        controller: "human", eliminated: faction.eliminated },
+      workshop, target: target ? {
+        id: target.id, matchId: target.matchId, ownerSlot: target.ownerSlot,
+        type: "ship", kind: target.kind, hp: target.hp, level: 1,
+        complete: true, connected: true, x: target.x, y: target.y,
+      } : null,
+      requestedHp, salvage: faction.salvage,
+    }, {
+      setBalance: salvage => {
+        ctx.db.factionState.id.update({ ...faction, salvage });
+      },
+      setTargetHp: (_,hp) => {
+        if (!target) throw new Error("Ship disappeared during repair");
+        ctx.db.ship.id.update({ ...target, hp, updatedAt: ctx.timestamp });
+      },
+    });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
 
@@ -101,16 +106,22 @@ export const upgradeWorkshop = spacetimedb.reducer(
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
       throw new Error("Not your workshop");
-    if (!workshop.complete || !workshop.connected || workshop.hp <= 0)
-      throw new Error("Workshop offline");
-    if (workshop.upgradeRemainingUs > 0n) throw new Error("Workshop already upgrading");
-    const next = nextWorkshopUpgrade(workshop.level);
-    if (!next) throw new Error("Workshop already at maximum tier");
-    const salvage = debitSalvage(faction.salvage, next.cost);
-    ctx.db.factionState.id.update({ ...faction, salvage });
-    ctx.db.structure.id.update({
-      ...workshop, upgradeRemainingUs: next.durationUs,
-      upgradeStartedAtUs: ctx.timestamp.microsSinceUnixEpoch,
+    const result = dispatchWorkshopUpgrade({
+      faction: { matchId: workshop.matchId, slot: faction.slot,
+        controller: "human", eliminated: faction.eliminated },
+      workshop, salvage: faction.salvage,
+      nowUs: ctx.timestamp.microsSinceUnixEpoch,
+    }, {
+      setBalance: salvage => {
+        ctx.db.factionState.id.update({ ...faction, salvage });
+      },
+      setUpgrade: (remainingUs,startedAtUs) => {
+        ctx.db.structure.id.update({
+          ...workshop, upgradeRemainingUs: remainingUs,
+          upgradeStartedAtUs: startedAtUs,
+        });
+      },
     });
+    if (!result.ok) throw new Error(result.reason);
   },
 );
