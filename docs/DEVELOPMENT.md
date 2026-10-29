@@ -43,3 +43,20 @@ Once the module actually builds, the next change (#3/#4) must import those **gen
 Prefer frequent inexpensive static/unit checks as features land; defer actual Cloud deployment and end-to-end multiplayer tests until we have a complete integration slice. Do not mark #2/#3/#4 as passing without executed typecheck/build/module publish and two independent browser sessions.
 
 References: [official TypeScript quickstart](https://spacetimedb.com/docs/quickstarts/typescript/), [table visibility](https://spacetimedb.com/docs/tables/access-permissions/), [React/Vite shadcn setup](https://ui.shadcn.com/docs/installation/vite/), [ADR-0001](adr/0001-multiplayer-motion-tickrate.md).
+
+## World and navigation development status
+
+The pure, tested world and navigation modules live in `spacetimedb/src/sim/`:
+
+- `worldgen.ts`: Mulberry32 procedural layout and 16×16 terrain chunks, safe 2–8 slot starts and salvage nodes.
+- `navigation.ts`: terrain reassembly and bounded deterministic A* (no diagonal corner cutting; accepts future dynamic occupancy callbacks).
+- `index.ts`: server-only, transactionally persisted world state and authoritative ship order path validation.
+
+Local tests:
+```bash
+npm run test:unit
+# OR without dependencies in Node 22:
+node --experimental-strip-types --test tests/*.test.mjs
+```
+
+The `ship_route` table stores the ordered grid cells for a move; **nothing advances the cursor/ship position yet**. Scheduled steering, collision with dynamic buildings and ship-specific radius constraints belong to #10. Visibility-aware views are mandatory before publishing hidden chunks or resource data to any clients (#13). The match seed is now server generated (not a `createMatch` input).
