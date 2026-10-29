@@ -3,6 +3,9 @@ import { schema, table, t } from "spacetimedb/server";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
+import {
+  canSweepVessel, createVesselBodies, isNavigationCellBlocked, COLLISION_RULES,
+} from "./sim/collision.ts";
 
 /**
  * Minimal REAL SpacetimeDB module for Sea Siege (not a browser authority clone).
@@ -112,6 +115,7 @@ const shipRoute = table(
     cellPath: t.array(t.u32()),
     cursor: t.u32(),
     revision: t.u64(),
+    repathAfterUs: t.i64(), // Rate-limit expensive dynamic rerouting during congestion
   },
 );
 
@@ -268,10 +272,19 @@ export const issueShipOrder = spacetimedb.reducer(
       config.mapCells,
       Array.from(ctx.db.worldChunk.matchId.filter(current.matchId)),
     );
+    const env = {
+      mapCells: config.mapCells, terrain,
+      vessels: createVesselBodies(Array.from(ctx.db.ship.matchId.filter(current.matchId))),
+    };
     const route = findTerrainPath(
       terrain, config.mapCells,
       { x: current.x, y: current.y },
       { x: targetX, y: targetY },
+      {
+        blocked: (x, y) => isNavigationCellBlocked(
+          x, y, COLLISION_RULES.scoutRadiusCells, env, shipId,
+        ),
+      },
     );
     if (!route) throw new Error("Destination unreachable");
     const nextRevision = current.revision + 1n;
@@ -283,12 +296,12 @@ export const issueShipOrder = spacetimedb.reducer(
       if (existing) ctx.db.shipRoute.shipId.delete(shipId);
     } else if (existing) {
       ctx.db.shipRoute.shipId.update({
-        ...existing, cellPath, cursor: 0, revision: nextRevision,
+        ...existing, cellPath, cursor: 0, revision: nextRevision, repathAfterUs: 0n,
       });
     } else {
       ctx.db.shipRoute.insert({
         shipId, matchId: current.matchId,
-        cellPath, cursor: 0, revision: nextRevision,
+        cellPath, cursor: 0, revision: nextRevision, repathAfterUs: 0n,
       });
     }
     // The navigation grid is cell-centered. Store the precise actual destination
@@ -386,8 +399,18 @@ export const advanceMatchSimulation = spacetimedb.reducer(
     const world = ctx.db.worldConfig.matchId.find(timer.matchId);
     if (!world) throw new Error("World configuration missing for active match");
 
+    const terrain = decodeTerrainChunks(
+      world.mapCells,
+      Array.from(ctx.db.worldChunk.matchId.filter(timer.matchId)),
+    );
+    // Deterministic ship-id ordering and updated positions prevent different
+    // transaction iteration orders from deciding who may cross first.
+    const matchShips = Array.from(ctx.db.ship.matchId.filter(timer.matchId));
+    matchShips.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const bodies = createVesselBodies(matchShips);
+    const env = { mapCells: world.mapCells, terrain, vessels: bodies };
     let routesRemaining = 0;
-    for (const vessel of ctx.db.ship.matchId.filter(timer.matchId)) {
+    for (const vessel of matchShips) {
       const route = ctx.db.shipRoute.shipId.find(vessel.id);
       if (!route) continue;
       // Stale orders must never outlive their ship's current command revision.
@@ -403,6 +426,48 @@ export const advanceMatchSimulation = spacetimedb.reducer(
         },
         route.cellPath, route.cursor, world.mapCells, seconds,
       );
+
+      // Never trust an old path after another ship has changed position.
+      // Swept validation rejects crossing a blocker even when both endpoints
+      // themselves are navigable (no tunneling on a delayed tick).
+      const clear = canSweepVessel(
+        { x: vessel.x, y: vessel.y },
+        { x: stepped.ship.x, y: stepped.ship.y },
+        COLLISION_RULES.scoutRadiusCells, env, vessel.id,
+      );
+      if (!clear) {
+        routesRemaining++;
+        const nowUs = ctx.timestamp.microsSinceUnixEpoch;
+        if (nowUs >= route.repathAfterUs) {
+          // Congested routes retry no more than once/second per ship. If a
+          // future structure blocks the old path, seek a new legal route.
+          const reroute = findTerrainPath(
+            terrain, world.mapCells,
+            { x: vessel.x, y: vessel.y },
+            { x: vessel.targetX, y: vessel.targetY },
+            {
+              blocked: (x, y) => isNavigationCellBlocked(
+                x, y, COLLISION_RULES.scoutRadiusCells, env, vessel.id,
+              ),
+            },
+          );
+          const reroutedCells = reroute?.waypoints.slice(1).map(
+            point => Math.floor(point.y) * world.mapCells + Math.floor(point.x),
+          );
+          ctx.db.shipRoute.shipId.update({
+            ...route,
+            cellPath: reroutedCells && reroutedCells.length > 0 ? reroutedCells : route.cellPath,
+            cursor: reroutedCells && reroutedCells.length > 0 ? 0 : route.cursor,
+            repathAfterUs: nowUs + 1_000_000n,
+          });
+        }
+        if (vessel.velocityX !== 0 || vessel.velocityY !== 0) {
+          ctx.db.ship.id.update({
+            ...vessel, velocityX: 0, velocityY: 0, updatedAt: ctx.timestamp,
+          });
+        }
+        continue;
+      }
       if (stepped.arrived) {
         ctx.db.shipRoute.shipId.delete(vessel.id);
       } else {
@@ -417,6 +482,13 @@ export const advanceMatchSimulation = spacetimedb.reducer(
           ...stepped.ship,
           updatedAt: ctx.timestamp,
         });
+        const body = bodies.find(entry => entry.id === vessel.id);
+        if (body) {
+          // Later ships in this same transaction collide against the actual,
+          // just-updated authoritative position, not last tick's position.
+          const index = bodies.indexOf(body);
+          bodies[index] = { ...body, x: stepped.ship.x, y: stepped.ship.y };
+        }
       }
     }
     // Running one periodic reducer per *moving match* is much cheaper than
