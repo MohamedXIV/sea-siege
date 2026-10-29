@@ -1116,3 +1116,77 @@ it("only host can remove a bot in lobby; its entire seat is recycled atomically"
   expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.controller)
     .toBe("human");
 });
+
+
+it("one active match with bots gets one bounded internal strategic timer and no extra members", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), outsider = auth("outsider", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 4 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "easy" }));
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "hard" }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  expect(test.db.botSchedule.count()).toBe(1n);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.botController.matchId.filter(matchId)]).toHaveLength(2);
+  const schedule = [...test.db.botSchedule.iter()][0]!;
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.advanceBots(ctx, { arg: schedule })
+  )).toThrow("internal-only");
+
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceBots(ctx, { arg: schedule })
+  );
+  const bots = [...test.db.botController.matchId.filter(matchId)];
+  expect(bots.every(row => row.nextDecisionUs > 0n)).toBe(true);
+  expect(test.db.botSchedule.count()).toBe(1n);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.factionState.matchId.filter(matchId)].filter(row => row.controller === "bot"))
+    .toHaveLength(2);
+  // No Bot is authorized as a client; even the host cannot control its fleet.
+  const enemy = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot === 1)!;
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.stopShip(ctx, { shipId: enemy.id })
+  )).toThrow("Cannot command another");
+});
+
+it("the bot sensor filters hidden enemies before autonomous aiming or firing", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "normal" }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const own = [...test.db.ship.matchId.filter(matchId)].find(row => row.ownerSlot === 0)!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({ ...own, x: 1.5, y: 1.5 })
+  );
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const timer = [...test.db.botSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceBots(ctx, { arg: timer })
+  );
+  // Bot has no visibility of the deliberately relocated far-away human ship.
+  expect(test.db.projectile.count()).toBe(0n);
+  expect([...test.db.turretAim.matchId.filter(matchId)]
+    .filter(row => row.sourceType === "ship" &&
+      [...test.db.ship.matchId.filter(matchId)].some(ship =>
+        ship.ownerSlot === 1 && ship.id === row.sourceId))).toHaveLength(0);
+});
+
+it("finalizing the match cancels all strategic bots and preserves the outcome", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "hard" }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  expect(test.db.botSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(720_000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: [...test.db.matchDeadline.iter()][0]! })
+  );
+  expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
+  expect(test.db.botSchedule.count()).toBe(0n);
+});
