@@ -26,7 +26,6 @@ export function DevControls() {
     createMatch,
     joinMatch,
     startMatch,
-    setActiveMatchId,
     resetIdentity,
     client,
   } = useSpacetime();
