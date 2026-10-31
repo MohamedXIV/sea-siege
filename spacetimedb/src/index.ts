@@ -1,5 +1,5 @@
 import { ScheduleAt } from "spacetimedb";
-import { t } from "spacetimedb/server";
+import { t, SenderError } from "spacetimedb/server";
 import spacetimedb, {
   motionSchedule, constructionSchedule, economySchedule,
   ship, matchMember, factionState,
@@ -38,7 +38,7 @@ import {
 export const createMatch = spacetimedb.reducer(
   { maxSlots: t.u32() },
   (ctx, { maxSlots }) => {
-    if (maxSlots < 2 || maxSlots > 8) throw new Error("Matches support 2–8 slots");
+    if (maxSlots < 2 || maxSlots > 8) throw new SenderError("Matches support 2–8 slots");
     // Choose the seed on the authoritative server, not from a player-supplied value.
     // SpacetimeDB context RNG is deterministic for reducer execution, but is not
     // intended to be cryptographically unpredictable (fine for casual RTS maps).
@@ -127,14 +127,14 @@ export const joinMatch = spacetimedb.reducer(
   { matchId: t.u64() },
   (ctx, { matchId }) => {
     const lobby = ctx.db.match.id.find(matchId);
-    if (!lobby || lobby.phase !== "lobby") throw new Error("Lobby unavailable");
+    if (!lobby || lobby.phase !== "lobby") throw new SenderError("Lobby unavailable");
     const occupied = new Set(Array.from(ctx.db.factionState.matchId.filter(matchId))
       .map(row => row.slot));
     for (const member of ctx.db.matchMember.matchId.filter(matchId)) {
       if (member.identity.isEqual(ctx.sender)) return; // reconnect / idempotent join
     }
     const slot = Array.from({ length: lobby.maxSlots }, (_, index) => index).find(index => !occupied.has(index));
-    if (slot === undefined) throw new Error("Lobby full");
+    if (slot === undefined) throw new SenderError("Lobby full");
     ctx.db.matchMember.insert({
       id: 0n, matchId, identity: ctx.sender, slot,
       factionKey: factionKey(matchId, slot),
@@ -145,7 +145,7 @@ export const joinMatch = spacetimedb.reducer(
       totalSalvageGathered: 0n, eliminated: false,
     });
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
-    if (!spawn) throw new Error("Missing server-owned spawn assignment");
+    if (!spawn) throw new SenderError("Missing server-owned spawn assignment");
     for (const base of initialStructures(slot, spawn.gridX, spawn.gridY)) {
       const definition = CONSTRUCTION_RULES.definitions[base.kind];
       ctx.db.structure.insert({
@@ -185,10 +185,10 @@ export const startMatch = spacetimedb.reducer(
   { matchId: t.u64() },
   (ctx, { matchId }) => {
     const lobby = ctx.db.match.id.find(matchId);
-    if (!lobby || lobby.phase !== "lobby") throw new Error("Lobby unavailable");
-    if (!lobby.host.isEqual(ctx.sender)) throw new Error("Only the host may start");
+    if (!lobby || lobby.phase !== "lobby") throw new SenderError("Lobby unavailable");
+    if (!lobby.host.isEqual(ctx.sender)) throw new SenderError("Only the host may start");
     const occupiedFactions = Array.from(ctx.db.factionState.matchId.filter(matchId));
-    if (occupiedFactions.length < 2) throw new Error("Need at least two actual members");
+    if (occupiedFactions.length < 2) throw new SenderError("Need at least two actual members");
     const startUs = ctx.timestamp.microsSinceUnixEpoch;
     ctx.db.match.id.update({ ...lobby, phase: "active", startedAtUs: startUs });
     const deadlineUs = deadlineMicroseconds(startUs);
@@ -216,18 +216,18 @@ export const issueShipOrder = spacetimedb.reducer(
   { shipId: t.u64(), targetX: t.f64(), targetY: t.f64() },
   (ctx, { shipId, targetX, targetY }) => {
     const current = ctx.db.ship.id.find(shipId);
-    if (!current) throw new Error("Ship unavailable");
+    if (!current) throw new SenderError("Ship unavailable");
     const seat = Array.from(ctx.db.matchMember.matchId.filter(current.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = Array.from(ctx.db.factionState.matchId.filter(current.matchId))
       .find(row => row.slot === current.ownerSlot);
     if (!mayControlFaction(seat?.slot, current.ownerSlot,
       faction?.eliminated ?? true) || faction?.controller !== "human")
-      throw new Error("Cannot command another player's ship");
+      throw new SenderError("Cannot command another player's ship");
     const match = ctx.db.match.id.find(current.matchId);
-    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const config = ctx.db.worldConfig.matchId.find(current.matchId);
-    if (!config) throw new Error("Missing match world configuration");
+    if (!config) throw new SenderError("Missing match world configuration");
     const terrain = decodeTerrainChunks(
       config.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(current.matchId)),
     );
@@ -280,7 +280,7 @@ export const issueShipOrder = spacetimedb.reducer(
         }
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -315,16 +315,16 @@ export const stopShip = spacetimedb.reducer(
   { shipId: t.u64() },
   (ctx, { shipId }) => {
     const current = ctx.db.ship.id.find(shipId);
-    if (!current) throw new Error("Ship unavailable");
+    if (!current) throw new SenderError("Ship unavailable");
     const seat = Array.from(ctx.db.matchMember.matchId.filter(current.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = Array.from(ctx.db.factionState.matchId.filter(current.matchId))
       .find(row => row.slot === current.ownerSlot);
     if (!mayControlFaction(seat?.slot, current.ownerSlot,
       faction?.eliminated ?? true) || faction?.controller !== "human")
-      throw new Error("Cannot command another player's ship");
+      throw new SenderError("Cannot command another player's ship");
     const lobby = ctx.db.match.id.find(current.matchId);
-    if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
     ctx.db.harvestOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
@@ -476,17 +476,17 @@ export const placeStructure = spacetimedb.reducer(
   { matchId: t.u64(), kind: t.string(), gridX: t.u32(), gridY: t.u32() },
   (ctx, { matchId, kind, gridX, gridY }) => {
     const matchRow = ctx.db.match.id.find(matchId);
-    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
-    if (!faction || faction.eliminated) throw new Error("Cannot construct in another player's match");
+    if (!faction || faction.eliminated) throw new SenderError("Cannot construct in another player's match");
     const definition = structureDefinition(kind);
     if (!definition || kind === "command_core")
-      throw new Error("Unknown or protected structure kind");
+      throw new SenderError("Unknown or protected structure kind");
     const world = ctx.db.worldConfig.matchId.find(matchId);
-    if (!world) throw new Error("Missing authoritative world");
+    if (!world) throw new SenderError("Missing authoritative world");
     const terrain = decodeTerrainChunks(
       world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
     );
@@ -519,7 +519,7 @@ export const placeStructure = spacetimedb.reducer(
         });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -528,20 +528,20 @@ export const demolishStructure = spacetimedb.reducer(
   { structureId: t.u64() },
   (ctx, { structureId }) => {
     const target = ctx.db.structure.id.find(structureId);
-    if (!target) throw new Error("Structure unavailable");
-    if (target.kind === "command_core") throw new Error("Command Core cannot be demolished");
+    if (!target) throw new SenderError("Structure unavailable");
+    if (target.kind === "command_core") throw new SenderError("Command Core cannot be demolished");
     const matchRow = ctx.db.match.id.find(target.matchId);
-    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(target.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(target.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!member || !faction || faction.eliminated || faction.slot !== target.ownerSlot)
-      throw new Error("Cannot demolish another faction's structure");
+      throw new SenderError("Cannot demolish another faction's structure");
     const definition = structureDefinition(target.kind);
-    if (!definition) throw new Error("Unknown stored structure kind");
+    if (!definition) throw new SenderError("Unknown stored structure kind");
     const world = ctx.db.worldConfig.matchId.find(target.matchId);
-    if (!world) throw new Error("Missing authoritative world");
+    if (!world) throw new SenderError("Missing authoritative world");
     const refund = Math.floor(definition.cost * (target.complete ? 0.5 : 0.75));
     let newSalvage = creditSalvage(faction.salvage, refund);
     // An uncompleted tier upgrade is refunded if the Workshop is demolished.
@@ -552,7 +552,7 @@ export const demolishStructure = spacetimedb.reducer(
     }
     const removedYards = new Set<bigint>();
     if (target.kind === "shipyard") removedYards.add(target.id);
-    if (newSalvage > 0xffffffff) throw new Error("Salvage overflow");
+    if (newSalvage > 0xffffffff) throw new SenderError("Salvage overflow");
     ctx.db.structure.id.delete(target.id);
     for (const pending of ctx.db.constructionSchedule.structureId.filter(target.id)) {
       ctx.db.constructionSchedule.scheduledId.delete(pending.scheduledId);

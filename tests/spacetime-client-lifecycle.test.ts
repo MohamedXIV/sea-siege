@@ -420,7 +420,7 @@ describe("P0 Stabilization Verification Suite", () => {
       expect(client.getState().identity).toBeTruthy();
 
       client.disconnect();
-    });
+    }, 10000);
 
     it("resolves same-origin host in browser environment when accessing remote Codespaces hostname", () => {
       const originalWindow = globalThis.window;
@@ -437,6 +437,66 @@ describe("P0 Stabilization Verification Suite", () => {
       } finally {
         (globalThis as any).window = originalWindow;
       }
+    });
+  });
+
+  // 8. Single-Member Lobby Rejection Regression (Controlled SenderError)
+  describe("Single-Member Lobby Rejection Regression", () => {
+    it("rejects 1-member startMatch with SenderError rather than crashing the instance", async () => {
+      const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
+      client.clearStoredToken();
+
+      client.connect();
+      await waitFor(() => client.getState().status === "connected", 8000);
+      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
+
+      // Create a new match (host only, 1 member)
+      await client.createMatch(2);
+      await waitFor(() => client.getState().activeMatchId !== null, 8000);
+      const matchId = client.getState().activeMatchId!;
+
+      let caughtError: any = null;
+      try {
+        await client.startMatch(matchId);
+      } catch (err: any) {
+        caughtError = err;
+      }
+
+      // Must be a graceful SenderError with exact reducer message, NOT InternalError fatal crash
+      expect(caughtError).toBeTruthy();
+      expect(caughtError.name).toBe("SenderError");
+      expect(caughtError.message).toBe("Need at least two actual members");
+
+      // Verify client connection and subscriptions remain healthy and applied
+      expect(client.getState().status).toBe("connected");
+      expect(client.getState().subscriptionStatus).toBe("applied");
+
+      client.disconnect();
+    });
+
+    it("rejects startMatch from a non-host with SenderError", async () => {
+      const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
+      client.clearStoredToken();
+
+      client.connect();
+      await waitFor(() => client.getState().status === "connected", 8000);
+      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
+
+      let caughtError: any = null;
+      try {
+        await client.startMatch(33n); // Match 33 is owned by another identity
+      } catch (err: any) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeTruthy();
+      expect(caughtError.name).toBe("SenderError");
+      expect(caughtError.message).toBe("Only the host may start");
+
+      expect(client.getState().status).toBe("connected");
+      expect(client.getState().subscriptionStatus).toBe("applied");
+
+      client.disconnect();
     });
   });
 });

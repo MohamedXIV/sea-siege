@@ -40,6 +40,7 @@ export function DevControls() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
+  const [player2Joined, setPlayer2Joined] = useState(false);
 
   const handleCreate = async () => {
     setIsActing(true);
@@ -82,6 +83,12 @@ export function DevControls() {
 
   const handleStart = async () => {
     if (!activeMatchId) return;
+    if (!player2Joined) {
+      setActionError(
+        "Need at least two actual members. Join this match from a second browser window (e.g. Incognito) before starting."
+      );
+      return;
+    }
     setIsActing(true);
     setActionError(null);
     try {
@@ -241,15 +248,35 @@ export function DevControls() {
 
           {/* Lobby Host Control */}
           {activeMatch.phase === "lobby" && (
-            <div className="pt-1">
+            <div className="pt-1 space-y-2.5">
               {isHost ? (
-                <Button
-                  onClick={handleStart}
-                  disabled={isActing}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-2"
-                >
-                  <Play className="size-4" /> Start Match
-                </Button>
+                <>
+                  <div className="bg-slate-900/60 border border-cyan-800/30 rounded-lg p-2.5 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span className="font-semibold text-cyan-300">Lobby Gate:</span>
+                      <span className="text-[11px] font-mono text-amber-300">Min 2 Players</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Matches require at least two players. Open an <span className="text-cyan-200 font-semibold">Incognito window</span>, connect, and join <span className="font-mono text-amber-300">Match #{activeMatch.id.toString()}</span>.
+                    </p>
+                    <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer pt-1">
+                      <input
+                        type="checkbox"
+                        checked={player2Joined}
+                        onChange={(e) => setPlayer2Joined(e.target.checked)}
+                        className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-400"
+                      />
+                      <span>Player 2 has joined in second window</span>
+                    </label>
+                  </div>
+                  <Button
+                    onClick={handleStart}
+                    disabled={isActing || !player2Joined}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-semibold flex items-center justify-center gap-2"
+                  >
+                    <Play className="size-4" /> Start Match
+                  </Button>
+                </>
               ) : (
                 <div className="text-xs text-center text-amber-300/90 bg-amber-950/20 border border-amber-800/30 py-2 rounded-md">
                   Waiting for host to start match...
