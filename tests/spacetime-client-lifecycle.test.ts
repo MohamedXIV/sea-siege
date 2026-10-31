@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { SpacetimeClient } from "../src/network/spacetime-client";
 import { validateMatchIdInput, U64_MAX } from "../src/network/match-id-validation";
+import { DbConnection } from "../src/module_bindings";
 
 function waitFor(predicate: () => boolean, timeoutMs = 10000, intervalMs = 50): Promise<void> {
   const start = Date.now();
@@ -130,7 +131,7 @@ describe("P0 Stabilization Verification Suite", () => {
       expect(client.getState().status).toBe("disconnected");
     });
 
-    it("guards against duplicate connections while connecting or reconnecting", async () => {
+    it("guards against duplicate connections while connecting", async () => {
       const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
       client.clearStoredToken();
 
@@ -145,6 +146,40 @@ describe("P0 Stabilization Verification Suite", () => {
       expect(secondConn).toBe(firstConn);
 
       client.disconnect();
+    });
+
+    it("enters reconnecting state on connection drop and ignores repeated connect() calls during reconnecting", async () => {
+      const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
+      client.clearStoredToken();
+
+      client.connect();
+      await waitFor(() => client.getState().status === "connected");
+      expect(client.getState().status).toBe("connected");
+
+      const activeConn = client.getConnection() as any;
+      expect(activeConn).not.toBeNull();
+
+      // Simulate connection loss by closing the underlying WebSocket
+      activeConn.ws?.close(1006, "Simulated network drop");
+
+      // SpacetimeDB withAutomaticReconnect triggers onDisconnect with nextAttempt defined
+      await waitFor(() => client.getState().status === "reconnecting");
+      expect(client.getState().status).toBe("reconnecting");
+      const reconnectingConn = client.getConnection();
+      expect(reconnectingConn).toBe(activeConn);
+
+      // Calling connect() while in reconnecting state must be guarded and not replace the connection
+      client.connect();
+      client.connect();
+      expect(client.getState().status).toBe("reconnecting");
+      expect(client.getConnection()).toBe(reconnectingConn);
+
+      // Verify connection recovers automatically to connected
+      await waitFor(() => client.getState().status === "connected", 10000);
+      expect(client.getState().status).toBe("connected");
+
+      client.disconnect();
+      expect(client.getState().status).toBe("disconnected");
     });
   });
 
@@ -170,13 +205,83 @@ describe("P0 Stabilization Verification Suite", () => {
       client.disconnect();
     });
 
-    it("ensures old connection callbacks cannot poison state after disconnect or reset", async () => {
+    it("discards deliberately delayed stale callbacks after resetIdentity()", async () => {
+      let capturedOnConnect: ((conn: any, id: any, token: string) => void) | null = null;
+      let capturedOnReconnect: ((conn: any, id: any, token: string) => void) | null = null;
+      let capturedOnDisconnect: ((ctx: any, err: any, nextAttempt: any, nextDelay: any) => void) | null = null;
+
+      const originalBuilder = DbConnection.builder;
+      DbConnection.builder = function () {
+        const builder = originalBuilder.call(DbConnection);
+        const origOnConnect = builder.onConnect.bind(builder);
+        const origOnReconnect = builder.onAutomaticReconnect.bind(builder);
+        const origOnDisconnect = builder.onDisconnect.bind(builder);
+
+        builder.onConnect = function (cb: any) {
+          if (!capturedOnConnect) capturedOnConnect = cb;
+          return origOnConnect(cb);
+        };
+        builder.onAutomaticReconnect = function (cb: any) {
+          if (!capturedOnReconnect) capturedOnReconnect = cb;
+          return origOnReconnect(cb);
+        };
+        builder.onDisconnect = function (cb: any) {
+          if (!capturedOnDisconnect) capturedOnDisconnect = cb;
+          return origOnDisconnect(cb);
+        };
+        return builder;
+      };
+
+      try {
+        const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
+        client.clearStoredToken();
+
+        client.connect();
+        await waitFor(() => client.getState().status === "connected");
+        const firstIdentity = client.getState().identity;
+        expect(firstIdentity).toBeTruthy();
+        expect(capturedOnConnect).not.toBeNull();
+
+        const staleOnConnect = capturedOnConnect!;
+        const staleOnReconnect = capturedOnReconnect!;
+        const staleOnDisconnect = capturedOnDisconnect!;
+
+        // Reset identity, creating a new connection generation
+        client.resetIdentity();
+        await waitFor(() => client.getState().status === "connected" && client.getState().identity !== firstIdentity);
+        const freshIdentity = client.getState().identity;
+        expect(freshIdentity).toBeTruthy();
+        expect(freshIdentity).not.toBe(firstIdentity);
+
+        // Inject stale onConnect callback from previous generation with forged identity
+        const fakeOldId = { toHexString: () => "0000000000000000stale_identity" };
+        staleOnConnect({}, fakeOldId, "stale_token");
+
+        // Assert state was NOT poisoned by stale callback
+        expect(client.getState().identity).toBe(freshIdentity);
+        expect(client.getState().identity).not.toBe("0000000000000000stale_identity");
+
+        // Inject stale onAutomaticReconnect callback
+        staleOnReconnect({}, fakeOldId, "stale_token");
+        expect(client.getState().identity).toBe(freshIdentity);
+
+        // Inject stale onDisconnect callback
+        staleOnDisconnect({}, new Error("stale error"), undefined, undefined);
+        expect(client.getState().status).toBe("connected");
+        expect(client.getState().error).toBeNull();
+
+        client.disconnect();
+      } finally {
+        DbConnection.builder = originalBuilder;
+      }
+    });
+
+    it("ensures old connection callbacks cannot poison state after disconnect", async () => {
       const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
       client.clearStoredToken();
 
       client.connect();
       await waitFor(() => client.getState().status === "connected");
-      const oldConn = client.getConnection()!;
 
       // Disconnect client
       client.disconnect();
@@ -188,7 +293,7 @@ describe("P0 Stabilization Verification Suite", () => {
     });
   });
 
-  // 5. Subscription Surface & Recovery
+  // 5. Subscription Surface, Recovery & Listener Deduplication
   describe("Priority 4: Surface Subscription State and Recovery", () => {
     it("marks subscription as applied once authorized views are received", async () => {
       const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
@@ -205,18 +310,25 @@ describe("P0 Stabilization Verification Suite", () => {
       client.disconnect();
     });
 
-    it("allows resubscribe recovery without reconnecting the underlying socket", async () => {
+    it("allows resubscribe recovery without accumulating duplicate table subscriptions or listeners", async () => {
       const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
       client.clearStoredToken();
 
       client.connect();
       await waitFor(() => client.getState().subscriptionStatus === "applied");
 
-      // Call resubscribe
+      // Call resubscribe multiple times
       client.resubscribe();
       await waitFor(() => client.getState().subscriptionStatus === "applied");
+      client.resubscribe();
+      await waitFor(() => client.getState().subscriptionStatus === "applied");
+
       expect(client.getState().status).toBe("connected");
       expect(client.getState().subscriptionStatus).toBe("applied");
+
+      // Verify that table callbacks were bound once and not duplicated
+      const conn = client.getConnection();
+      expect((client as any).tableCallbacksBoundConnection).toBe(conn);
 
       client.disconnect();
     });
