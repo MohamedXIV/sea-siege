@@ -10,4 +10,15 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    proxy: {
+      "/v1": {
+        target: "http://127.0.0.1:3000",
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
 });

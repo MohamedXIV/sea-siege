@@ -1,4 +1,4 @@
-import { t } from "spacetimedb/server";
+import { t, SenderError } from "spacetimedb/server";
 import spacetimedb from "./schema.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { dispatchWorkshopRepair, dispatchWorkshopUpgrade } from "./sim/workshop-command-dispatch.ts";
@@ -12,15 +12,15 @@ export const repairStructure = spacetimedb.reducer(
   { workshopId: t.u64(), structureId: t.u64(), requestedHp: t.u32() },
   (ctx, { workshopId, structureId, requestedHp }) => {
     const workshop = ctx.db.structure.id.find(workshopId);
-    if (!workshop || workshop.kind !== "workshop") throw new Error("Workshop unavailable");
+    if (!workshop || workshop.kind !== "workshop") throw new SenderError("Workshop unavailable");
     const match = ctx.db.match.id.find(workshop.matchId);
-    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(workshop.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
-      throw new Error("Not your workshop");
+      throw new SenderError("Not your workshop");
     const target = ctx.db.structure.id.find(structureId);
     const result = dispatchWorkshopRepair({
       faction: { matchId: workshop.matchId, slot: faction.slot,
@@ -38,11 +38,11 @@ export const repairStructure = spacetimedb.reducer(
         ctx.db.factionState.id.update({ ...faction, salvage });
       },
       setTargetHp: (_,hp) => {
-        if (!target) throw new Error("Structure disappeared during repair");
+        if (!target) throw new SenderError("Structure disappeared during repair");
         ctx.db.structure.id.update({ ...target, hp });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -51,15 +51,15 @@ export const repairShip = spacetimedb.reducer(
   { workshopId: t.u64(), shipId: t.u64(), requestedHp: t.u32() },
   (ctx, { workshopId, shipId, requestedHp }) => {
     const workshop = ctx.db.structure.id.find(workshopId);
-    if (!workshop || workshop.kind !== "workshop") throw new Error("Workshop unavailable");
+    if (!workshop || workshop.kind !== "workshop") throw new SenderError("Workshop unavailable");
     const match = ctx.db.match.id.find(workshop.matchId);
-    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(workshop.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
-      throw new Error("Not your workshop");
+      throw new SenderError("Not your workshop");
     const target = ctx.db.ship.id.find(shipId);
     const result = dispatchWorkshopRepair({
       faction: { matchId: workshop.matchId, slot: faction.slot,
@@ -75,11 +75,11 @@ export const repairShip = spacetimedb.reducer(
         ctx.db.factionState.id.update({ ...faction, salvage });
       },
       setTargetHp: (_,hp) => {
-        if (!target) throw new Error("Ship disappeared during repair");
+        if (!target) throw new SenderError("Ship disappeared during repair");
         ctx.db.ship.id.update({ ...target, hp, updatedAt: ctx.timestamp });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -91,15 +91,15 @@ export const upgradeWorkshop = spacetimedb.reducer(
   { workshopId: t.u64() },
   (ctx, { workshopId }) => {
     const workshop = ctx.db.structure.id.find(workshopId);
-    if (!workshop || workshop.kind !== "workshop") throw new Error("Workshop unavailable");
+    if (!workshop || workshop.kind !== "workshop") throw new SenderError("Workshop unavailable");
     const match = ctx.db.match.id.find(workshop.matchId);
-    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!match || !matchStillActive(match.phase, match.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(workshop.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(workshop.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== workshop.ownerSlot)
-      throw new Error("Not your workshop");
+      throw new SenderError("Not your workshop");
     const result = dispatchWorkshopUpgrade({
       faction: { matchId: workshop.matchId, slot: faction.slot,
         controller: "human", eliminated: faction.eliminated },
@@ -116,6 +116,6 @@ export const upgradeWorkshop = spacetimedb.reducer(
         });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );

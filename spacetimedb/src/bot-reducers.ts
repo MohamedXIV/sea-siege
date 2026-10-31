@@ -1,4 +1,4 @@
-import { t } from "spacetimedb/server";
+import { t, SenderError } from "spacetimedb/server";
 import spacetimedb from "./schema.ts";
 import { BOT_RULES, type BotDifficulty } from "./sim/bot-policy.ts";
 import { firstFreeSlot, deriveBotSeed } from "./sim/bot-seats.ts";
@@ -15,18 +15,18 @@ export const addBot = spacetimedb.reducer(
   { matchId: t.u64(), difficulty: t.string() },
   (ctx, { matchId, difficulty }) => {
     const match = ctx.db.match.id.find(matchId);
-    if (!match || match.phase !== "lobby") throw new Error("Lobby unavailable");
-    if (!match.host.isEqual(ctx.sender)) throw new Error("Only the host may add bots");
+    if (!match || match.phase !== "lobby") throw new SenderError("Lobby unavailable");
+    if (!match.host.isEqual(ctx.sender)) throw new SenderError("Only the host may add bots");
     if (!Object.prototype.hasOwnProperty.call(BOT_RULES.difficulties, difficulty))
-      throw new Error("Invalid bot difficulty");
+      throw new SenderError("Invalid bot difficulty");
 
     const factions = Array.from(ctx.db.factionState.matchId.filter(matchId));
     const slot = firstFreeSlot(match.maxSlots, factions.map(row => row.slot));
-    if (slot === null) throw new Error("Lobby full");
+    if (slot === null) throw new SenderError("Lobby full");
     const world = ctx.db.worldConfig.matchId.find(matchId);
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId))
       .find(row => row.slot === slot);
-    if (!world || !spawn) throw new Error("Missing server-owned bot spawn");
+    if (!world || !spawn) throw new SenderError("Missing server-owned bot spawn");
     const key = factionKey(matchId, slot);
     const newFaction = ctx.db.factionState.insert({
       id: 0n, matchId, slot, factionKey: key, controller: "bot",
@@ -69,11 +69,11 @@ export const removeBot = spacetimedb.reducer(
   { matchId: t.u64(), slot: t.u32() },
   (ctx, { matchId, slot }) => {
     const match = ctx.db.match.id.find(matchId);
-    if (!match || match.phase !== "lobby") throw new Error("Lobby unavailable");
-    if (!match.host.isEqual(ctx.sender)) throw new Error("Only the host may remove bots");
+    if (!match || match.phase !== "lobby") throw new SenderError("Lobby unavailable");
+    if (!match.host.isEqual(ctx.sender)) throw new SenderError("Only the host may remove bots");
     const faction = Array.from(ctx.db.factionState.matchId.filter(matchId))
       .find(row => row.slot === slot && row.controller === "bot");
-    if (!faction) throw new Error("Bot faction unavailable");
+    if (!faction) throw new SenderError("Bot faction unavailable");
     for (const ship of Array.from(ctx.db.ship.matchId.filter(matchId))) {
       if (ship.ownerSlot === slot) ctx.db.ship.id.delete(ship.id);
     }
