@@ -31,7 +31,7 @@ export function desiredBearing(from: Readonly<{ x: number; y: number }>,
 }
 
 export function turretAligned(current: number, desired: number,
-  tolerance = TURRET_RULES.fireToleranceDegrees): boolean {
+  tolerance: number = TURRET_RULES.fireToleranceDegrees): boolean {
   if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance > 180)
     throw new RangeError('Invalid aiming tolerance');
   return Math.abs(angularDifference(current, desired)) <= tolerance;
