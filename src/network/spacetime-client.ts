@@ -78,13 +78,41 @@ export class SpacetimeClient {
   readonly database: string;
 
   constructor(host?: string, database?: string) {
-    this.host =
-      host ||
-      (typeof import.meta !== "undefined" && import.meta.env?.VITE_SPACETIME_HOST) ||
-      "http://127.0.0.1:3000";
+    let resolvedHost: string;
+    if (host) {
+      resolvedHost = host;
+    } else if (
+      typeof import.meta !== "undefined" &&
+      import.meta.env?.VITE_SPACETIME_HOST
+    ) {
+      const envHost = import.meta.env.VITE_SPACETIME_HOST;
+      // In a browser environment, if envHost is localhost/127.0.0.1 but the page is accessed
+      // via a remote hostname (such as GitHub Codespaces forwarded preview *.app.github.dev),
+      // localhost refers to the user's client machine rather than the codespace container.
+      // In that case, use same-origin (window.location.origin) so Vite's /v1 proxy routes it.
+      if (
+        typeof window !== "undefined" &&
+        (envHost.includes("127.0.0.1") || envHost.includes("localhost")) &&
+        window.location.hostname !== "127.0.0.1" &&
+        window.location.hostname !== "localhost"
+      ) {
+        resolvedHost = window.location.origin;
+      } else {
+        resolvedHost = envHost;
+      }
+    } else if (typeof window !== "undefined") {
+      // In browser, default to same-origin so Vite's development proxy routes /v1 to local SpacetimeDB
+      resolvedHost = window.location.origin;
+    } else {
+      // In Node.js / test environments, connect directly to local SpacetimeDB
+      resolvedHost = "http://127.0.0.1:3000";
+    }
+
+    this.host = resolvedHost;
     this.database =
       database ||
-      (typeof import.meta !== "undefined" && import.meta.env?.VITE_SPACETIME_DATABASE) ||
+      (typeof import.meta !== "undefined" &&
+        import.meta.env?.VITE_SPACETIME_DATABASE) ||
       "sea-siege-dev";
     this.cachedState = this.computeState();
   }

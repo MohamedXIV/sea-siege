@@ -32,6 +32,38 @@ spacetime generate --lang typescript --module-path ./spacetimedb --out-dir ./src
 
 Once the module actually builds, the next change (#3/#4) must import those **generated** bindings, connect with `DbConnection.builder()`, subscribe to `match`, `my_ships`, `my_memberships`, send reducer commands and display the **real** status. Nothing in this branch is a substitute for that integration.
 
+## GitHub Codespaces Browser Preview & Dev Proxy
+
+When running in GitHub Codespaces, the SpacetimeDB standalone server and Vite dev server run inside the Linux container, while developers interact with the game via browser on their local machine.
+
+### Architecture
+- **SpacetimeDB Standalone Backend**: Runs inside the container on `127.0.0.1:3000`.
+- **Vite Dev Server**: Listens on `0.0.0.0:5173` with a development proxy.
+- **Port Visibility & Security**: SpacetimeDB port `3000` is kept **private and unforwarded**. It is never exposed publicly. Port `5173` is forwarded privately via GitHub Codespaces authentication.
+- **Same-Origin Dev Proxy**: In `vite.config.ts`, Vite proxies `/v1` requests (`changeOrigin: true`, `ws: true`) to `http://127.0.0.1:3000`. This seamlessly handles:
+  - SpacetimeDB HTTP endpoints (e.g., `POST /v1/identity/websocket-token`, `GET /v1/ping`)
+  - SpacetimeDB WebSocket connection upgrades (e.g., `GET /v1/database/<db>/subscribe`)
+- **Dynamic Origin Resolution**: When executing in a remote browser (e.g. `*.app.github.dev`), `SpacetimeClient` automatically resolves its host to `window.location.origin` (port 5173), preventing remote clients from mistakenly targeting their local machine's `127.0.0.1:3000`. In Node.js / test environments or explicit production configs, direct host configuration is preserved.
+
+### Local Codespaces Workflow
+1. **Start SpacetimeDB daemon**:
+   ```bash
+   spacetime start --non-interactive
+   ```
+2. **Build and publish the module**:
+   ```bash
+   spacetime build --module-path ./spacetimedb
+   spacetime publish sea-siege-dev --server local --module-path ./spacetimedb
+   ```
+3. **Start Vite development server**:
+   ```bash
+   npm run dev
+   ```
+4. **Open in browser**:
+   - In VS Code / Codespaces Ports panel, locate port `5173` and click the "Open in Browser" button (or visit `https://<codespace-name>-5173.app.github.dev`).
+   - For multiplayer testing, open a second browser window (such as Incognito / Private mode) to obtain a distinct client Identity. Both sessions communicate in real time through the authoritative container backend.
+
+
 ## Security gates before multiplayer
 - `ship` and `match_member` are **private**. Do not mark them public just to make prototyping easier.
 - Views presently reveal only caller-owned ships and memberships, not enemies; future fog-of-war requires server-side authorized visibility (#13).

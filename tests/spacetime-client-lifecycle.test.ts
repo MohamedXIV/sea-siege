@@ -404,4 +404,39 @@ describe("P0 Stabilization Verification Suite", () => {
       expect(client.getState().activeMatch?.id).toBe(match2Id);
     });
   });
+
+  // 7. Codespaces Browser Preview Same-Origin Proxy
+  describe("Codespaces Browser Preview Same-Origin Proxy", () => {
+    it("connects and applies subscriptions through the Vite dev proxy on port 5173", async () => {
+      const client = new SpacetimeClient("http://127.0.0.1:5173", "sea-siege-dev");
+      client.clearStoredToken();
+
+      client.connect();
+      await waitFor(() => client.getState().status === "connected", 8000);
+      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
+
+      expect(client.getState().status).toBe("connected");
+      expect(client.getState().subscriptionStatus).toBe("applied");
+      expect(client.getState().identity).toBeTruthy();
+
+      client.disconnect();
+    });
+
+    it("resolves same-origin host in browser environment when accessing remote Codespaces hostname", () => {
+      const originalWindow = globalThis.window;
+      try {
+        (globalThis as any).window = {
+          location: {
+            origin: "https://my-codespace-5173.app.github.dev",
+            hostname: "my-codespace-5173.app.github.dev",
+          },
+        };
+
+        const client = new SpacetimeClient();
+        expect(client.host).toBe("https://my-codespace-5173.app.github.dev");
+      } finally {
+        (globalThis as any).window = originalWindow;
+      }
+    });
+  });
 });
