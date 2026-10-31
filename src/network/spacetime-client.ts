@@ -76,8 +76,9 @@ export class SpacetimeClient {
 
   readonly host: string;
   readonly database: string;
+  private customTokenKey?: string;
 
-  constructor(host?: string, database?: string) {
+  constructor(host?: string, database?: string, customTokenKey?: string) {
     let resolvedHost: string;
     if (host) {
       resolvedHost = host;
@@ -114,11 +115,15 @@ export class SpacetimeClient {
       (typeof import.meta !== "undefined" &&
         import.meta.env?.VITE_SPACETIME_DATABASE) ||
       "sea-siege-dev";
+    this.customTokenKey = customTokenKey;
     this.cachedState = this.computeState();
   }
 
   private tokenStorageKey(): string {
-    return `spacetimedb:auth_token:${this.host}/${this.database}`;
+    return (
+      this.customTokenKey ||
+      `spacetimedb:auth_token:${this.host}/${this.database}`
+    );
   }
 
   getStoredToken(): string | null {

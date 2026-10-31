@@ -253,11 +253,11 @@ export function DevControls() {
                 <>
                   <div className="bg-slate-900/60 border border-cyan-800/30 rounded-lg p-2.5 text-xs space-y-1.5">
                     <div className="flex items-center justify-between text-slate-300">
-                      <span className="font-semibold text-cyan-300">Lobby Gate:</span>
-                      <span className="text-[11px] font-mono text-amber-300">Min 2 Players</span>
+                      <span className="font-semibold text-cyan-300">Host Confirmation:</span>
+                      <span className="text-[11px] font-mono text-amber-300">Min 2 Players Required</span>
                     </div>
                     <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Matches require at least two players. Open an <span className="text-cyan-200 font-semibold">Incognito window</span>, connect, and join <span className="font-mono text-amber-300">Match #{activeMatch.id.toString()}</span>.
+                      Matches require at least two players (server-enforced). Open an <span className="text-cyan-200 font-semibold">Incognito window</span>, connect, and join <span className="font-mono text-amber-300">Match #{activeMatch.id.toString()}</span>.
                     </p>
                     <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer pt-1">
                       <input
@@ -266,7 +266,7 @@ export function DevControls() {
                         onChange={(e) => setPlayer2Joined(e.target.checked)}
                         className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-400"
                       />
-                      <span>Player 2 has joined in second window</span>
+                      <span>I confirm Player 2 has joined in second window</span>
                     </label>
                   </div>
                   <Button

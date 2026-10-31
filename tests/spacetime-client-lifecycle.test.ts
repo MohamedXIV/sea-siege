@@ -443,60 +443,98 @@ describe("P0 Stabilization Verification Suite", () => {
   // 8. Single-Member Lobby Rejection Regression (Controlled SenderError)
   describe("Single-Member Lobby Rejection Regression", () => {
     it("rejects 1-member startMatch with SenderError rather than crashing the instance", async () => {
-      const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
+      const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev", "test:token:single_member");
       client.clearStoredToken();
 
-      client.connect();
-      await waitFor(() => client.getState().status === "connected", 8000);
-      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
-
-      // Create a new match (host only, 1 member)
-      await client.createMatch(2);
-      await waitFor(() => client.getState().activeMatchId !== null, 8000);
-      const matchId = client.getState().activeMatchId!;
-
-      let caughtError: any = null;
       try {
-        await client.startMatch(matchId);
-      } catch (err: any) {
-        caughtError = err;
+        client.connect();
+        await waitFor(() => client.getState().status === "connected", 8000);
+        await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
+
+        // Create a new match (host only, 1 member)
+        await client.createMatch(2);
+        await waitFor(() => client.getState().activeMatchId !== null, 8000);
+        const matchId = client.getState().activeMatchId!;
+
+        let caughtError: any = null;
+        try {
+          await client.startMatch(matchId);
+        } catch (err: any) {
+          caughtError = err;
+        }
+
+        // Must be a graceful SenderError with exact reducer message, NOT InternalError fatal crash
+        expect(caughtError).toBeTruthy();
+        expect(caughtError.name).toBe("SenderError");
+        expect(caughtError.message).toBe("Need at least two actual members");
+
+        // Verify client connection and subscriptions remain healthy and applied
+        expect(client.getState().status).toBe("connected");
+        expect(client.getState().subscriptionStatus).toBe("applied");
+      } finally {
+        client.disconnect();
+        client.clearStoredToken();
       }
-
-      // Must be a graceful SenderError with exact reducer message, NOT InternalError fatal crash
-      expect(caughtError).toBeTruthy();
-      expect(caughtError.name).toBe("SenderError");
-      expect(caughtError.message).toBe("Need at least two actual members");
-
-      // Verify client connection and subscriptions remain healthy and applied
-      expect(client.getState().status).toBe("connected");
-      expect(client.getState().subscriptionStatus).toBe("applied");
-
-      client.disconnect();
     });
 
     it("rejects startMatch from a non-host with SenderError", async () => {
-      const client = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev");
-      client.clearStoredToken();
+      const clientA = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev", "test:token:nonhost_A");
+      const clientB = new SpacetimeClient("http://127.0.0.1:3000", "sea-siege-dev", "test:token:nonhost_B");
+      clientA.clearStoredToken();
+      clientB.clearStoredToken();
 
-      client.connect();
-      await waitFor(() => client.getState().status === "connected", 8000);
-      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
-
-      let caughtError: any = null;
       try {
-        await client.startMatch(33n); // Match 33 is owned by another identity
-      } catch (err: any) {
-        caughtError = err;
+        clientA.connect();
+        clientB.connect();
+
+        await waitFor(() => clientA.getState().status === "connected", 8000);
+        await waitFor(() => clientA.getState().subscriptionStatus === "applied", 8000);
+        await waitFor(() => clientB.getState().status === "connected", 8000);
+        await waitFor(() => clientB.getState().subscriptionStatus === "applied", 8000);
+
+        // Verify independent identities were assigned
+        const idA = clientA.getState().identity;
+        const idB = clientB.getState().identity;
+        expect(idA).toBeTruthy();
+        expect(idB).toBeTruthy();
+        expect(idA).not.toBe(idB);
+
+        // Identity A creates a fresh lobby and obtains its generated match ID
+        await clientA.createMatch(2);
+        await waitFor(() => clientA.getState().activeMatchId !== null, 8000);
+        const matchId = clientA.getState().activeMatchId!;
+        expect(matchId).toBeGreaterThan(0n);
+
+        // Wait for Identity B to see this new match in its subscribed matches list
+        await waitFor(
+          () => clientB.getState().matches.some((m) => m.id === matchId),
+          8000
+        );
+
+        // Independent Identity B (non-host) attempts to start Identity A's match
+        let caughtError: any = null;
+        try {
+          await clientB.startMatch(matchId);
+        } catch (err: any) {
+          caughtError = err;
+        }
+
+        // Must reject with precise SenderError
+        expect(caughtError).toBeTruthy();
+        expect(caughtError.name).toBe("SenderError");
+        expect(caughtError.message).toBe("Only the host may start");
+
+        // Both client connections and subscriptions remain healthy and applied
+        expect(clientA.getState().status).toBe("connected");
+        expect(clientA.getState().subscriptionStatus).toBe("applied");
+        expect(clientB.getState().status).toBe("connected");
+        expect(clientB.getState().subscriptionStatus).toBe("applied");
+      } finally {
+        clientA.disconnect();
+        clientB.disconnect();
+        clientA.clearStoredToken();
+        clientB.clearStoredToken();
       }
-
-      expect(caughtError).toBeTruthy();
-      expect(caughtError.name).toBe("SenderError");
-      expect(caughtError.message).toBe("Only the host may start");
-
-      expect(client.getState().status).toBe("connected");
-      expect(client.getState().subscriptionStatus).toBe("applied");
-
-      client.disconnect();
     });
   });
 });
