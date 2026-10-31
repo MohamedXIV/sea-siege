@@ -18,8 +18,15 @@ export type ConnectionStatus =
   | "reconnecting"
   | "error";
 
+export type SubscriptionStatus =
+  | "inactive"
+  | "subscribing"
+  | "applied"
+  | "error";
+
 export interface SpacetimeClientState {
   status: ConnectionStatus;
+  subscriptionStatus: SubscriptionStatus;
   identity: string | null;
   error: string | null;
   matches: Match[];
@@ -35,10 +42,26 @@ export interface SpacetimeClientState {
 export type StateListener = (state: SpacetimeClientState) => void;
 export type EntityListener = () => void;
 
-class SpacetimeClient {
+function extractSubscriptionErrorMessage(ctx: any): string {
+  if (ctx?.event?.message) return String(ctx.event.message);
+  if (typeof ctx?.event === "string") return ctx.event;
+  if (ctx?.message) return String(ctx.message);
+  if (ctx?.error?.message) return String(ctx.error.message);
+  if (typeof ctx?.error === "string") return ctx.error;
+  try {
+    const s = JSON.stringify(ctx);
+    if (s && s !== "{}") return `Subscription error: ${s}`;
+  } catch {
+    // ignore
+  }
+  return "Failed to establish authorized database subscription";
+}
+
+export class SpacetimeClient {
   private conn: DbConnection | null = null;
   private subHandle: SubscriptionHandle | null = null;
   private status: ConnectionStatus = "disconnected";
+  private subscriptionStatus: SubscriptionStatus = "inactive";
   private identity: string | null = null;
   private error: string | null = null;
   private activeMatchId: bigint | null = null;
@@ -47,15 +70,22 @@ class SpacetimeClient {
   private refCount = 0;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private cachedState: SpacetimeClientState;
+  private connectionGeneration = 0;
+  private tableCallbacksBoundConnection: DbConnection | null = null;
+  private pendingCreateMatch = false;
 
   readonly host: string;
   readonly database: string;
 
-  constructor() {
+  constructor(host?: string, database?: string) {
     this.host =
-      import.meta.env.VITE_SPACETIME_HOST || "http://127.0.0.1:3000";
+      host ||
+      (typeof import.meta !== "undefined" && import.meta.env?.VITE_SPACETIME_HOST) ||
+      "http://127.0.0.1:3000";
     this.database =
-      import.meta.env.VITE_SPACETIME_DATABASE || "sea-siege-dev";
+      database ||
+      (typeof import.meta !== "undefined" && import.meta.env?.VITE_SPACETIME_DATABASE) ||
+      "sea-siege-dev";
     this.cachedState = this.computeState();
   }
 
@@ -113,10 +143,14 @@ class SpacetimeClient {
       }
     }
 
-    // Determine active match ID
+    // Determine active match ID deterministically
     let activeMatchId = this.activeMatchId;
     if (activeMatchId === null && myMemberships.length > 0) {
-      activeMatchId = myMemberships[myMemberships.length - 1]!.matchId;
+      // Sort memberships by matchId ascending to deterministically pick the latest match
+      const sorted = [...myMemberships].sort((a, b) =>
+        a.matchId > b.matchId ? 1 : a.matchId < b.matchId ? -1 : 0
+      );
+      activeMatchId = sorted[sorted.length - 1]!.matchId;
     }
 
     const activeMatch =
@@ -154,6 +188,7 @@ class SpacetimeClient {
 
     return {
       status: this.status,
+      subscriptionStatus: this.subscriptionStatus,
       identity: this.identity,
       error: this.error,
       matches,
@@ -205,18 +240,41 @@ class SpacetimeClient {
     this.notify();
   }
 
+  selectMatch(id: bigint | null): void {
+    this.setActiveMatchId(id);
+  }
+
   connect(): void {
     if (this.disconnectTimer) {
       clearTimeout(this.disconnectTimer);
       this.disconnectTimer = null;
     }
 
-    if (this.conn && (this.status === "connected" || this.status === "connecting")) {
+    // Guard: do not create duplicate connections if currently connected, connecting, or reconnecting
+    if (
+      this.conn &&
+      (this.status === "connected" ||
+        this.status === "connecting" ||
+        this.status === "reconnecting")
+    ) {
       return;
     }
 
+    // Clean up any stale connection instance before creating a new one
+    if (this.conn) {
+      try {
+        this.conn.disconnect();
+      } catch {
+        // ignore
+      }
+      this.conn = null;
+    }
+
+    const generation = ++this.connectionGeneration;
     this.status = "connecting";
+    this.subscriptionStatus = "inactive";
     this.error = null;
+    this.tableCallbacksBoundConnection = null;
     this.notify();
 
     const token = this.getStoredToken() || undefined;
@@ -228,37 +286,60 @@ class SpacetimeClient {
         .withToken(token)
         .withAutomaticReconnect()
         .onConnect((connection, identity, authToken) => {
+          if (generation !== this.connectionGeneration) return;
           this.status = "connected";
           this.identity = identity.toHexString();
           this.setStoredToken(authToken);
           this.error = null;
-          this.attachTableCallbacks(connection);
-          this.applySubscriptions(connection);
+
+          if (this.tableCallbacksBoundConnection !== connection) {
+            this.attachTableCallbacks(connection);
+            this.tableCallbacksBoundConnection = connection;
+          }
+
+          this.applySubscriptions(connection, generation);
           this.notify();
         })
-        .onAutomaticReconnect((_connection, identity, authToken) => {
+        .onAutomaticReconnect((connection, identity, authToken) => {
+          if (generation !== this.connectionGeneration) return;
           this.status = "connected";
           this.identity = identity.toHexString();
           this.setStoredToken(authToken);
           this.error = null;
+
+          if (this.tableCallbacksBoundConnection !== connection) {
+            this.attachTableCallbacks(connection);
+            this.tableCallbacksBoundConnection = connection;
+          }
+
           this.notify();
         })
         .onConnectError((_ctx, err, nextAttempt, _nextDelay) => {
+          if (generation !== this.connectionGeneration) return;
           this.error = err.message || "Failed to connect to SpacetimeDB";
           this.status = nextAttempt !== undefined ? "reconnecting" : "error";
+          this.subscriptionStatus = "inactive";
           this.notify();
         })
         .onDisconnect((_ctx, err, nextAttempt, _nextDelay) => {
+          if (generation !== this.connectionGeneration) return;
           if (err) {
             this.error = err.message;
           }
-          this.status = nextAttempt !== undefined ? "reconnecting" : "disconnected";
+          this.status =
+            nextAttempt !== undefined ? "reconnecting" : "disconnected";
+          if (this.status === "disconnected") {
+            this.subscriptionStatus = "inactive";
+          }
           this.notify();
         })
         .build();
     } catch (err: any) {
+      if (generation !== this.connectionGeneration) return;
       this.status = "error";
-      this.error = err?.message || "Failed to initialize SpacetimeDB connection";
+      this.subscriptionStatus = "inactive";
+      this.error =
+        err?.message || "Failed to initialize SpacetimeDB connection";
       this.notify();
     }
   }
@@ -271,7 +352,13 @@ class SpacetimeClient {
     conn.db.match.onUpdate(notifyChange);
     conn.db.match.onDelete(notifyChange);
 
-    conn.db.myMemberships.onInsert(notifyChange);
+    conn.db.myMemberships.onInsert((_ctx, row) => {
+      if (this.pendingCreateMatch) {
+        this.activeMatchId = row.matchId;
+        this.pendingCreateMatch = false;
+      }
+      this.notify();
+    });
     conn.db.myMemberships.onUpdate(notifyChange);
     conn.db.myMemberships.onDelete(notifyChange);
 
@@ -292,22 +379,32 @@ class SpacetimeClient {
     conn.db.myVisibleEnemies.onDelete(notifyChange);
   }
 
-  private applySubscriptions(conn: DbConnection): void {
+  private applySubscriptions(conn: DbConnection, generation: number): void {
     if (this.subHandle) {
       try {
         this.subHandle.unsubscribe();
       } catch {
         // ignore
       }
+      this.subHandle = null;
     }
+
+    this.subscriptionStatus = "subscribing";
 
     this.subHandle = conn
       .subscriptionBuilder()
       .onApplied(() => {
+        if (generation !== this.connectionGeneration) return;
+        this.subscriptionStatus = "applied";
+        this.error = null;
         this.notify();
       })
       .onError((ctx) => {
-        console.error("Subscription error:", ctx);
+        if (generation !== this.connectionGeneration) return;
+        this.subscriptionStatus = "error";
+        this.error = extractSubscriptionErrorMessage(ctx);
+        console.error("Subscription error:", this.error, ctx);
+        this.notify();
       })
       .subscribe([
         "SELECT * FROM match",
@@ -317,6 +414,14 @@ class SpacetimeClient {
         "SELECT * FROM my_faction_states",
         "SELECT * FROM my_visible_enemies",
       ]);
+  }
+
+  resubscribe(): void {
+    if (this.conn && this.status === "connected") {
+      this.error = null;
+      this.applySubscriptions(this.conn, this.connectionGeneration);
+      this.notify();
+    }
   }
 
   acquire(): () => void {
@@ -343,6 +448,7 @@ class SpacetimeClient {
   }
 
   disconnect(): void {
+    this.connectionGeneration++;
     if (this.subHandle) {
       try {
         this.subHandle.unsubscribe();
@@ -359,7 +465,10 @@ class SpacetimeClient {
       }
       this.conn = null;
     }
+    this.tableCallbacksBoundConnection = null;
+    this.pendingCreateMatch = false;
     this.status = "disconnected";
+    this.subscriptionStatus = "inactive";
     this.notify();
   }
 
@@ -376,14 +485,37 @@ class SpacetimeClient {
     if (!this.conn || this.status !== "connected") {
       throw new Error("Cannot create match: not connected to SpacetimeDB");
     }
-    await this.conn.reducers.createMatch({ maxSlots });
+    const prevMembershipMatchIds = new Set(
+      Array.from(this.conn.db.myMemberships.iter()).map((m) => m.matchId)
+    );
+    this.pendingCreateMatch = true;
+    try {
+      await this.conn.reducers.createMatch({ maxSlots });
+      // If the subscription update already arrived during the await:
+      const newMembership = Array.from(this.conn.db.myMemberships.iter()).find(
+        (m) => !prevMembershipMatchIds.has(m.matchId)
+      );
+      if (newMembership) {
+        this.activeMatchId = newMembership.matchId;
+        this.pendingCreateMatch = false;
+        this.notify();
+      }
+    } catch (err) {
+      this.pendingCreateMatch = false;
+      throw err;
+    }
   }
 
   async joinMatch(matchId: bigint): Promise<void> {
     if (!this.conn || this.status !== "connected") {
       throw new Error("Cannot join match: not connected to SpacetimeDB");
     }
-    await this.conn.reducers.joinMatch({ matchId });
+    const isAlreadyMember = Array.from(this.conn.db.myMemberships.iter()).some(
+      (m) => m.matchId === matchId
+    );
+    if (!isAlreadyMember) {
+      await this.conn.reducers.joinMatch({ matchId });
+    }
     this.activeMatchId = matchId;
     this.notify();
   }
@@ -416,6 +548,6 @@ class SpacetimeClient {
 }
 
 export const spacetimeClient = new SpacetimeClient();
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && import.meta.env.DEV) {
   (window as any).__spacetimeClient = spacetimeClient;
 }

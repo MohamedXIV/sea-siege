@@ -10,6 +10,8 @@ export function useSpacetime(): SpacetimeClientState & {
   startMatch: (matchId: bigint) => Promise<void>;
   issueShipOrder: (shipId: bigint, targetX: number, targetY: number) => Promise<void>;
   setActiveMatchId: (id: bigint | null) => void;
+  selectMatch: (id: bigint | null) => void;
+  resubscribe: () => void;
   resetIdentity: () => void;
   client: typeof spacetimeClient;
 } {
@@ -34,6 +36,8 @@ export function useSpacetime(): SpacetimeClientState & {
     issueShipOrder: (shipId: bigint, targetX: number, targetY: number) =>
       spacetimeClient.issueShipOrder(shipId, targetX, targetY),
     setActiveMatchId: (id: bigint | null) => spacetimeClient.setActiveMatchId(id),
+    selectMatch: (id: bigint | null) => spacetimeClient.selectMatch(id),
+    resubscribe: () => spacetimeClient.resubscribe(),
     resetIdentity: () => spacetimeClient.resetIdentity(),
     client: spacetimeClient,
   };

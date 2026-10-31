@@ -9,10 +9,14 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { useSpacetime } from "../network/useSpacetime";
+import { validateMatchIdInput } from "../network/match-id-validation";
+
+export { validateMatchIdInput };
 
 export function DevControls() {
   const {
     status,
+    subscriptionStatus,
     identity,
     error,
     matches,
@@ -26,6 +30,7 @@ export function DevControls() {
     createMatch,
     joinMatch,
     startMatch,
+    resubscribe,
     resetIdentity,
     client,
   } = useSpacetime();
@@ -62,6 +67,19 @@ export function DevControls() {
     }
   };
 
+  const handleManualJoin = () => {
+    if (status !== "connected") {
+      setActionError("Cannot join match: not connected to SpacetimeDB");
+      return;
+    }
+    const validation = validateMatchIdInput(manualMatchId);
+    if (!validation.valid) {
+      setActionError(validation.error);
+      return;
+    }
+    handleJoin(validation.value);
+  };
+
   const handleStart = async () => {
     if (!activeMatchId) return;
     setIsActing(true);
@@ -93,14 +111,22 @@ export function DevControls() {
         <div className="flex items-center gap-1.5 text-xs font-mono">
           <span
             className={`size-2 rounded-full ${
-              status === "connected"
+              status === "connected" && subscriptionStatus === "applied"
                 ? "bg-emerald-400 animate-pulse"
-                : status === "connecting" || status === "reconnecting"
+                : status === "connected" && subscriptionStatus === "error"
+                ? "bg-rose-500"
+                : status === "connecting" ||
+                  status === "reconnecting" ||
+                  subscriptionStatus === "subscribing"
                 ? "bg-amber-400 animate-ping"
                 : "bg-rose-500"
             }`}
           />
-          <span className="capitalize">{status}</span>
+          <span className="capitalize">
+            {status === "connected" && subscriptionStatus !== "applied"
+              ? `${status} (${subscriptionStatus})`
+              : status}
+          </span>
         </div>
       </div>
 
@@ -122,8 +148,18 @@ export function DevControls() {
       </div>
 
       {error && (
-        <div className="text-xs text-rose-300 bg-rose-950/40 border border-rose-800/40 p-2.5 rounded-md">
-          {error}
+        <div className="text-xs text-rose-300 bg-rose-950/40 border border-rose-800/40 p-2.5 rounded-md space-y-2">
+          <div>{error}</div>
+          {status === "connected" && subscriptionStatus === "error" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => resubscribe()}
+              className="h-6 px-2 text-[11px] border-rose-700/60 hover:bg-rose-900/40 text-rose-200"
+            >
+              <RefreshCw className="size-3 mr-1" /> Retry Subscription
+            </Button>
+          )}
         </div>
       )}
       {actionError && (
@@ -311,12 +347,12 @@ export function DevControls() {
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
-                        variant="outline"
+                        variant={activeMatchId === m.id ? "secondary" : "outline"}
                         className="h-6 px-2.5 text-[11px]"
                         onClick={() => handleJoin(m.id)}
                         disabled={isActing || status !== "connected"}
                       >
-                        Join / View
+                        {activeMatchId === m.id ? "Active" : "Join / View"}
                       </Button>
                     </div>
                   </div>
@@ -331,16 +367,28 @@ export function DevControls() {
               type="text"
               placeholder="Join by Match ID..."
               value={manualMatchId}
-              onChange={(e) => setManualMatchId(e.target.value)}
-              className="bg-slate-900 border border-border/60 rounded px-2.5 py-1 text-xs text-foreground flex-1 focus:outline-none"
+              onChange={(e) => {
+                setManualMatchId(e.target.value);
+                if (actionError) setActionError(null);
+              }}
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !isActing &&
+                  status === "connected" &&
+                  manualMatchId.trim()
+                ) {
+                  handleManualJoin();
+                }
+              }}
+              disabled={status !== "connected"}
+              className="bg-slate-900 border border-border/60 rounded px-2.5 py-1 text-xs text-foreground flex-1 focus:outline-none disabled:opacity-50"
             />
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => {
-                if (manualMatchId.trim()) handleJoin(BigInt(manualMatchId.trim()));
-              }}
-              disabled={isActing || !manualMatchId.trim()}
+              onClick={handleManualJoin}
+              disabled={isActing || status !== "connected" || !manualMatchId.trim()}
               className="text-xs h-7"
             >
               Join ID
