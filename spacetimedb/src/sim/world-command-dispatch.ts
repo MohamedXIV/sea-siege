@@ -37,7 +37,7 @@ export function dispatchMovement(
   if (!Number.isFinite(destination.x) || !Number.isFinite(destination.y) ||
       destination.x < 0 || destination.y < 0 ||
       destination.x >= environment.mapCells || destination.y >= environment.mapCells)
-    return deny("Invalid destination");
+    return deny("Destination out of bounds");
   if (!params.destinationVisible) return deny("Destination not observed");
   const path = findTerrainPath(environment.terrain, environment.mapCells,
     { x: ship.x, y: ship.y }, destination, {

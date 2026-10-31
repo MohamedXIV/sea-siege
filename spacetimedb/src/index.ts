@@ -536,7 +536,7 @@ export const demolishStructure = spacetimedb.reducer(
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(target.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
-    if (!faction || faction.eliminated || faction.slot !== target.ownerSlot)
+    if (!member || !faction || faction.eliminated || faction.slot !== target.ownerSlot)
       throw new Error("Cannot demolish another faction's structure");
     const definition = structureDefinition(target.kind);
     if (!definition) throw new Error("Unknown stored structure kind");
