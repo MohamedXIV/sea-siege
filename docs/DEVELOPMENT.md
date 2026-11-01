@@ -1,10 +1,10 @@
 # Sea Siege — Foundation development guide
 
-> This branch contains **source code only**. No successful build/publish or two-browser integration result is claimed. The current VM cannot reach npm/SpacetimeDB downloads, so validation requires a network-enabled environment. Cloud account credentials are **not** needed for local development.
+> In this connected multiplayer feature branch (`feat/p0-connected-client`), the client is integrated with official generated SpacetimeDB 2.14 bindings, connecting to the authoritative local backend `sea-siege-dev`. Cloud account credentials are **not** needed for local development.
 
 ## Stack
 - Vite + TypeScript + React 19, Tailwind v4 + shadcn/ui component source code.
-- Phaser 4 real Scene in a React-managed mount (only a decorative water grid for now).
+- Phaser 4 real Scene in a React-managed mount connected to authoritative SpacetimeDB simulation.
 - A separate **real SpacetimeDB 2.x TypeScript module** in `spacetimedb/src/index.ts`, using `spacetimedb/server` (schema, reducers, caller identity, private tables and per-identity views). **No pseudo-server runs in the browser**.
 
 ## Client setup
@@ -16,7 +16,7 @@ npm run build
 npm run dev
 ```
 
-Client UI explicitly says **Backend not connected**. That is intentional: generated bindings do not exist before CLI generation and no network subscription has yet been implemented. The visual foundation must not imply Quick Play or multiplayer is functional.
+The connected client automatically establishes a WebSocket connection to the local SpacetimeDB instance (via same-origin dev proxy in Codespaces or direct in desktop), subscribes to authorized views, and updates the header network status badge to `connected (applied)`.
 
 ## SpacetimeDB local build/publish (follow current 2.x CLI)
 
@@ -24,13 +24,46 @@ With a network-enabled environment and the official `spacetime` CLI installed:
 
 ```bash
 cd spacetimedb && npm install && cd ..
-spacetime start                 # keep this running in another terminal
-spacetime build --module-path ./spacetimedb
+spacetime start --non-interactive  # keep this running in another terminal
+npm run db:build
 spacetime publish sea-siege-dev --server local --module-path ./spacetimedb
-spacetime generate --lang typescript --module-path ./spacetimedb --out-dir ./src/module_bindings
+npm run db:generate
 ```
 
-Once the module actually builds, the next change (#3/#4) must import those **generated** bindings, connect with `DbConnection.builder()`, subscribe to `match`, `my_ships`, `my_memberships`, send reducer commands and display the **real** status. Nothing in this branch is a substitute for that integration.
+The client imports these generated bindings, connects with `DbConnection.builder()`, subscribes to `match`, `my_ships`, `my_memberships`, `my_structures`, `my_faction_states`, `my_visible_enemies`, sends reducer commands, and renders authoritative state. Reducers reject invalid actions using `SenderError` for safe user-facing error reporting.
+
+## GitHub Codespaces Browser Preview & Dev Proxy
+
+When running in GitHub Codespaces, the SpacetimeDB standalone server and Vite dev server run inside the Linux container, while developers interact with the game via browser on their local machine.
+
+### Architecture
+- **SpacetimeDB Standalone Backend**: Runs inside the container on `127.0.0.1:3000`.
+- **Vite Dev Server**: Listens on `0.0.0.0:5173` with a development proxy.
+- **Port Visibility & Security**: SpacetimeDB port `3000` is kept **private and unforwarded**. It is never exposed publicly. Port `5173` is forwarded privately via GitHub Codespaces authentication.
+- **Same-Origin Dev Proxy**: In `vite.config.ts`, Vite proxies `/v1` requests (`changeOrigin: true`, `ws: true`) to `http://127.0.0.1:3000`. This seamlessly handles:
+  - SpacetimeDB HTTP endpoints (e.g., `POST /v1/identity/websocket-token`, `GET /v1/ping`)
+  - SpacetimeDB WebSocket connection upgrades (e.g., `GET /v1/database/<db>/subscribe`)
+- **Dynamic Origin Resolution**: When executing in a remote browser (e.g. `*.app.github.dev`), `SpacetimeClient` automatically resolves its host to `window.location.origin` (port 5173), preventing remote clients from mistakenly targeting their local machine's `127.0.0.1:3000`. In Node.js / test environments or explicit production configs, direct host configuration is preserved.
+
+### Local Codespaces Workflow
+1. **Start SpacetimeDB daemon**:
+   ```bash
+   spacetime start --non-interactive
+   ```
+2. **Build and publish the module**:
+   ```bash
+   spacetime build --module-path ./spacetimedb
+   spacetime publish sea-siege-dev --server local --module-path ./spacetimedb
+   ```
+3. **Start Vite development server**:
+   ```bash
+   npm run dev
+   ```
+4. **Open in browser**:
+   - In VS Code / Codespaces Ports panel, locate port `5173` and click the "Open in Browser" button (or visit `https://<codespace-name>-5173.app.github.dev`).
+   - For multiplayer testing, open a second browser window (such as Incognito / Private mode) to obtain a distinct client Identity. Both sessions communicate in real time through the authoritative container backend.
+   - To verify session and Identity recovery, reload the page or reopen the same browser profile; the client persists its auth token in `localStorage` and reconnects with the exact same Identity. Click "New Identity" only when you want to clear the local token and generate a fresh test player.
+
 
 ## Security gates before multiplayer
 - `ship` and `match_member` are **private**. Do not mark them public just to make prototyping easier.

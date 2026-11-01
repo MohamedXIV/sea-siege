@@ -1,5 +1,5 @@
 import { ScheduleAt } from "spacetimedb";
-import { t } from "spacetimedb/server";
+import { t, SenderError } from "spacetimedb/server";
 import spacetimedb, { combatSchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
@@ -23,22 +23,22 @@ export const aimWeapon = spacetimedb.reducer(
   { sourceType: t.string(), sourceId: t.u64(), desiredAngleDeg: t.f64() },
   (ctx, { sourceType, sourceId, desiredAngleDeg }) => {
     if (sourceType !== "ship" && sourceType !== "structure")
-      throw new Error("Weapon unavailable");
+      throw new SenderError("Weapon unavailable");
     const vessel = sourceType === "ship" ? ctx.db.ship.id.find(sourceId) : undefined;
     const cannon = sourceType === "structure" ? ctx.db.structure.id.find(sourceId) : undefined;
     if (!vessel && (!cannon || cannon.kind !== "cannon"))
-      throw new Error("Weapon unavailable");
+      throw new SenderError("Weapon unavailable");
     const matchId = vessel ? vessel.matchId : cannon!.matchId;
     const match = ctx.db.match.id.find(matchId);
     if (!match || !matchStillActive(match.phase, match.startedAtUs,
-      ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+      ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated ||
         (vessel ? vessel.ownerSlot !== faction.slot : cannon!.ownerSlot !== faction.slot))
-      throw new Error("Weapon unavailable");
+      throw new SenderError("Weapon unavailable");
     const source: WeaponSource = vessel
       ? { type: "ship", id: vessel.id, matchId, ownerSlot: vessel.ownerSlot,
           kind: vessel.kind, x: vessel.x, y: vessel.y, hp: vessel.hp,
@@ -75,7 +75,7 @@ export const aimWeapon = spacetimedb.reducer(
           });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -84,29 +84,29 @@ export const fireWeapon = spacetimedb.reducer(
   { sourceType: t.string(), sourceId: t.u64(), targetType: t.string(), targetId: t.u64() },
   (ctx, { sourceType, sourceId, targetType, targetId }) => {
     if (sourceType !== "ship" && sourceType !== "structure")
-      throw new Error("Weapon unavailable");
+      throw new SenderError("Weapon unavailable");
     if (targetType !== "ship" && targetType !== "structure")
-      throw new Error("Target not visible or unavailable");
+      throw new SenderError("Target not visible or unavailable");
     const vessel = sourceType === "ship" ? ctx.db.ship.id.find(sourceId) : undefined;
     const cannon = sourceType === "structure" ? ctx.db.structure.id.find(sourceId) : undefined;
     if (!vessel && (!cannon || cannon.kind !== "cannon"))
-      throw new Error("Weapon unavailable");
+      throw new SenderError("Weapon unavailable");
     const matchId = vessel ? vessel.matchId : cannon!.matchId;
     const match = ctx.db.match.id.find(matchId);
     if (!match || !matchStillActive(match.phase, match.startedAtUs,
-      ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+      ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated ||
         (vessel ? vessel.ownerSlot !== faction.slot : cannon!.ownerSlot !== faction.slot))
-      throw new Error("Weapon unavailable");
+      throw new SenderError("Weapon unavailable");
     const hostileShip = targetType === "ship" ? ctx.db.ship.id.find(targetId) : undefined;
     const hostileStructure = targetType === "structure" ?
       ctx.db.structure.id.find(targetId) : undefined;
     const world = ctx.db.worldConfig.matchId.find(matchId);
-    if (!world) throw new Error("Missing world");
+    if (!world) throw new SenderError("Missing world");
     const terrain = decodeTerrainChunks(
       world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
     );
@@ -153,7 +153,7 @@ export const fireWeapon = spacetimedb.reducer(
           });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 

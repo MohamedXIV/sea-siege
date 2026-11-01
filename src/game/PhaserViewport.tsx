@@ -21,8 +21,17 @@ export function PhaserViewport() {
       },
       scene: [SeaScene],
     });
-    return () => game.destroy(true);
+
+    return () => {
+      game.destroy(true);
+    };
   }, []);
 
-  return <div ref={holder} className="absolute inset-0" aria-label="Phaser 4 ocean scene, without a connected game backend" />;
+  return (
+    <div
+      ref={holder}
+      className="absolute inset-0"
+      aria-label="Phaser 4 ocean scene, connected to authoritative SpacetimeDB"
+    />
+  );
 }

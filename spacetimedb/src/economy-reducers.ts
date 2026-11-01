@@ -1,4 +1,4 @@
-import { t } from "spacetimedb/server";
+import { t, SenderError } from "spacetimedb/server";
 import spacetimedb, { economySchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
@@ -17,18 +17,18 @@ export const orderHarvest = spacetimedb.reducer(
   { shipId: t.u64(), nodeId: t.u64() },
   (ctx, { shipId, nodeId }) => {
     const vessel = ctx.db.ship.id.find(shipId);
-    if (!vessel) throw new Error("Ship unavailable");
+    if (!vessel) throw new SenderError("Ship unavailable");
     const member = Array.from(ctx.db.matchMember.matchId.filter(vessel.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = Array.from(ctx.db.factionState.matchId.filter(vessel.matchId))
       .find(row => row.slot === vessel.ownerSlot && row.controller === "human");
     if (!mayControlFaction(member?.slot, vessel.ownerSlot, faction?.eliminated ?? true))
-      throw new Error("Cannot command another player's ship");
+      throw new SenderError("Cannot command another player's ship");
     const matchRow = ctx.db.match.id.find(vessel.matchId);
-    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const node = ctx.db.salvageNode.id.find(nodeId);
     const world = ctx.db.worldConfig.matchId.find(vessel.matchId);
-    if (!world) throw new Error("Missing authoritative world");
+    if (!world) throw new SenderError("Missing authoritative world");
     const terrain = decodeTerrainChunks(
       world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(vessel.matchId)),
     );
@@ -57,7 +57,7 @@ export const orderHarvest = spacetimedb.reducer(
         });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -66,15 +66,15 @@ export const enqueueShip = spacetimedb.reducer(
   { shipyardId: t.u64(), kind: t.string() },
   (ctx, { shipyardId, kind }) => {
     const yard = ctx.db.structure.id.find(shipyardId);
-    if (!yard || yard.kind !== "shipyard") throw new Error("Shipyard unavailable");
+    if (!yard || yard.kind !== "shipyard") throw new SenderError("Shipyard unavailable");
     const matchRow = ctx.db.match.id.find(yard.matchId);
-    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(yard.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(yard.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== yard.ownerSlot)
-      throw new Error("Not your shipyard");
+      throw new SenderError("Not your shipyard");
     const result = dispatchProduction({
       faction: { matchId: yard.matchId, slot: faction.slot, controller: "human",
         eliminated: faction.eliminated },
@@ -89,7 +89,7 @@ export const enqueueShip = spacetimedb.reducer(
         ctx.db.productionOrder.insert({ id: 0n, ...order });
       },
     });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 
@@ -98,17 +98,17 @@ export const cancelShipProduction = spacetimedb.reducer(
   { orderId: t.u64() },
   (ctx, { orderId }) => {
     const order = ctx.db.productionOrder.id.find(orderId);
-    if (!order) throw new Error("Production order unavailable");
+    if (!order) throw new SenderError("Production order unavailable");
     const matchRow = ctx.db.match.id.find(order.matchId);
-    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new Error("Match is not active");
+    if (!matchRow || !matchStillActive(matchRow.phase, matchRow.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     const member = Array.from(ctx.db.matchMember.matchId.filter(order.matchId))
       .find(row => row.identity.isEqual(ctx.sender));
     const faction = member ? Array.from(ctx.db.factionState.matchId.filter(order.matchId))
       .find(row => row.slot === member.slot && row.controller === "human") : undefined;
     if (!faction || faction.eliminated || faction.slot !== order.ownerSlot)
-      throw new Error("Not your production order");
+      throw new SenderError("Not your production order");
     const definition = shipDefinition(order.shipKind);
-    if (!definition) throw new Error("Unknown ship kind");
+    if (!definition) throw new SenderError("Unknown ship kind");
     ctx.db.productionOrder.id.delete(order.id);
     ctx.db.factionState.id.update({
       ...faction, salvage: creditSalvage(faction.salvage, definition.cost),
