@@ -162,6 +162,8 @@ export const advanceCombat = spacetimedb.reducer(
   { onSchedule: combatSchedule },
   { arg: combatSchedule.rowType },
   (ctx, { arg }) => {
+
+
     /** Build one match-scoped server-owned collision snapshot, never a client collection. */
     function combatBodies(matchId: bigint): CombatBody[] {
 
@@ -187,7 +189,7 @@ export const advanceCombat = spacetimedb.reducer(
 
     /** Remove obsolete steering intent when a source is eliminated. */
     function clearAim(sourceType: string, sourceId: bigint): void {
-      for (const aim of Array.from(ctx.db.turretAim.matchId.filter(timer.matchId))) {
+      for (const aim of Array.from(ctx.db.turretAim.matchId.filter(timer!.matchId))) {
         if (aim.sourceType === sourceType && aim.sourceId === sourceId)
           ctx.db.turretAim.id.delete(aim.id);
       }

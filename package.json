@@ -9,7 +9,12 @@
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -b --pretty false",
     "ui:add": "shadcn add",
-    "test:unit": "node --experimental-strip-types --test tests/*.test.mjs"
+    "test:unit": "node --experimental-strip-types --test tests/*.test.mjs",
+    "p0:preflight": "node scripts/p0-preflight.mjs",
+    "db:build": "spacetime build --module-path ./spacetimedb",
+    "db:generate": "spacetime generate --lang typescript --module-path ./spacetimedb --out-dir ./src/module_bindings",
+    "db:typecheck": "npm --prefix spacetimedb run typecheck",
+    "db:test": "npm --prefix spacetimedb test"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
@@ -19,6 +24,7 @@
     "phaser": "^4.2.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "spacetimedb": "^2.12.0",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {

@@ -63,8 +63,8 @@ it("identity-filtered views do not reveal another faction's ships or slots", () 
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
 
-  const aliceShips = test.runQuery(moduleExports.myShips(test.viewContext(alice)));
-  const bobShips = test.runQuery(moduleExports.myShips(test.viewContext(bob)));
+  const aliceShips = test.runQuery<any>(moduleExports.myShips(test.viewContext(alice)));
+  const bobShips = test.runQuery<any>(moduleExports.myShips(test.viewContext(bob)));
   expect(aliceShips).toHaveLength(1);
   expect(bobShips).toHaveLength(1);
   expect(aliceShips[0]?.id).not.toBe(bobShips[0]?.id);
@@ -242,7 +242,7 @@ it("never accepts a destination occupied by another ship", () => {
       shipId: vessels[0]!.id, targetX: vessels[1]!.x, targetY: vessels[1]!.y,
     })
   )).toThrow("Destination unreachable");
-  expect(test.db.shipRoute.shipId.find(vessels[0]!.id)).toBeUndefined();
+  expect(test.db.shipRoute.shipId.find(vessels[0]!.id)).toBeFalsy();
 });
 
 it("scheduler holds a vessel if a new dynamic ship blocks its planned segment", () => {
@@ -356,7 +356,7 @@ it("demolition refunds exactly once, protects Command Core and preserves other p
   )).toThrow("another faction");
   const balance = [...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage;
   test.withReducerTx(alice, ctx => moduleExports.demolishStructure(ctx, { structureId: pad.id }));
-  expect(test.db.structure.id.find(pad.id)).toBeUndefined();
+  expect(test.db.structure.id.find(pad.id)).toBeFalsy();
   expect([...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!.salvage)
     .toBe(balance + 12);
   expect(() => test.withReducerTx(alice, ctx =>
@@ -389,8 +389,8 @@ it("demolishing support collapses a mounted workshop and cancels its constructio
   test.withReducerTx(alice, ctx =>
     moduleExports.demolishStructure(ctx, { structureId: support.id })
   );
-  expect(test.db.structure.id.find(support.id)).toBeUndefined();
-  expect(test.db.structure.id.find(workshop.id)).toBeUndefined();
+  expect(test.db.structure.id.find(support.id)).toBeFalsy();
+  expect(test.db.structure.id.find(workshop.id)).toBeFalsy();
   expect(test.db.constructionSchedule.count()).toBe(0n);
   const member = [...test.db.factionState.matchId.filter(lobby.id)].find(row => row.slot === 0)!;
   expect(member.salvage).toBe(420 - 120 + 12);
@@ -617,10 +617,9 @@ it("paid workshop upgrade pauses while offline and progresses only under interna
     row.ownerSlot === 0 && row.kind === "workshop"
   )!;
   test.clock.advance(TimeDuration.fromMillis(5000));
+  const buildArg = [...test.db.constructionSchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx =>
-    moduleExports.completeConstruction(ctx, {
-      arg: [...test.db.constructionSchedule.iter()][0]!,
-    })
+    moduleExports.completeConstruction(ctx, { arg: buildArg })
   );
   expect(() => test.withReducerTx(bob, ctx =>
     moduleExports.upgradeWorkshop(ctx, { workshopId: workshop.id })
@@ -637,8 +636,9 @@ it("paid workshop upgrade pauses while offline and progresses only under interna
     ctx.db.structure.id.update({ ...row, connected: false });
   });
   test.clock.advance(TimeDuration.fromMillis(1000));
+  const ecoArg1 = [...test.db.economySchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx =>
-    moduleExports.advanceEconomy(ctx, { arg: [...test.db.economySchedule.iter()][0]! })
+    moduleExports.advanceEconomy(ctx, { arg: ecoArg1 })
   );
   expect(test.db.structure.id.find(workshop.id)?.upgradeRemainingUs).toBe(6_000_000n);
   test.withReducerTx(TestAuth.internal(), ctx => {
@@ -647,8 +647,9 @@ it("paid workshop upgrade pauses while offline and progresses only under interna
   });
   for (let i = 0; i < 6; i++) {
     test.clock.advance(TimeDuration.fromMillis(1000));
+    const ecoArgLoop = [...test.db.economySchedule.iter()][0]!;
     test.withReducerTx(TestAuth.internal(), ctx =>
-      moduleExports.advanceEconomy(ctx, { arg: [...test.db.economySchedule.iter()][0]! })
+      moduleExports.advanceEconomy(ctx, { arg: ecoArgLoop })
     );
   }
   expect(test.db.structure.id.find(workshop.id)?.level).toBe(2);
@@ -672,9 +673,10 @@ it("demolition refunds a paid but unfinished workshop upgrade only once", () => 
     row.ownerSlot === 0 && row.kind === "workshop"
   )!;
   test.clock.advance(TimeDuration.fromMillis(5000));
+  const buildTimer677 = [...test.db.constructionSchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx =>
     moduleExports.completeConstruction(ctx, {
-      arg: [...test.db.constructionSchedule.iter()][0]!,
+      arg: buildTimer677,
     })
   );
   test.withReducerTx(alice, ctx =>
@@ -686,7 +688,7 @@ it("demolition refunds a paid but unfinished workshop upgrade only once", () => 
   const member = [...test.db.factionState.matchId.filter(match.id)]
     .find(row => row.slot === 0)!;
   expect(member.salvage).toBe(420 - 120 - 200 + 60 + 200);
-  expect(test.db.structure.id.find(workshop.id)).toBeUndefined();
+  expect(test.db.structure.id.find(workshop.id)).toBeFalsy();
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.demolishStructure(ctx, { structureId: workshop.id })
   )).toThrow("unavailable");
@@ -777,8 +779,9 @@ it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", (
     sourceType: "ship", sourceId: own.id, targetType: "ship", targetId: enemy.id,
   }));
   test.clock.advance(TimeDuration.fromMillis(100));
+  const combatTimer781 = [...test.db.combatSchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
-    arg: [...test.db.combatSchedule.iter()][0]!,
+    arg: combatTimer781,
   }));
   expect(test.db.ship.id.find(enemy.id)!.hp).toBe(210 - 16); // Scout 18 minus Scout armor 2
   expect(test.db.projectile.count()).toBe(0n);
@@ -806,11 +809,12 @@ it("destroying the last hostile Command Core eliminates its faction and ends the
   }));
   for (let i = 0; i < 3 && test.db.combatSchedule.count() > 0n; i++) {
     test.clock.advance(TimeDuration.fromMillis(100));
+    const combatTimer810 = [...test.db.combatSchedule.iter()][0]!;
     test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
-      arg: [...test.db.combatSchedule.iter()][0]!,
+      arg: combatTimer810,
     }));
   }
-  expect(test.db.structure.id.find(enemyCore.id)).toBeUndefined();
+  expect(test.db.structure.id.find(enemyCore.id)).toBeFalsy();
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
   expect(test.db.match.id.find(matchId)?.winnerSlot).toBe(0);
   expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
@@ -847,8 +851,9 @@ it("turrets slew gradually under internal authority; premature fire and foreign 
   expect(test.db.turretAim.count()).toBe(1n);
   expect(test.db.combatSchedule.count()).toBe(1n);
   test.clock.advance(TimeDuration.fromMillis(100));
+  const combatTimer851 = [...test.db.combatSchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
-    arg: [...test.db.combatSchedule.iter()][0]!,
+    arg: combatTimer851,
   }));
   expect(test.db.ship.id.find(attacker.id)?.turretAngleDeg).toBe(18);
   expect(() => test.withReducerTx(alice, ctx =>
@@ -856,8 +861,9 @@ it("turrets slew gradually under internal authority; premature fire and foreign 
   )).toThrow("Weapon not aligned");
   for (let step = 0; step < 4; step++) {
     test.clock.advance(TimeDuration.fromMillis(100));
+    const combatTimerLoop = [...test.db.combatSchedule.iter()][0]!;
     test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
-      arg: [...test.db.combatSchedule.iter()][0]!,
+      arg: combatTimerLoop,
     }));
   }
   expect(test.db.ship.id.find(attacker.id)?.turretAngleDeg).toBe(90);
@@ -886,8 +892,9 @@ it("a destroyed weapon loses its pending aim and releases its lazy timer", () =>
   expect(test.db.turretAim.count()).toBe(1n);
   test.withReducerTx(TestAuth.internal(), ctx => ctx.db.ship.id.delete(attacker.id));
   test.clock.advance(TimeDuration.fromMillis(100));
+  const combatTimer890 = [...test.db.combatSchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceCombat(ctx, {
-    arg: [...test.db.combatSchedule.iter()][0]!,
+    arg: combatTimer890,
   }));
   expect(test.db.turretAim.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
@@ -943,8 +950,9 @@ it("lifetime salvage is credited by server production even when balance is spent
   const host = [...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 0)!;
   expect(host.totalSalvageGathered).toBe(0n);
   test.clock.advance(TimeDuration.fromMillis(1000));
+  const ecoTimer947 = [...test.db.economySchedule.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx => moduleExports.advanceEconomy(ctx, {
-    arg: [...test.db.economySchedule.iter()][0]!,
+    arg: ecoTimer947,
   }));
   const earned = test.db.factionState.id.find(host.id)!;
   expect(earned.totalSalvageGathered).toBe(4n);
@@ -1000,9 +1008,9 @@ it("indexed faction ship views do not leak matching slots from other matches", (
   expect(bobSeat.slot).toBe(0);
   expect(aliceSeat.factionKey).not.toBe(bobSeat.factionKey);
 
-  const aliceVisible = test.runQuery(moduleExports.myShips(test.viewContext(alice)));
-  const bobVisible = test.runQuery(moduleExports.myShips(test.viewContext(bob)));
-  const eveVisible = test.runQuery(moduleExports.myShips(test.viewContext(eve)));
+  const aliceVisible = test.runQuery<any>(moduleExports.myShips(test.viewContext(alice)));
+  const bobVisible = test.runQuery<any>(moduleExports.myShips(test.viewContext(bob)));
+  const eveVisible = test.runQuery<any>(moduleExports.myShips(test.viewContext(eve)));
   expect(aliceVisible).toHaveLength(1);
   expect(bobVisible).toHaveLength(1);
   expect(eveVisible).toHaveLength(0);
@@ -1184,8 +1192,9 @@ it("finalizing the match cancels all strategic bots and preserves the outcome", 
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
   expect(test.db.botSchedule.count()).toBe(1n);
   test.clock.advance(TimeDuration.fromMillis(720_000));
+  const deadlineTimer1188 = [...test.db.matchDeadline.iter()][0]!;
   test.withReducerTx(TestAuth.internal(), ctx =>
-    moduleExports.finishMatchAtDeadline(ctx, { arg: [...test.db.matchDeadline.iter()][0]! })
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadlineTimer1188 })
   );
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
   expect(test.db.botSchedule.count()).toBe(0n);
@@ -1230,11 +1239,11 @@ it("authenticated allied structures view never includes another seat, match, or 
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: first }));
   test.withReducerTx(charlie, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
   const second = [...test.db.match.iter()].find(row => row.id !== first)!.id;
-  expect(test.runQuery(moduleExports.myStructures(test.viewContext(spectator))))
+  expect(moduleExports.myStructures(test.viewContext(spectator)))
     .toHaveLength(0);
-  const aliceRows = test.runQuery(moduleExports.myStructures(test.viewContext(alice)));
-  const bobRows = test.runQuery(moduleExports.myStructures(test.viewContext(bob)));
-  const charlieRows = test.runQuery(moduleExports.myStructures(test.viewContext(charlie)));
+  const aliceRows = moduleExports.myStructures(test.viewContext(alice));
+  const bobRows = moduleExports.myStructures(test.viewContext(bob));
+  const charlieRows = moduleExports.myStructures(test.viewContext(charlie));
   expect(aliceRows.length).toBeGreaterThan(0);
   expect(bobRows.length).toBeGreaterThan(0);
   expect(charlieRows.length).toBeGreaterThan(0);
@@ -1250,12 +1259,12 @@ it("live enemy contact view discloses no secret commands or hidden enemy resourc
   test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
-  expect(test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(alice))))
+  expect(moduleExports.myVisibleEnemies(test.viewContext(alice)))
     .toHaveLength(0); // enemy spawns must not leak before start
   test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
-  expect(test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(stranger))))
+  expect(moduleExports.myVisibleEnemies(test.viewContext(stranger)))
     .toHaveLength(0);
-  const contacts = test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(alice)));
+  const contacts = moduleExports.myVisibleEnemies(test.viewContext(alice));
   const ownShipIds = new Set([...test.db.ship.matchId.filter(matchId)]
     .filter(row => row.ownerSlot === 0).map(row => row.id));
   const ownStructureIds = new Set([...test.db.structure.matchId.filter(matchId)]
@@ -1279,12 +1288,12 @@ it("bot factions never receive a user-visible enemy or allied structure subscrip
   const matchId = [...test.db.match.iter()][0]!.id;
   test.withReducerTx(host, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "hard" }));
   test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
-  const myStructures = test.runQuery(moduleExports.myStructures(test.viewContext(host)));
+  const myStructures = moduleExports.myStructures(test.viewContext(host));
   expect(myStructures.every(row => row.ownerSlot === 0)).toBe(true);
-  expect(test.runQuery(moduleExports.myStructures(test.viewContext(outsider))))
+  expect(moduleExports.myStructures(test.viewContext(outsider)))
     .toHaveLength(0);
-  expect(test.runQuery(moduleExports.myVisibleEnemies(test.viewContext(outsider))))
+  expect(moduleExports.myVisibleEnemies(test.viewContext(outsider)))
     .toHaveLength(0);
-  expect(test.runQuery(moduleExports.myFactionStates(test.viewContext(host)))
+  expect(test.runQuery<any>(moduleExports.myFactionStates(test.viewContext(host)))
     .every(row => row.controller === "human")).toBe(true);
 });

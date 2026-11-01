@@ -93,7 +93,7 @@ export function dispatchFire(
   const shot = createProjectile(origin,destination,source.kind as WeaponKind,faction.slot);
   ports.markFired(source,nowUs);
   ports.insertProjectile({
-    matchId: faction.matchId, sourceFaction: faction.slot, sourceId: source.id,
+    matchId: faction.matchId, sourceId: source.id,
     sourceType: source.type, firedAtUs: nowUs, ...shot,
   });
   ports.ensureCombatTick();
