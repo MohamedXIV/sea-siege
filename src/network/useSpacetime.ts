@@ -6,6 +6,7 @@ import {
 
 export function useSpacetime(): SpacetimeClientState & {
   createMatch: (maxSlots?: number) => Promise<void>;
+  quickPlay: () => Promise<bigint>;
   joinMatch: (matchId: bigint) => Promise<void>;
   startMatch: (matchId: bigint) => Promise<void>;
   issueShipOrder: (shipId: bigint, targetX: number, targetY: number) => Promise<void>;
@@ -31,6 +32,7 @@ export function useSpacetime(): SpacetimeClientState & {
   return {
     ...state,
     createMatch: (maxSlots = 2) => spacetimeClient.createMatch(maxSlots),
+    quickPlay: () => spacetimeClient.quickPlay(),
     joinMatch: (matchId: bigint) => spacetimeClient.joinMatch(matchId),
     startMatch: (matchId: bigint) => spacetimeClient.startMatch(matchId),
     issueShipOrder: (shipId: bigint, targetX: number, targetY: number) =>
