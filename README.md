@@ -1,23 +1,31 @@
 # Sea Siege
 
-**Drowned-industrial top-down naval RTS** — build connected floating platforms, salvage the flooded world, command fleets and besiege rival bases. Planned for 2–8 human/bot factions.
+**Drowned-industrial top-down naval RTS** — expand connected floating platforms, salvage a flooded world, build ships, command fleets, and besiege rival Command Cores.
 
-**Stack:** Phaser 4 + TypeScript + Vite + React + Tailwind + shadcn/ui (frontend scaffold); SpacetimeDB TypeScript authoritative module (backend source, not yet published).
+**Real stack:** Phaser 4 + TypeScript + Vite + React + Tailwind/shadcn UI; an authoritative SpacetimeDB 2.x TypeScript module, official client SDK and identity-scoped subscriptions.
 
-> **Status: Experimental foundation merged on 30 Oct 2026 — NOT playable multiplayer.** [PR #20](https://github.com/MohamedXIV/sea-siege/pull/20) consolidated the source implementation. The Phaser scene still says **Backend not connected**. No generated SpacetimeDB client bindings, published/verified server module, authenticated two-browser match, Bot E2E or Fog security audit exists yet. The original Gemini prototype remains reference-only.
+> **Status (2 Nov 2026): real connected foundation verified, *not yet a complete playable RTS*.** [PR #21](https://github.com/MohamedXIV/sea-siege/pull/21) and [PR #22](https://github.com/MohamedXIV/sea-siege/pull/22) merged to `main`. An owner-run **GitHub Codespaces forwarded-browser** check confirmed a two-human match could start after the controlled `SenderError` fix; SDK/connection, auth, own ships/structures and ship movement are integrated. A whole solo-vs-bot match with map, building, production, combat and victory has **not** been accepted yet. The older [PR #20](https://github.com/MohamedXIV/sea-siege/pull/20) was only the source foundation.
 
-## Project planning
+## Active priority: Playable Gemini Parity
 
-- [Current issue status and unverified gates](./docs/STATUS.md)
-- [Roadmap and delivery gates](./ROADMAP.md)
-- [ADR-0001: Server-authoritative motion and smooth ship rendering](./docs/adr/0001-multiplayer-motion-tickrate.md)
-- [Master implementation epic (#1)](https://github.com/MohamedXIV/sea-siege/issues/1)
-- [All implementation issues](https://github.com/MohamedXIV/sea-siege/issues)
+**We are rebuilding the fun, not the fake backend.** The next goal is one-click **Quick Play vs a real server-owned Bot**, an authentic known sea map, floating construction, Salvage/ship production, combat, victory/defeat and Rematch.
 
-**Next P0 acceptance work:** install/typecheck/build and real SpacetimeDB SDK module verification ([#2](https://github.com/MohamedXIV/sea-siege/issues/2), [#3](https://github.com/MohamedXIV/sea-siege/issues/3), [#6](https://github.com/MohamedXIV/sea-siege/issues/6)), then generated client bindings, authenticated Phaser subscriptions and two-browser reconnect ([#4](https://github.com/MohamedXIV/sea-siege/issues/4), [#5](https://github.com/MohamedXIV/sea-siege/issues/5)).
+- [Active Playable Parity roadmap](./docs/PLAYABLE_PARITY_ROADMAP.md)
+- [Playable Parity Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23) and implementation issues [#24–#29](https://github.com/MohamedXIV/sea-siege/issues/24)
+- [Long-term roadmap](./ROADMAP.md), [master Epic #1](https://github.com/MohamedXIV/sea-siege/issues/1), and [implementation snapshot](./docs/STATUS.md)
 
-Each deliverable must be verified against its issue's acceptance criteria. We will not use a fake browser-local authority as a substitute for SpacetimeDB.
+**Default design decision for this recovery phase:** full *static terrain map* visible from the start; **no new persistent exploration Fog of War**. Existing tactical enemy contact authorization and private server information must remain secure.
 
-## Original Gemini reference artifacts
+## Primary gameplay reference
 
-The original Gemini web-chat prototype and its 18-file source archive are preserved as **byte-identical reference artifacts** under [`references/gemini/`](./references/gemini/README.md). They are **not** the production runtime or evidence of genuine Phaser/SpacetimeDB integration. Use them to port tested gameplay rules selectively.
+The original Gemini prototype and its 18-file source archive are **preserved byte-for-byte** in [`references/gemini/`](./references/gemini/README.md). The HTML file is a playable, local **Canvas 2D prototype using simulated in-browser authority**, despite the architecture-themed filename. It is a reference for enjoyment, feel, visual language, loop and balance, **not** real Phaser or SpacetimeDB code to include in production.
+
+## Development and verification
+
+- [Codespaces and local SpacetimeDB development guide](./docs/DEVELOPMENT.md)
+- [Server-authoritative motion ADR](./docs/adr/0001-multiplayer-motion-tickrate.md)
+- Real database queries and subscriptions require the actual generated bindings and local SpacetimeDB instance. No credentials or generated bindings should be committed.
+- Backend tests, client tests and a production build are important; each new feature also requires a **playable browser check** via private Codespaces port 5173 when possible.
+- Keep feature branches/PRs small and reviewable; no unnecessary GitHub Actions. Cloud publication and release packaging remain future work.
+
+**The next acceptance question:** Can one person click Quick Play, build, harvest, produce, fight a bot, finish and rematch — and want another round?
