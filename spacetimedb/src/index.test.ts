@@ -1297,3 +1297,49 @@ it("bot factions never receive a user-visible enemy or allied structure subscrip
   expect(test.runQuery<any>(moduleExports.myFactionStates(test.viewContext(host)))
     .every(row => row.controller === "human")).toBe(true);
 });
+
+it("Quick Play backend contract: one human and one independent server bot can start", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("quick-play-host", 701n);
+  const outsider = auth("quick-play-outsider", 702n);
+
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+
+  // Only the host may create bot seats; all authority and storage stay server-side.
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  )).toThrow("Only the host");
+  expect(test.db.botController.count()).toBe(0n);
+  expect(() => test.withReducerTx(host, ctx =>
+    moduleExports.startMatch(ctx, { matchId })
+  )).toThrow("Need at least two");
+
+  test.withReducerTx(host, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  const factions = [...test.db.factionState.matchId.filter(matchId)];
+  expect(factions).toHaveLength(2);
+  expect(factions.map(row => row.controller).sort()).toEqual(["bot", "human"]);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+  const bot = [...test.db.botController.matchId.filter(matchId)];
+  expect(bot).toHaveLength(1);
+  expect(bot[0]!.difficulty).toBe("normal");
+  const botShip = [...test.db.ship.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === bot[0]!.slot);
+  expect(botShip?.kind).toBe("scout");
+  expect([...test.db.structure.matchId.filter(matchId)]
+    .some(row => row.ownerSlot === bot[0]!.slot && row.kind === "command_core"))
+    .toBe(true);
+
+  test.withReducerTx(host, ctx =>
+    moduleExports.startMatch(ctx, { matchId })
+  );
+  expect(test.db.match.id.find(matchId)?.phase).toBe("active");
+  expect([...test.db.botSchedule.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.economySchedule.matchId.filter(matchId)]).toHaveLength(1);
+
+  // The bot is a server faction, not a second human Identity with private access.
+  const ownedShips = test.runQuery<any>(moduleExports.myShips(test.viewContext(host)));
+  expect(ownedShips.every((ship: { ownerSlot: number }) => ship.ownerSlot === 0)).toBe(true);
+});
