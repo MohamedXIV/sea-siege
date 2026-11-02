@@ -1,5 +1,10 @@
 # Sea Siege — Roadmap
 
+> **Active execution focus — 2 November 2026:** [Playable Gemini Parity](./docs/PLAYABLE_PARITY_ROADMAP.md), tracked by [Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23) and [Issues #24–#29](https://github.com/MohamedXIV/sea-siege/issues/24). Restore the enjoyable Gemini gameplay loop (one-click real bot match, visible static map, construction, Salvage, production, naval combat, results and rematch) **above the real connected SpacetimeDB/Phaser stack**. The original reference assets are already preserved under [references/gemini](./references/gemini/README.md), and must remain unmodified. **Exploration Fog of War is deferred; enemy intel remains authorization-protected.** This player-first parity plan takes sequencing priority over the older fog-first/full-feature milestone breakdown below.
+
+> **Foundation update:** [PR #21](https://github.com/MohamedXIV/sea-siege/pull/21) and [PR #22](https://github.com/MohamedXIV/sea-siege/pull/22) merged; owner confirmed a real two-human Codespaces match could start. This proves a connected slice, not a full playable RTS. Earlier notes below are an **October 29–30 historical baseline**, not current test status.
+
+
 > Project planning baseline: 29 October 2026; **experimental source foundation squash-merged 30 October 2026** via [PR #20](https://github.com/MohamedXIV/sea-siege/pull/20). This is NOT an accepted playable release. [Implementation/validation status](./docs/STATUS.md) distinguishes code present from acceptance gates. The [master epic](https://github.com/MohamedXIV/sea-siege/issues/1) tracks feature completion.
 
 ## Current verification sequence — user decision (29 Oct 2026)
