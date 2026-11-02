@@ -1,5 +1,10 @@
 # Sea Siege — Implementation Status
 
+> **2 November 2026 update — current source of truth for next work:** [Playable Gemini Parity Roadmap](./PLAYABLE_PARITY_ROADMAP.md) and [Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23). Actual SpacetimeDB connected multiplayer + Phaser own-ship slice was merged through [PR #21](https://github.com/MohamedXIV/sea-siege/pull/21) and [PR #22](https://github.com/MohamedXIV/sea-siege/pull/22), with owner-reported browser match-start success. No full solo-bot skirmish or complete game HUD is verified. The following section is a **preserved 30 October historical snapshot**; statements like “backend not connected” are no longer true after those PRs. Do not close broad issue acceptance gates based only on source presence.
+
+## Historical 30 October implementation snapshot
+
+
 **As of 30 October 2026.** Canonical concise issue triage for the experimental real-stack foundation. This is an implementation matrix, **not** a release declaration.
 
 ## What is genuinely present in source
