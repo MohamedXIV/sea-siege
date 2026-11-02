@@ -538,3 +538,43 @@ describe("P0 Stabilization Verification Suite", () => {
     });
   });
 });
+
+describe("Playable Parity: Quick Play", () => {
+  it("starts a genuine one-human versus server-bot match using the live backend", async () => {
+    const client = new SpacetimeClient(
+      "http://127.0.0.1:3000", "sea-siege-dev", "test:token:quick-play"
+    );
+    client.clearStoredToken();
+    try {
+      client.connect();
+      await waitFor(() =>
+        client.getState().status === "connected" &&
+        client.getState().subscriptionStatus === "applied", 8000
+      );
+
+      const launch = client.quickPlay();
+      await expect(client.quickPlay()).rejects.toThrow("already starting");
+      const matchId = await launch;
+
+      await waitFor(() =>
+        client.getState().activeMatchId === matchId &&
+        client.getState().activeMatch?.phase === "active" &&
+        client.getState().myShips.some(row => row.matchId === matchId), 10000
+      );
+
+      const state = client.getState();
+      expect(state.activeMatch?.maxSlots).toBe(2);
+      expect(state.myMembership?.matchId).toBe(matchId);
+      expect(state.myMembership?.slot).toBe(0);
+      expect(state.myFaction?.controller).toBe("human");
+      expect(state.myShips.every(ship => ship.ownerSlot === 0)).toBe(true);
+      expect(state.status).toBe("connected");
+      expect(state.subscriptionStatus).toBe("applied");
+      // StartMatch requires >=2 real server factions. The only client-side
+      // identity is the host; successful launch proves the bot seat was added.
+    } finally {
+      client.disconnect();
+      client.clearStoredToken();
+    }
+  }, 35000);
+});
