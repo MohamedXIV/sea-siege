@@ -28,6 +28,7 @@ export function DevControls() {
     myStructures,
     visibleEnemies,
     createMatch,
+    quickPlay,
     joinMatch,
     startMatch,
     resubscribe,
@@ -41,6 +42,21 @@ export function DevControls() {
   const [isActing, setIsActing] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [player2Joined, setPlayer2Joined] = useState(false);
+
+  const handleQuickPlay = async () => {
+    if (isActing) return;
+    setIsActing(true);
+    setActionError(null);
+    try {
+      await quickPlay();
+      setShowBrowser(false);
+      setPlayer2Joined(false);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Could not start Quick Play");
+    } finally {
+      setIsActing(false);
+    }
+  };
 
   const handleCreate = async () => {
     setIsActing(true);
@@ -174,6 +190,21 @@ export function DevControls() {
           {actionError}
         </div>
       )}
+
+      {/* Real solo skirmish entry point; manual multiplayer controls remain below. */}
+      <div className="space-y-1.5">
+        <Button
+          onClick={handleQuickPlay}
+          disabled={isActing || status !== "connected" || subscriptionStatus !== "applied"}
+          className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold"
+        >
+          <Play className="size-4" />
+          {isActing ? "Starting match..." : "Quick Play — 1 vs 1 Bot"}
+        </Button>
+        <p className="text-[11px] text-slate-400">
+          Creates a new 2-faction match with one server-controlled bot. No second browser needed.
+        </p>
+      </div>
 
       {/* Match Context / Lobby */}
       {activeMatch && !showBrowser ? (
