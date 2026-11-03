@@ -415,6 +415,10 @@ describe("P0 Stabilization Verification Suite", () => {
       // This retains a real WS/proxy handshake assertion, not a mocked proxy.
       const vite = await createServer({
         server: { host: "127.0.0.1", port: 0, strictPort: true },
+        // This test exercises /v1 WebSocket proxying, not app module transforms.
+        // Prevent Vite's background HTML dep crawl from racing with vite.close()
+        // and logging esbuild "server is being restarted or closed" warnings.
+        optimizeDeps: { noDiscovery: true, include: [] },
       });
       let client: SpacetimeClient | null = null;
       try {
