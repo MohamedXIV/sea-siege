@@ -588,6 +588,15 @@ describe("Playable Parity: Quick Play", () => {
       expect(state.myMembership?.slot).toBe(0);
       expect(state.myFaction?.controller).toBe("human");
       expect(state.myShips.every(ship => ship.ownerSlot === 0)).toBe(true);
+      // Open-battlefield visibility: the distant enemy is present at match
+      // start, even though no allied sensor could detect its spawn.
+      await waitFor(() => {
+        const enemies = client.getState().visibleEnemies;
+        return enemies.some(row => row.entityType === "ship") &&
+          enemies.some(row => row.entityType === "structure");
+      }, 8000);
+      expect(client.getState().visibleEnemies.every(row => row.matchId === matchId))
+        .toBe(true);
       expect(state.status).toBe("connected");
       expect(state.subscriptionStatus).toBe("applied");
       // StartMatch requires >=2 real server factions. The only client-side
