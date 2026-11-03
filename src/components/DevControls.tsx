@@ -122,13 +122,13 @@ export function DevControls() {
       : false;
 
   return (
-    <aside className="pointer-events-auto max-w-md w-full space-y-4 rounded-xl border border-border/80 bg-slate-950/85 p-5 shadow-2xl backdrop-blur-md text-foreground">
+    <aside className="pointer-events-auto w-full space-y-3 text-slate-100">
       {/* Network Header */}
       <div className="flex items-center justify-between border-b border-border/60 pb-3">
         <div className="flex items-center gap-2">
           <Radio className="size-4 text-cyan-400" />
           <span className="text-xs font-semibold tracking-wider uppercase text-cyan-400">
-            P0 Multi-Client Harness
+            Tactical Deployment Link
           </span>
         </div>
         <div className="flex items-center gap-1.5 text-xs font-mono">
@@ -196,13 +196,13 @@ export function DevControls() {
         <Button
           onClick={handleQuickPlay}
           disabled={isActing || status !== "connected" || subscriptionStatus !== "applied"}
-          className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold"
+          className="w-full bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold"
         >
           <Play className="size-4" />
-          {isActing ? "Starting match..." : "Quick Play — 1 vs 1 Bot"}
+          {isActing ? "Starting match..." : "⚡ QUICK PLAY — vs SERVER AI"}
         </Button>
         <p className="text-[11px] text-slate-400">
-          Creates a new 2-faction match with one server-controlled bot. No second browser needed.
+          Immediate 1v1 skirmish. Real server-controlled bot, original Gemini battlefield.
         </p>
       </div>
 
