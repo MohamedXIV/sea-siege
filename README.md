@@ -14,7 +14,7 @@
 - [Playable Parity Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23) and implementation issues [#24–#29](https://github.com/MohamedXIV/sea-siege/issues/24)
 - [Long-term roadmap](./ROADMAP.md), [master Epic #1](https://github.com/MohamedXIV/sea-siege/issues/1), and [implementation snapshot](./docs/STATUS.md)
 
-**Default design decision for this recovery phase:** full *static terrain map* visible from the start; **no new persistent exploration Fog of War**. Existing tactical enemy contact authorization and private server information must remain secure.
+**Gameplay decision (3 Nov 2026): NO Fog of War.** All terrain, resource locations, rival bases and enemy ship positions are visible to authenticated match participants. Server-owned commands, credentials and other matches remain protected. [Open Battlefield #25](https://github.com/MohamedXIV/sea-siege/issues/25) implements this visible, Gemini-first RTS direction.
 
 ## Primary gameplay reference
 

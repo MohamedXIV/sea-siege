@@ -269,7 +269,7 @@ export function DevControls() {
                 </div>
               </div>
               <div className="bg-slate-900/60 p-2 rounded border border-border/40">
-                <div className="text-slate-400 text-[10px] uppercase">Hostiles</div>
+                <div className="text-slate-400 text-[10px] uppercase">Enemy assets</div>
                 <div className="font-mono font-bold text-rose-400 text-sm">
                   {visibleEnemies.length}
                 </div>

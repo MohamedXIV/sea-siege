@@ -1343,3 +1343,44 @@ it("Quick Play backend contract: one human and one independent server bot can st
   const ownedShips = test.runQuery<any>(moduleExports.myShips(test.viewContext(host)));
   expect(ownedShips.every((ship: { ownerSlot: number }) => ship.ownerSlot === 0)).toBe(true);
 });
+
+it("open battlefield shows all enemy bot ships and structures, but only to match participants", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("open-battle-host", 801n);
+  const outsider = auth("open-battle-outsider", 802n);
+
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  // Keep enemy positions private while the lobby is waiting.
+  expect(moduleExports.myVisibleEnemies(test.viewContext(host))).toHaveLength(0);
+
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const hostIntel = moduleExports.myVisibleEnemies(test.viewContext(host));
+  const enemyShips = [...test.db.ship.matchId.filter(matchId)].filter(s => s.ownerSlot === 1);
+  const enemyStructures = [...test.db.structure.matchId.filter(matchId)]
+    .filter(s => s.ownerSlot === 1 && s.complete);
+  expect(enemyShips).toHaveLength(1);
+  expect(enemyStructures).toHaveLength(7);
+  expect(hostIntel).toHaveLength(enemyShips.length + enemyStructures.length);
+  for (const s of enemyShips) {
+    expect(hostIntel).toContainEqual({
+      contactKey: matchId.toString() + ":ship:" + s.id.toString(),
+      matchId, entityId: s.id, entityType: "ship", x: s.x, y: s.y,
+    });
+  }
+  for (const s of enemyStructures) {
+    expect(hostIntel).toContainEqual({
+      contactKey: matchId.toString() + ":structure:" + s.id.toString(),
+      matchId, entityId: s.id, entityType: "structure",
+      x: s.gridX + s.width / 2, y: s.gridY + s.height / 2,
+    });
+  }
+  expect(moduleExports.myVisibleEnemies(test.viewContext(outsider))).toHaveLength(0);
+  expect(hostIntel.every(contact =>
+    Object.keys(contact).sort().join(",") ===
+      ["contactKey", "entityId", "entityType", "matchId", "x", "y"].sort().join(",")
+  )).toBe(true);
+});
