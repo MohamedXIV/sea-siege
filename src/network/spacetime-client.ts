@@ -73,6 +73,7 @@ export class SpacetimeClient {
   private connectionGeneration = 0;
   private tableCallbacksBoundConnection: DbConnection | null = null;
   private pendingCreateMatch = false;
+  private quickPlayPending = false;
 
   readonly host: string;
   readonly database: string;
@@ -536,6 +537,69 @@ export class SpacetimeClient {
     } catch (err) {
       this.pendingCreateMatch = false;
       throw err;
+    }
+  }
+
+  /**
+   * A real single-human skirmish: create a new server-owned match, provision a
+   * server-owned bot seat, then start it. Never impersonate a second client.
+   * Phase changes and membership arrive through authorized subscriptions.
+   */
+  async quickPlay(): Promise<bigint> {
+    if (this.quickPlayPending) {
+      throw new Error("Quick Play is already starting");
+    }
+    const conn = this.conn;
+    if (!conn || this.status !== "connected" || this.subscriptionStatus !== "applied") {
+      throw new Error("Quick Play requires an active SpacetimeDB subscription");
+    }
+    const generation = this.connectionGeneration;
+    const previousMatchIds = new Set(
+      Array.from(conn.db.myMemberships.iter()).map((row) => row.matchId)
+    );
+    this.quickPlayPending = true;
+    try {
+      await this.createMatch(2);
+      const matchId = await new Promise<bigint>((resolve, reject) => {
+        let settled = false;
+        let unsubscribe: () => void = () => {};
+        const finish = (id: bigint | null, reason?: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          unsubscribe();
+          if (id !== null) resolve(id);
+          else reject(reason || new Error("Could not identify the new Quick Play match"));
+        };
+        const timeout = setTimeout(
+          () => finish(null, new Error("Timed out waiting for the new match membership")),
+          10000
+        );
+        const check = () => {
+          if (this.connectionGeneration !== generation || this.conn !== conn ||
+              this.status !== "connected") {
+            finish(null, new Error("Connection changed during Quick Play"));
+            return;
+          }
+          const membership = Array.from(conn.db.myMemberships.iter())
+            .find((row) => !previousMatchIds.has(row.matchId));
+          if (membership) finish(membership.matchId);
+        };
+        // subscribe() invokes the listener synchronously; handle immediate resolution.
+        unsubscribe = this.subscribe(check);
+        if (settled) unsubscribe();
+      });
+
+      if (this.connectionGeneration !== generation || this.conn !== conn ||
+          this.status !== "connected") {
+        throw new Error("Connection changed during Quick Play");
+      }
+      await conn.reducers.addBot({ matchId, difficulty: "normal" });
+      await conn.reducers.startMatch({ matchId });
+      this.setActiveMatchId(matchId);
+      return matchId;
+    } finally {
+      this.quickPlayPending = false;
     }
   }
 

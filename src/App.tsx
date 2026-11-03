@@ -3,13 +3,20 @@ import { Anchor, Compass, DatabaseZap, Layers3, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PhaserViewport } from "@/game/PhaserViewport";
 import { DevControls } from "@/components/DevControls";
+import { MatchHud } from "@/components/MatchHud";
 import { useSpacetime } from "@/network/useSpacetime";
 
 type InfoTab = "multiplayer" | "status" | "controls";
 
 export default function App() {
   const [tab, setTab] = useState<InfoTab>("multiplayer");
-  const { status, identity } = useSpacetime();
+  const gameState = useSpacetime();
+  const { status, identity, activeMatch } = gameState;
+  // Remember which match the player deliberately opened the menu for.
+  // Starting a *new* match automatically goes back to the battlefield.
+  const [menuOpenedForMatch, setMenuOpenedForMatch] = useState<bigint | null>(null);
+  const isPlaying = activeMatch?.phase === "active";
+  const menuOpen = isPlaying && menuOpenedForMatch === activeMatch?.id;
 
   return (
     <main className="relative min-h-svh overflow-hidden bg-background text-foreground">
@@ -18,6 +25,10 @@ export default function App() {
         <PhaserViewport />
       </div>
 
+      {isPlaying && !menuOpen ? (
+        <MatchHud state={gameState} onMenu={() => setMenuOpenedForMatch(activeMatch?.id ?? null)} />
+      ) : (
+        <>
       {/* Atmospheric gradient overlay */}
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(4,13,21,.92),rgba(4,13,21,.5)_50%,rgba(4,13,21,.12))]" />
 
@@ -63,6 +74,15 @@ export default function App() {
 
         {/* Main Content Area */}
         <section className="pointer-events-auto max-w-xl space-y-4 py-6">
+          {isPlaying && (
+            <Button
+              variant="outline"
+              onClick={() => setMenuOpenedForMatch(null)}
+              className="border-cyan-600/70 bg-slate-950/90 text-cyan-200"
+            >
+              Resume Match #{activeMatch.id.toString()}
+            </Button>
+          )}
           <div className="flex items-center gap-2 text-xs tracking-[.26em] uppercase text-primary">
             <Waves className="size-4" /> A world below the waterline
           </div>
@@ -128,6 +148,8 @@ export default function App() {
           Phase 2 Connected Client · Phaser 4.2.1 / TypeScript / SpacetimeDB 2.14.0 / React 19
         </footer>
       </div>
+        </>
+      )}
     </main>
   );
 }
