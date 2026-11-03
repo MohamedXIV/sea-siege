@@ -12,6 +12,8 @@ const INTERPOLATION_DELAY_MS = 100;
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
 export const FOCUS_HOME_EVENT = "sea-siege:focus-home";
 export const FOCUS_MAP_CELL_EVENT = "sea-siege:focus-map-cell";
+export const GEMINI_BUILD_MODE_EVENT = "sea-siege:gemini-build-mode";
+export const GEMINI_SELECTION_EVENT = "sea-siege:gemini-selection";
 
 interface VesselArt {
   container: Phaser.GameObjects.Container;
@@ -43,6 +45,9 @@ export class SeaScene extends Phaser.Scene {
   private vessels = new Map<bigint, VesselArt>();
   private buildings = new Map<bigint, BuildingArt>();
   private selectedShipId: bigint | null = null;
+  private buildKind: string | null = null;
+  private buildPreview!: Phaser.GameObjects.Graphics;
+  private cursorCell: { x: number; y: number } | null = null;
   private unsubscribeClient: (() => void) | null = null;
   private currentMatch: bigint | null = null;
   private worldRevision = "";
@@ -59,6 +64,7 @@ export class SeaScene extends Phaser.Scene {
     this.terrain = this.add.graphics().setDepth(2);
     this.deposits = this.add.graphics().setDepth(4);
     this.markers = this.add.graphics().setDepth(31);
+    this.buildPreview = this.add.graphics().setDepth(34);
     this.cameras.main.setZoom(1);
 
     this.input.mouse?.disableContextMenu();
@@ -71,6 +77,11 @@ export class SeaScene extends Phaser.Scene {
       };
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (this.buildKind) {
+        const p = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        this.cursorCell = { x: Math.floor(p.x / TILE), y: Math.floor(p.y / TILE) };
+        this.drawBuildPreview();
+      }
       if (!this.drag) return;
       const dx = pointer.x - this.drag.x;
       const dy = pointer.y - this.drag.y;
@@ -94,6 +105,7 @@ export class SeaScene extends Phaser.Scene {
     window.addEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
     window.addEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.addEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
+    window.addEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.on("keydown-E", this.focusEnemy);
     this.input.keyboard?.on("keydown-H", this.focusHome);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
@@ -109,6 +121,7 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
     window.removeEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.removeEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
+    window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.off("keydown-E", this.focusEnemy);
     this.input.keyboard?.off("keydown-H", this.focusHome);
     this.clearEntities();
@@ -123,6 +136,9 @@ export class SeaScene extends Phaser.Scene {
     for (const art of this.buildings.values()) art.image.destroy();
     this.buildings.clear();
     this.selectedShipId = null;
+    this.cursorCell = null;
+    this.buildKind = null;
+    this.buildPreview?.clear();
   }
 
   private focusHome = (): void => {
@@ -149,11 +165,43 @@ export class SeaScene extends Phaser.Scene {
       this.cameras.main.centerOn(p.x * TILE, p.y * TILE);
   };
 
+  private onBuildMode = (event: Event): void => {
+    const kind = (event as CustomEvent<{ kind: string | null }>).detail?.kind ?? null;
+    this.buildKind = kind;
+    this.cursorCell = null;
+    this.buildPreview.clear();
+  };
+
+  private drawBuildPreview(): void {
+    this.buildPreview.clear();
+    if (!this.buildKind || !this.cursorCell) return;
+    const sizes: Record<string, number> = { platform: 1, cannon: 1, shipyard: 2, workshop: 2, salvage_rig: 2 };
+    const size = sizes[this.buildKind] ?? 1;
+    const x = this.cursorCell.x * TILE, y = this.cursorCell.y * TILE;
+    // Yellow preview is deliberately neutral. Server alone decides validity.
+    this.buildPreview.fillStyle(0xeab308, 0.23);
+    this.buildPreview.fillRect(x, y, size * TILE, size * TILE);
+    this.buildPreview.lineStyle(2, 0xfef08a, 0.85);
+    this.buildPreview.strokeRect(x, y, size * TILE, size * TILE);
+  }
+
+  private selectEntity(type: "ship" | "structure", id: bigint): void {
+    window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
+      detail: { type, id },
+    }));
+  }
+
   private pointerCommand(pointer: Phaser.Input.Pointer): void {
     const state = spacetimeClient.getState();
     if (state.activeMatch?.phase !== "active") return;
     const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     const x = world.x / TILE, y = world.y / TILE;
+    if (this.buildKind && pointer.leftButtonReleased()) {
+      const gridX = Math.floor(x), gridY = Math.floor(y);
+      spacetimeClient.placeStructure(this.buildKind, gridX, gridY)
+        .catch(err => console.warn("Construction rejected by server:", err?.message ?? err));
+      return;
+    }
     if (pointer.leftButtonReleased()) {
       const hit = state.myShips.find(ship => {
         const art = this.vessels.get(ship.id);
@@ -163,6 +211,37 @@ export class SeaScene extends Phaser.Scene {
       });
       if (hit) {
         this.selectedShipId = hit.id;
+        this.selectEntity("ship", hit.id);
+        return;
+      }
+
+      const ownSlot = state.myMembership?.slot;
+      const chosen = state.battleStructures.find(st =>
+        st.ownerSlot === ownSlot &&
+        x >= st.gridX && x < st.gridX + st.width &&
+        y >= st.gridY && y < st.gridY + st.height
+      );
+      if (chosen) {
+        this.selectedShipId = null;
+        this.selectEntity("structure", chosen.id);
+        return;
+      }
+    }
+
+    if (this.selectedShipId !== null) {
+      const node = state.salvageNodes.find(n =>
+        n.remaining > 0 && Math.abs(x - n.gridX - 0.5) < 0.8 &&
+        Math.abs(y - n.gridY - 0.5) < 0.8
+      );
+      if (node) {
+        const ship = state.myShips.find(s => s.id === this.selectedShipId);
+        if (ship && Math.hypot(ship.x - node.gridX - 0.5, ship.y - node.gridY - 0.5) <= 3.5) {
+          spacetimeClient.orderHarvest(ship.id, node.id)
+            .catch(err => console.warn("Harvest rejected:", err?.message ?? err));
+        } else if (ship) {
+          spacetimeClient.issueShipOrder(ship.id, node.gridX + 0.5, node.gridY + 0.5)
+            .catch(err => console.warn("Move toward salvage rejected:", err?.message ?? err));
+        }
         return;
       }
     }
