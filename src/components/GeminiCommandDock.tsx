@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Hammer, Anchor, Crosshair, CircleStop, Pickaxe } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { GEMINI_BUILD_MODE_EVENT, GEMINI_SELECTION_EVENT } from "@/game/SeaScene";
+import { GEMINI_BUILD_MODE_EVENT, GEMINI_SELECTION_EVENT, GEMINI_FEEDBACK_EVENT } from "@/game/SeaScene";
 import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-client";
 import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
@@ -33,8 +33,14 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
       setSelected(detail);
       setError(null);
     };
+    const feedback = (event: Event) =>
+      setError((event as CustomEvent<{ message: string }>).detail?.message || "Command rejected");
     window.addEventListener(GEMINI_SELECTION_EVENT, listener);
-    return () => window.removeEventListener(GEMINI_SELECTION_EVENT, listener);
+    window.addEventListener(GEMINI_FEEDBACK_EVENT, feedback);
+    return () => {
+      window.removeEventListener(GEMINI_SELECTION_EVENT, listener);
+      window.removeEventListener(GEMINI_FEEDBACK_EVENT, feedback);
+    };
   }, []);
 
   useEffect(() => {
