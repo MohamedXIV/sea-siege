@@ -50,6 +50,7 @@ export class SeaScene extends Phaser.Scene {
   private cursorCell: { x: number; y: number } | null = null;
   private unsubscribeClient: (() => void) | null = null;
   private currentMatch: bigint | null = null;
+  private centeredMatchId: bigint | null = null;
   private worldRevision = "";
   private depositAccum = 0;
   private waveAccum = 0;
@@ -271,6 +272,7 @@ export class SeaScene extends Phaser.Scene {
     const matchId = state.activeMatch?.id ?? null;
     if (matchId !== this.currentMatch) {
       this.currentMatch = matchId;
+      this.centeredMatchId = null;
       this.worldRevision = "";
       this.clearEntities();
       this.terrain.clear();
@@ -281,8 +283,11 @@ export class SeaScene extends Phaser.Scene {
     this.syncMap(state);
     this.syncBuildings(state.battleStructures);
     this.syncShips(state.battleShips);
-    if (state.myStructures.length > 0 && this.cameras.main.scrollX === 0 &&
-        this.cameras.main.scrollY === 0) this.focusHome();
+    if (this.centeredMatchId !== matchId && state.myStructures
+      .some(st => st.kind === "command_core")) {
+      this.focusHome();
+      this.centeredMatchId = matchId;
+    }
   }
 
   private syncMap(state: SpacetimeClientState): void {
