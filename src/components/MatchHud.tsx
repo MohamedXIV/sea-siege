@@ -1,4 +1,5 @@
-import { Anchor, Compass, Menu, Radio, Ship, Waves } from "lucide-react";
+import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed } from "lucide-react";
+import { FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT } from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 
@@ -83,20 +84,37 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
             </div>
             <div>
               <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-400">
-                <Radio className="size-3" /> Enemy contacts
+                <Radio className="size-3" /> Enemy assets
               </div>
               <div className="font-mono text-lg font-bold text-rose-300">{state.visibleEnemies.length}</div>
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
-            <span className="flex items-center gap-1">
-              <Compass className="size-3 text-cyan-300" /> Click your ship, then water to move
-            </span>
-            <span>
-              {state.visibleEnemies.length === 0
-                ? "No enemy contacts detected yet — this does not mean no opponent exists."
-                : "Enemy contacts are within sensor coverage."}
-            </span>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
+            <div className="space-y-1">
+              <span className="flex items-center gap-1">
+                <Compass className="size-3 text-cyan-300" /> Click your ship, then water to move
+              </span>
+              <div>Open battlefield: all enemy positions are visible. E: rival base · H: home</div>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 border-slate-700 text-xs"
+                onClick={() => window.dispatchEvent(new Event(FOCUS_HOME_EVENT))}
+              >
+                <LocateFixed className="size-3" /> Home
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 border-rose-800 text-xs text-rose-300"
+                disabled={!state.visibleEnemies.length}
+                onClick={() => window.dispatchEvent(new Event(FOCUS_ENEMY_EVENT))}
+              >
+                <LocateFixed className="size-3" /> Find Enemy
+              </Button>
+            </div>
           </div>
         </div>
       </div>
