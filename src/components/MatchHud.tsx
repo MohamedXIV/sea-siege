@@ -1,6 +1,7 @@
 import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed } from "lucide-react";
 import { FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT } from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
+import { TacticalOverview } from "@/components/TacticalOverview";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 
 interface MatchHudProps {
@@ -54,6 +55,8 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
           </Button>
         </div>
       </header>
+
+      <TacticalOverview state={state} />
 
       <div className="flex flex-col items-start justify-end gap-2 p-3 sm:p-4">
         {state.error && (
