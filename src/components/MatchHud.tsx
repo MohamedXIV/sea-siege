@@ -2,6 +2,7 @@ import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed } from "lucide-r
 import { FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT } from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
 import { TacticalOverview } from "@/components/TacticalOverview";
+import { GeminiCommandDock } from "@/components/GeminiCommandDock";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 
 interface MatchHudProps {
@@ -92,12 +93,13 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
               <div className="font-mono text-lg font-bold text-rose-300">{state.visibleEnemies.length}</div>
             </div>
           </div>
+          <GeminiCommandDock state={state} />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
             <div className="space-y-1">
               <span className="flex items-center gap-1">
                 <Compass className="size-3 text-cyan-300" /> Click your ship, then water to move
               </span>
-              <div>Open battlefield: all enemy positions are visible. E: rival base · H: home</div>
+              <div>Gemini 40px battlefield: no Fog of War. E: rival base · H: home</div>
             </div>
             <div className="flex items-center gap-1">
               <Button
