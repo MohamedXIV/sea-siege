@@ -634,6 +634,50 @@ export class SpacetimeClient {
     }
   }
 
+  /** Gemini gameplay actions, all authorized and validated by SpacetimeDB. */
+  async placeStructure(kind: string, gridX: number, gridY: number): Promise<void> {
+    const matchId = this.getState().activeMatchId;
+    if (!this.conn || this.status !== "connected" || matchId === null)
+      throw new Error("No connected match for construction");
+    await this.conn.reducers.placeStructure({ matchId, kind, gridX, gridY });
+  }
+
+  async orderHarvest(shipId: bigint, nodeId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for salvage harvesting");
+    await this.conn.reducers.orderHarvest({ shipId, nodeId });
+  }
+
+  async enqueueShip(shipyardId: bigint, kind: string): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for ship production");
+    await this.conn.reducers.enqueueShip({ shipyardId, kind });
+  }
+
+  async stopShip(shipId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for ship controls");
+    await this.conn.reducers.stopShip({ shipId });
+  }
+
+  async aimWeapon(sourceId: bigint, targetX: number, targetY: number): Promise<void> {
+    const ownShip = this.getState().myShips.find(ship => ship.id === sourceId);
+    if (!this.conn || this.status !== "connected" || !ownShip)
+      throw new Error("Select an owned ship to aim");
+    const desiredAngleDeg = Math.atan2(targetY - ownShip.y, targetX - ownShip.x) * 180 / Math.PI;
+    await this.conn.reducers.aimWeapon({
+      sourceType: "ship", sourceId, desiredAngleDeg,
+    });
+  }
+
+  async fireWeapon(sourceId: bigint, targetType: "ship" | "structure", targetId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for combat");
+    await this.conn.reducers.fireWeapon({
+      sourceType: "ship", sourceId, targetType, targetId,
+    });
+  }
+
   async joinMatch(matchId: bigint): Promise<void> {
     if (!this.conn || this.status !== "connected") {
       throw new Error("Cannot join match: not connected to SpacetimeDB");
