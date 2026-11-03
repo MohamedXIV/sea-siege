@@ -1384,3 +1384,45 @@ it("open battlefield shows all enemy bot ships and structures, but only to match
       ["contactKey", "entityId", "entityType", "matchId", "x", "y"].sort().join(",")
   )).toBe(true);
 });
+
+it("Gemini world projection matches authoritative map, salvage, ships and structures", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("gemini-world-host", 901n);
+  const outsider = auth("gemini-world-outsider", 902n);
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+
+  const chunks = moduleExports.myGeminiWorldChunks(test.viewContext(host));
+  const deposits = moduleExports.myGeminiSalvage(test.viewContext(host));
+  const ships = moduleExports.myGeminiShips(test.viewContext(host));
+  const structures = moduleExports.myGeminiStructures(test.viewContext(host));
+  const rawChunks = [...test.db.worldChunk.matchId.filter(matchId)];
+  const rawDeposits = [...test.db.salvageNode.matchId.filter(matchId)];
+  expect(chunks).toHaveLength(rawChunks.length);
+  expect(chunks.length).toBeGreaterThan(0);
+  expect(deposits).toHaveLength(rawDeposits.length);
+  expect(ships).toHaveLength(2);
+  expect(structures).toHaveLength(14);
+  expect(ships.map(ship => ship.ownerSlot).sort()).toEqual([0, 1]);
+
+  for (const row of chunks) {
+    const original = rawChunks.find(raw => raw.chunkX === row.chunkX &&
+      raw.chunkY === row.chunkY)!;
+    expect(row.mapCells).toBe(56);
+    expect([...row.terrain]).toEqual([...original.terrain]);
+  }
+  const restricted = test.viewContext(outsider);
+  expect(moduleExports.myGeminiWorldChunks(restricted)).toHaveLength(0);
+  expect(moduleExports.myGeminiSalvage(restricted)).toHaveLength(0);
+  expect(moduleExports.myGeminiShips(restricted)).toHaveLength(0);
+  expect(moduleExports.myGeminiStructures(restricted)).toHaveLength(0);
+  for (const row of ships) {
+    expect("targetX" in row).toBe(false);
+    expect("factionKey" in row).toBe(false);
+    expect("lastFiredAtUs" in row).toBe(false);
+  }
+});
