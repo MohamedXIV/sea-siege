@@ -1,521 +1,423 @@
 import Phaser from "phaser";
-import { spacetimeClient } from "../network/spacetime-client";
+import { spacetimeClient, type SpacetimeClientState } from "../network/spacetime-client";
 import { SnapshotBuffer } from "./motion/SnapshotBuffer";
-import type { Ship, Structure, DetectedEnemyContact } from "../module_bindings/types";
+import {
+  GEMINI_TILE_SIZE as TILE,
+  geminiFactionColor,
+  geminiStructureTexture,
+} from "./art/GeminiPixelArt";
+import type { GeminiBattleShip, GeminiBattleStructure } from "../module_bindings/types";
 
-const TILE_SIZE = 64;
 const INTERPOLATION_DELAY_MS = 100;
-/** UI-only camera navigation signals. All world positions remain server sourced. */
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
 export const FOCUS_HOME_EVENT = "sea-siege:focus-home";
 export const FOCUS_MAP_CELL_EVENT = "sea-siege:focus-map-cell";
 
-interface ShipRenderData {
-  id: bigint;
-  buffer: SnapshotBuffer;
+interface VesselArt {
   container: Phaser.GameObjects.Container;
-  hullGfx: Phaser.GameObjects.Graphics;
-  turretGfx: Phaser.GameObjects.Graphics;
-  selectionGfx: Phaser.GameObjects.Graphics;
-  label: Phaser.GameObjects.Text;
-  lastRevision: number;
+  hull: Phaser.GameObjects.Graphics;
+  turret: Phaser.GameObjects.Graphics;
+  highlight: Phaser.GameObjects.Graphics;
+  wake: Phaser.GameObjects.Graphics;
+  motion: SnapshotBuffer;
+  revision: bigint;
+  kind: string;
+  slot: number;
 }
 
+interface BuildingArt {
+  image: Phaser.GameObjects.Image;
+  key: string;
+}
+
+/**
+ * Gemini's original 40px pixel-art/water/ship silhouettes ported into a REAL
+ * Phaser 4 scene. This scene never simulates combat, economy, terrain or AI:
+ * those rules remain in SpacetimeDB, and only member-scoped rows are drawn.
+ */
 export class SeaScene extends Phaser.Scene {
-  private waterGfx!: Phaser.GameObjects.Graphics;
-  private structuresGfx!: Phaser.GameObjects.Graphics;
-  private enemiesGfx!: Phaser.GameObjects.Graphics;
-  private waypointsGfx!: Phaser.GameObjects.Graphics;
-
-  private shipRenders = new Map<bigint, ShipRenderData>();
+  private ocean!: Phaser.GameObjects.Graphics;
+  private terrain!: Phaser.GameObjects.Graphics;
+  private deposits!: Phaser.GameObjects.Graphics;
+  private markers!: Phaser.GameObjects.Graphics;
+  private vessels = new Map<bigint, VesselArt>();
+  private buildings = new Map<bigint, BuildingArt>();
   private selectedShipId: bigint | null = null;
-  private waypoint: { x: number; y: number; alpha: number } | null = null;
-
-  private elapsed = 0;
-  private redrawAccum = 0;
-  private drag: { x: number; y: number; scrollX: number; scrollY: number; moved: boolean } | null = null;
   private unsubscribeClient: (() => void) | null = null;
-  private centeredMatchId: bigint | null = null;
+  private currentMatch: bigint | null = null;
+  private worldRevision = "";
+  private depositAccum = 0;
+  private waveAccum = 0;
+  private elapsed = 0;
+  private drag: { x: number; y: number; scrollX: number; scrollY: number; moved: boolean } | null = null;
 
-  constructor() {
-    super({ key: "SeaScene" });
-  }
+  constructor() { super({ key: "SeaScene" }); }
 
   create(): void {
-    this.cameras.main.setBackgroundColor("#07121b");
+    this.cameras.main.setBackgroundColor("#06131f");
+    this.ocean = this.add.graphics().setDepth(0);
+    this.terrain = this.add.graphics().setDepth(2);
+    this.deposits = this.add.graphics().setDepth(4);
+    this.markers = this.add.graphics().setDepth(31);
+    this.cameras.main.setZoom(1);
 
-    this.waterGfx = this.add.graphics().setDepth(0);
-    this.structuresGfx = this.add.graphics().setDepth(10);
-    this.enemiesGfx = this.add.graphics().setDepth(15);
-    this.waypointsGfx = this.add.graphics().setDepth(20);
-
-    // Input handlers for pan & zoom
+    this.input.mouse?.disableContextMenu();
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      if (pointer.middleButtonDown() || pointer.rightButtonDown()) {
-        this.drag = {
-          x: pointer.x,
-          y: pointer.y,
-          scrollX: this.cameras.main.scrollX,
-          scrollY: this.cameras.main.scrollY,
-          moved: false,
-        };
-      }
+      if (!pointer.middleButtonDown() && !pointer.rightButtonDown()) return;
+      this.drag = {
+        x: pointer.x, y: pointer.y,
+        scrollX: this.cameras.main.scrollX, scrollY: this.cameras.main.scrollY,
+        moved: false,
+      };
     });
-
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
       if (!this.drag) return;
-      const dx = Math.abs(pointer.x - this.drag.x);
-      const dy = Math.abs(pointer.y - this.drag.y);
-      if (dx > 3 || dy > 3) this.drag.moved = true;
-
-      const camera = this.cameras.main;
-      camera.setScroll(
-        this.drag.scrollX + (this.drag.x - pointer.x) / camera.zoom,
-        this.drag.scrollY + (this.drag.y - pointer.y) / camera.zoom
+      const dx = pointer.x - this.drag.x;
+      const dy = pointer.y - this.drag.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this.drag.moved = true;
+      this.cameras.main.setScroll(
+        this.drag.scrollX - dx / this.cameras.main.zoom,
+        this.drag.scrollY - dy / this.cameras.main.zoom,
       );
     });
-
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      const wasDrag = this.drag && this.drag.moved;
+      const moved = this.drag?.moved;
       this.drag = null;
-
-      if (!wasDrag) {
-        this.handlePointerClick(pointer);
-      }
+      if (!moved) this.pointerCommand(pointer);
     });
-
     this.input.on("wheel", (_p: unknown, _over: unknown, _dx: number, dy: number) => {
-      const current = this.cameras.main.zoom;
-      this.cameras.main.setZoom(
-        Phaser.Math.Clamp(current * (dy > 0 ? 0.92 : 1.08), 0.35, 2.5)
-      );
+      this.cameras.main.setZoom(Phaser.Math.Clamp(
+        this.cameras.main.zoom * (dy > 0 ? 0.91 : 1.09), 0.45, 2.4
+      ));
     });
 
-    // Open-map RTS: opponents may be anywhere on the map, so provide a
-    // simple camera shortcut before the full terrain minimap lands.
     window.addEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
     window.addEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.addEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     this.input.keyboard?.on("keydown-E", this.focusEnemy);
     this.input.keyboard?.on("keydown-H", this.focusHome);
-
-    // Lifecycle cleanup
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.cleanup());
 
-    // Subscribe to spacetime updates
-    this.unsubscribeClient = spacetimeClient.subscribeEntities(() => {
-      this.syncFromBackend();
-    });
-
-    // Initial backend sync
-    this.syncFromBackend();
-    this.redrawWater();
+    this.unsubscribeClient = spacetimeClient.subscribeEntities(() => this.sync());
+    this.sync();
   }
 
   private cleanup(): void {
+    this.unsubscribeClient?.();
+    this.unsubscribeClient = null;
     window.removeEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
     window.removeEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.removeEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     this.input.keyboard?.off("keydown-E", this.focusEnemy);
     this.input.keyboard?.off("keydown-H", this.focusHome);
-    if (this.unsubscribeClient) {
-      this.unsubscribeClient();
-      this.unsubscribeClient = null;
-    }
-    for (const r of this.shipRenders.values()) {
-      r.buffer.clear();
-      try {
-        r.container.destroy();
-      } catch {
-        // ignore
-      }
-    }
-    this.shipRenders.clear();
+    this.clearEntities();
   }
 
+  private clearEntities(): void {
+    for (const art of this.vessels.values()) {
+      art.motion.clear();
+      art.container.destroy();
+    }
+    this.vessels.clear();
+    for (const art of this.buildings.values()) art.image.destroy();
+    this.buildings.clear();
+    this.selectedShipId = null;
+  }
+
+  private focusHome = (): void => {
+    const core = spacetimeClient.getState().myStructures.find(st => st.kind === "command_core");
+    if (core) this.cameras.main.centerOn((core.gridX + core.width / 2) * TILE,
+      (core.gridY + core.height / 2) * TILE);
+  };
+
   private focusEnemy = (): void => {
-    const enemies = spacetimeClient.getState().visibleEnemies;
-    // A first bot structure is a useful strategic landmark; don't depend
-    // on a fixed spawn location or reveal unrelated match coordinates.
-    const target = enemies.find(row => row.entityType === "structure") ?? enemies[0];
-    if (target) this.cameras.main.centerOn(target.x * TILE_SIZE, target.y * TILE_SIZE);
+    const state = spacetimeClient.getState();
+    const slot = state.myMembership?.slot;
+    const core = state.battleStructures.find(st =>
+      st.ownerSlot !== slot && st.kind === "command_core");
+    const target = core ?? state.battleShips.find(ship => ship.ownerSlot !== slot);
+    if (!target) return;
+    const x = "gridX" in target ? target.gridX + target.width / 2 : target.x;
+    const y = "gridY" in target ? target.gridY + target.height / 2 : target.y;
+    this.cameras.main.centerOn(x * TILE, y * TILE);
   };
 
   private focusMapCell = (event: Event): void => {
-    const detail = (event as CustomEvent<{ x: number; y: number }>).detail;
-    if (!detail || !Number.isFinite(detail.x) || !Number.isFinite(detail.y)) return;
-    if (spacetimeClient.getState().activeMatch?.phase !== "active") return;
-    this.cameras.main.centerOn(detail.x * TILE_SIZE, detail.y * TILE_SIZE);
+    const p = (event as CustomEvent<{ x: number; y: number }>).detail;
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y))
+      this.cameras.main.centerOn(p.x * TILE, p.y * TILE);
   };
 
-  private focusHome = (): void => {
-    const core = spacetimeClient.getState().myStructures
-      .find(row => row.kind === "command_core");
-    if (core) {
-      this.cameras.main.centerOn(
-        (core.gridX + core.width / 2) * TILE_SIZE,
-        (core.gridY + core.height / 2) * TILE_SIZE
-      );
-    }
-  };
-
-  private handlePointerClick(pointer: Phaser.Input.Pointer): void {
-    const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const clickCellX = worldPoint.x / TILE_SIZE;
-    const clickCellY = worldPoint.y / TILE_SIZE;
-
+  private pointerCommand(pointer: Phaser.Input.Pointer): void {
     const state = spacetimeClient.getState();
-
-    // Check if clicked an owned ship
+    if (state.activeMatch?.phase !== "active") return;
+    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const x = world.x / TILE, y = world.y / TILE;
     if (pointer.leftButtonReleased()) {
-      let clickedShip: Ship | null = null;
-      for (const ship of state.myShips) {
-        const render = this.shipRenders.get(ship.id);
-        const posX = render ? render.container.x / TILE_SIZE : ship.x;
-        const posY = render ? render.container.y / TILE_SIZE : ship.y;
-        const dist = Phaser.Math.Distance.Between(clickCellX, clickCellY, posX, posY);
-        if (dist <= ship.radiusCells + 0.5) {
-          clickedShip = ship;
-          break;
-        }
-      }
-
-      if (clickedShip) {
-        this.selectedShipId = clickedShip.id;
-        this.updateSelectionRings();
-        return;
-      }
-    }
-
-    // If a ship was selected and clicked in water, issue server-side move order
-    if (this.selectedShipId !== null && (pointer.leftButtonReleased() || pointer.rightButtonReleased())) {
-      if (state.activeMatch?.phase !== "active") {
-        console.warn("Movement orders only permitted in active matches");
-        return;
-      }
-
-      const shipId = this.selectedShipId;
-      const targetX = Math.round(clickCellX * 10) / 10;
-      const targetY = Math.round(clickCellY * 10) / 10;
-
-      // Show temporary waypoint visual
-      this.waypoint = { x: targetX * TILE_SIZE, y: targetY * TILE_SIZE, alpha: 1.0 };
-
-      spacetimeClient.issueShipOrder(shipId, targetX, targetY).catch((err) => {
-        console.warn("Ship order rejected by server:", err?.message || err);
+      const hit = state.myShips.find(ship => {
+        const art = this.vessels.get(ship.id);
+        const px = art ? art.container.x / TILE : ship.x;
+        const py = art ? art.container.y / TILE : ship.y;
+        return Math.hypot(x - px, y - py) <= ship.radiusCells + 0.5;
       });
+      if (hit) {
+        this.selectedShipId = hit.id;
+        return;
+      }
+    }
+    if (this.selectedShipId !== null &&
+        (pointer.leftButtonReleased() || pointer.rightButtonReleased())) {
+      const shipId = this.selectedShipId;
+      const targetX = Math.round(x * 10) / 10;
+      const targetY = Math.round(y * 10) / 10;
+      this.drawOrderMarker(targetX, targetY);
+      spacetimeClient.issueShipOrder(shipId, targetX, targetY).catch(err =>
+        console.warn("Server rejected move order:", err));
     }
   }
 
-  getSelectedShipId(): bigint | null {
-    return this.selectedShipId;
+  private drawOrderMarker(x: number, y: number): void {
+    this.markers.clear();
+    this.markers.lineStyle(2, 0x38bdf8, 0.95);
+    this.markers.strokeCircle(x * TILE, y * TILE, 13);
+    this.markers.lineBetween(x * TILE - 6, y * TILE, x * TILE + 6, y * TILE);
+    this.markers.lineBetween(x * TILE, y * TILE - 6, x * TILE, y * TILE + 6);
+    this.time.delayedCall(900, () => this.markers.clear());
   }
 
-  setSelectedShipId(id: bigint | null): void {
-    this.selectedShipId = id;
-    this.updateSelectionRings();
-  }
-
-  private syncFromBackend(): void {
+  private sync(): void {
     if (!this.add || !this.sys) return;
     const state = spacetimeClient.getState();
-    const ships = state.myShips;
-    const activeShipIds = new Set(ships.map((s) => s.id));
+    const matchId = state.activeMatch?.id ?? null;
+    if (matchId !== this.currentMatch) {
+      this.currentMatch = matchId;
+      this.worldRevision = "";
+      this.clearEntities();
+      this.terrain.clear();
+      this.deposits.clear();
+      if (matchId !== null) this.focusHome();
+    }
+    if (!state.activeMatch || state.activeMatch.phase !== "active") return;
+    this.syncMap(state);
+    this.syncBuildings(state.battleStructures);
+    this.syncShips(state.battleShips);
+    if (state.myStructures.length > 0 && this.cameras.main.scrollX === 0 &&
+        this.cameras.main.scrollY === 0) this.focusHome();
+  }
 
-    // Despawned ships
-    for (const [id, data] of this.shipRenders.entries()) {
-      if (!activeShipIds.has(id)) {
-        data.container.destroy();
-        data.buffer.clear();
-        this.shipRenders.delete(id);
-        if (this.selectedShipId === id) {
-          this.selectedShipId = null;
+  private syncMap(state: SpacetimeClientState): void {
+    const chunks = state.worldChunks;
+    if (!chunks.length) return;
+    const signature = state.activeMatchId?.toString() + ":" +
+      chunks.map(chunk => chunk.chunkKey).sort().join("|");
+    if (this.worldRevision === signature) return;
+    this.worldRevision = signature;
+    const cells = chunks[0]!.mapCells;
+    this.cameras.main.setBounds(0, 0, cells * TILE, cells * TILE);
+    this.terrain.clear();
+    for (const chunk of chunks) {
+      for (let ly = 0; ly < 16; ly++) for (let lx = 0; lx < 16; lx++) {
+        const gx = chunk.chunkX * 16 + lx;
+        const gy = chunk.chunkY * 16 + ly;
+        if (gx >= cells || gy >= cells) continue;
+        const kind = chunk.terrain[ly * 16 + lx];
+        const px = gx * TILE, py = gy * TILE;
+        if (kind === 1) { // Gemini SHALLOW_WATER
+          this.terrain.fillStyle(0x145374, 0.42);
+          this.terrain.fillRect(px, py, TILE, TILE);
+        } else if (kind === 2) { // Gemini RUINED_PILLAR
+          this.terrain.fillStyle(0xbae6fd, 0.28);
+          this.terrain.fillRect(px - 2, py - 2, TILE + 4, TILE + 4);
+          this.terrain.fillStyle(0x1e293b, 1);
+          this.terrain.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+          this.terrain.fillStyle(0x334155, 1);
+          this.terrain.fillRect(px + 4, py + 4, TILE - 8, TILE - 12);
+          this.terrain.fillStyle(0x7c2d12, 1);
+          this.terrain.fillRect(px + 8, py + 8, 10, 8);
+        } else if (kind === 3) { // Gemini WRECKAGE_SHOAL
+          this.terrain.fillStyle(0xbae6fd, 0.22);
+          this.terrain.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+          this.terrain.fillStyle(0x451a03, 1);
+          this.terrain.fillRect(px + 6, py + 8, TILE - 12, TILE - 16);
+          this.terrain.fillStyle(0x9a3412, 1);
+          this.terrain.fillRect(px + 10, py + 12, TILE - 20, 8);
         }
       }
     }
+    this.redrawDeposits();
+  }
 
-    const now = Date.now();
+  private redrawDeposits(): void {
+    const gfx = this.deposits;
+    const nodes = spacetimeClient.getState().salvageNodes;
+    gfx.clear();
+    for (const node of nodes) {
+      if (node.remaining === 0) continue;
+      const px = node.gridX * TILE, py = node.gridY * TILE;
+      const pulse = 0.7 + 0.3 * Math.sin(this.elapsed * 0.005 + node.gridX);
+      gfx.lineStyle(2, node.contested ? 0xf97316 : 0xeab308, pulse);
+      gfx.strokeRect(px + 3, py + 3, TILE - 6, TILE - 6);
+      gfx.fillStyle(0x422006, 1);
+      gfx.fillRect(px + 7, py + 7, TILE - 14, TILE - 14);
+      gfx.fillStyle(node.contested ? 0xf97316 : 0xeab308, 1);
+      gfx.fillRect(px + 11, py + 11, 8, 8);
+      gfx.fillRect(px + 21, py + 19, 7, 7);
+    }
+  }
 
-    // Update or create ships
-    for (const ship of ships) {
-      let render = this.shipRenders.get(ship.id);
-      if (!render) {
-        const container = this.add.container(ship.x * TILE_SIZE, ship.y * TILE_SIZE);
-        container.setDepth(25);
-
-        const selectionGfx = this.add.graphics();
-        const hullGfx = this.add.graphics();
-        const turretGfx = this.add.graphics();
-        const label = this.add.text(0, -28, `${ship.kind} [S${ship.ownerSlot}]`, {
-          fontSize: "11px",
-          color: "#93c5fd",
-          stroke: "#020617",
-          strokeThickness: 3,
-        }).setOrigin(0.5);
-
-        container.add([selectionGfx, hullGfx, turretGfx, label]);
-
-        const buffer = new SnapshotBuffer({ capacity: 16, maxExtrapolationMs: 250 });
-        render = {
-          id: ship.id,
-          buffer,
-          container,
-          hullGfx,
-          turretGfx,
-          selectionGfx,
-          label,
-          lastRevision: -1,
-        };
-        this.shipRenders.set(ship.id, render);
-        this.drawShipVisual(render, ship);
+  private syncBuildings(buildings: readonly GeminiBattleStructure[]): void {
+    const alive = new Set(buildings.map(st => st.id));
+    for (const [id, art] of this.buildings) {
+      if (!alive.has(id)) { art.image.destroy(); this.buildings.delete(id); }
+    }
+    for (const st of buildings) {
+      const key = geminiStructureTexture(this, st.kind, st.ownerSlot, st.connected, st.complete);
+      let art = this.buildings.get(st.id);
+      if (!art) {
+        const image = this.add.image(st.gridX * TILE, st.gridY * TILE, key)
+          .setOrigin(0, 0).setDepth(10);
+        art = { image, key };
+        this.buildings.set(st.id, art);
+      } else {
+        if (art.key !== key) { art.image.setTexture(key); art.key = key; }
+        art.image.setPosition(st.gridX * TILE, st.gridY * TILE);
       }
+    }
+  }
 
-      // Feed snapshot to SnapshotBuffer
-      const revision = Number(ship.revision);
-      if (revision !== render.lastRevision || ship.velocityX !== 0 || ship.velocityY !== 0) {
-        render.lastRevision = revision;
-        render.buffer.push({
-          timeMs: now,
-          revision,
-          x: ship.x,
-          y: ship.y,
-          vx: ship.velocityX,
-          vy: ship.velocityY,
-          hullAngle: (ship.hullAngleDeg * Math.PI) / 180,
-          turretAngle: (ship.turretAngleDeg * Math.PI) / 180,
+  private syncShips(ships: readonly GeminiBattleShip[]): void {
+    const alive = new Set(ships.map(ship => ship.id));
+    for (const [id, art] of this.vessels) {
+      if (!alive.has(id)) {
+        art.motion.clear();
+        art.container.destroy();
+        this.vessels.delete(id);
+        if (this.selectedShipId === id) this.selectedShipId = null;
+      }
+    }
+    const now = Date.now();
+    for (const ship of ships) {
+      let art = this.vessels.get(ship.id);
+      if (!art) {
+        const container = this.add.container(ship.x * TILE, ship.y * TILE).setDepth(25);
+        const wake = this.add.graphics();
+        const highlight = this.add.graphics();
+        const hull = this.add.graphics();
+        const turret = this.add.graphics();
+        container.add([wake, highlight, hull, turret]);
+        art = {
+          container, hull, turret, highlight, wake,
+          motion: new SnapshotBuffer({ capacity: 16, maxExtrapolationMs: 250 }),
+          revision: -1n, kind: "", slot: -1,
+        };
+        this.vessels.set(ship.id, art);
+      }
+      if (art.kind !== ship.kind || art.slot !== ship.ownerSlot) {
+        art.kind = ship.kind;
+        art.slot = ship.ownerSlot;
+        this.drawVessel(art, ship);
+      }
+      if (art.revision !== ship.revision || ship.velocityX || ship.velocityY) {
+        art.revision = ship.revision;
+        art.motion.push({
+          timeMs: now, revision: Number(ship.revision),
+          x: ship.x, y: ship.y,
+          vx: ship.velocityX, vy: ship.velocityY,
+          hullAngle: ship.hullAngleDeg * Math.PI / 180,
+          turretAngle: ship.turretAngleDeg * Math.PI / 180,
         });
       }
     }
-
-    this.updateSelectionRings();
-
-    // A scene can outlive several matches. Recenter on every new server match,
-    // instead of leaving the next spawn off-screen after returning to the menu.
-    if (state.activeMatch?.id !== undefined &&
-        this.centeredMatchId !== state.activeMatch.id &&
-        state.myStructures.some(row => row.kind === "command_core")) {
-      this.focusHome();
-      this.centeredMatchId = state.activeMatch.id;
-      this.redrawWater();
-    }
   }
 
-  private drawShipVisual(render: ShipRenderData, ship: Ship): void {
-    const r = (ship.radiusCells * TILE_SIZE) || 24;
-
-    // Hull polygon (sleek wedge/ship shape)
-    const hull = render.hullGfx;
-    hull.clear();
-    hull.fillStyle(0x0e7490, 0.95);
-    hull.lineStyle(2, 0x22d3ee, 1);
-    hull.beginPath();
-    hull.moveTo(r * 1.1, 0);
-    hull.lineTo(-r * 0.8, -r * 0.7);
-    hull.lineTo(-r * 0.5, 0);
-    hull.lineTo(-r * 0.8, r * 0.7);
-    hull.closePath();
-    hull.fillPath();
-    hull.strokePath();
-
-    // Turret gun barrel
-    const turret = render.turretGfx;
+  private drawVessel(art: VesselArt, ship: GeminiBattleShip): void {
+    const gfx = art.hull;
+    gfx.clear();
+    const accent = Number.parseInt(geminiFactionColor(ship.ownerSlot).slice(1), 16);
+    // Original Gemini orthogonal pixel hulls: Scout 24x14, Gunboat 32x20,
+    // Siege Monitor 42x26. No placeholder triangles.
+    const isScout = ship.kind === "scout";
+    const isGunboat = ship.kind === "gunboat";
+    const w = isScout ? 24 : isGunboat ? 32 : 42;
+    const h = isScout ? 14 : isGunboat ? 20 : 26;
+    gfx.fillStyle(isScout ? 0x1e293b : isGunboat ? 0x0f172a : 0x090d16, 1);
+    gfx.fillRect(-w / 2, -h / 2, w, h);
+    gfx.fillStyle(isScout ? accent : isGunboat ? 0x475569 : 0x334155, 1);
+    gfx.fillRect(-w / 2 + 2, -h / 2 + 2, w - 4, h - 4);
+    gfx.fillStyle(accent, 1);
+    gfx.fillRect(-w / 2 + 4, -h / 2 + 4, w - 8, h - 8);
+    const turret = art.turret;
     turret.clear();
-    turret.fillStyle(0x164e63, 1);
-    turret.lineStyle(1.5, 0x67e8f9, 1);
-    turret.fillCircle(0, 0, r * 0.35);
-    turret.strokeCircle(0, 0, r * 0.35);
-    turret.beginPath();
-    turret.moveTo(0, 0);
-    turret.lineTo(r * 0.85, 0);
-    turret.strokePath();
-  }
-
-  private updateSelectionRings(): void {
-    for (const [id, render] of this.shipRenders.entries()) {
-      const gfx = render.selectionGfx;
-      gfx.clear();
-      if (id === this.selectedShipId) {
-        gfx.lineStyle(2, 0x38bdf8, 0.9);
-        gfx.strokeCircle(0, 0, 32);
-        gfx.fillStyle(0x38bdf8, 0.15);
-        gfx.fillCircle(0, 0, 32);
-      }
-    }
+    turret.fillStyle(0x0f172a, 1);
+    turret.fillRect(-5, -5, 10, 10);
+    turret.fillStyle(0xe2e8f0, 1);
+    turret.fillRect(0, -2.5, isScout ? 10 : isGunboat ? 14 : 18, 5);
   }
 
   update(_time: number, delta: number): void {
     this.elapsed += delta;
-    this.redrawAccum += delta;
+    this.waveAccum += delta;
+    this.depositAccum += delta;
+    if (this.waveAccum >= 110) { this.waveAccum = 0; this.redrawOcean(); }
+    if (this.depositAccum >= 240) { this.depositAccum = 0; this.redrawDeposits(); }
 
-    // Periodic water tile redraw
-    if (this.redrawAccum >= 60) {
-      this.redrawAccum = 0;
-      this.redrawWater();
-    }
-
-    // Interpolate ships smoothly using SnapshotBuffer
-    const renderTime = Date.now() - INTERPOLATION_DELAY_MS;
-    for (const render of this.shipRenders.values()) {
-      const sample = render.buffer.sample(renderTime);
+    const state = spacetimeClient.getState();
+    const ownSlot = state.myMembership?.slot;
+    const sampleTime = Date.now() - INTERPOLATION_DELAY_MS;
+    for (const ship of state.battleShips) {
+      const art = this.vessels.get(ship.id);
+      if (!art) continue;
+      const sample = art.motion.sample(sampleTime);
       if (sample) {
-        render.container.setPosition(sample.x * TILE_SIZE, sample.y * TILE_SIZE);
-        render.hullGfx.setRotation(sample.hullAngle);
-        render.turretGfx.setRotation(sample.turretAngle);
+        art.container.setPosition(sample.x * TILE, sample.y * TILE);
+        art.hull.setRotation(sample.hullAngle);
+        art.turret.setRotation(sample.turretAngle);
+      }
+      art.highlight.clear();
+      if (ship.ownerSlot === ownSlot && ship.id === this.selectedShipId) {
+        art.highlight.lineStyle(2, 0x38bdf8, 1);
+        art.highlight.strokeCircle(0, 0, 19);
+      }
+      art.wake.clear();
+      if (Math.hypot(ship.velocityX, ship.velocityY) > 0.2) {
+        art.wake.lineStyle(2, 0xbae6fd, 0.3 + 0.2 * Math.sin(this.elapsed * 0.01));
+        art.wake.strokeCircle(-18, 0, 6);
       }
     }
-
-    // Render structures and enemies
-    this.renderStructures();
-    this.renderEnemies();
-    this.renderWaypoints(delta);
   }
 
-  private renderStructures(): void {
-    const gfx = this.structuresGfx;
-    gfx.clear();
-
+  private redrawOcean(): void {
+    if (!this.ocean) return;
     const state = spacetimeClient.getState();
-    const structures: Structure[] = state.myStructures;
-
-    for (const s of structures) {
-      const px = s.gridX * TILE_SIZE;
-      const py = s.gridY * TILE_SIZE;
-      const pw = s.width * TILE_SIZE;
-      const ph = s.height * TILE_SIZE;
-
-      if (s.kind === "command_core") {
-        // 3x3 Command Core Citadel
-        gfx.fillStyle(0x0a2f3a, 0.95);
-        gfx.fillRect(px, py, pw, ph);
-        gfx.lineStyle(3, 0x06b6d4, 1);
-        gfx.strokeRect(px, py, pw, ph);
-
-        // Core Reactor Ring
-        const cx = px + pw / 2;
-        const cy = py + ph / 2;
-        gfx.fillStyle(0x0891b2, 0.6);
-        gfx.fillCircle(cx, cy, 38);
-        gfx.lineStyle(2, 0x67e8f9, 1);
-        gfx.strokeCircle(cx, cy, 38);
-        gfx.fillStyle(0xecfeff, 0.9);
-        gfx.fillCircle(cx, cy, 14);
-      } else if (s.kind === "platform") {
-        // Floating Platform Module
-        gfx.fillStyle(0x132e35, 0.9);
-        gfx.fillRect(px + 2, py + 2, pw - 4, ph - 4);
-        gfx.lineStyle(1.5, 0x22d3ee, 0.8);
-        gfx.strokeRect(px + 2, py + 2, pw - 4, ph - 4);
-
-        // Platform deck bolts
-        gfx.lineStyle(1, 0x0891b2, 0.4);
-        gfx.lineBetween(px + 6, py + 6, px + pw - 6, py + ph - 6);
-        gfx.lineBetween(px + pw - 6, py + 6, px + 6, py + ph - 6);
-      } else {
-        // Other structures (cannon, workshop, yard)
-        gfx.fillStyle(0x0e3b43, 0.9);
-        gfx.fillRect(px + 3, py + 3, pw - 6, ph - 6);
-        gfx.lineStyle(2, 0x38bdf8, 0.9);
-        gfx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
-      }
-    }
-  }
-
-  private renderEnemies(): void {
-    const gfx = this.enemiesGfx;
-    gfx.clear();
-
-    const state = spacetimeClient.getState();
-    const enemies: DetectedEnemyContact[] = state.visibleEnemies;
-
-    // Open battlefield: every rival ship/structure is visible in match intel.
-    // Ship and structure silhouettes differ; HP, targets and AI plans remain
-    // private until production gameplay actually needs those projected fields.
-    for (const enemy of enemies) {
-      const ex = enemy.x * TILE_SIZE;
-      const ey = enemy.y * TILE_SIZE;
-      gfx.lineStyle(2, 0xfca5a5, 1);
-
-      if (enemy.entityType === "ship") {
-        gfx.fillStyle(0xb91c1c, 0.95);
-        gfx.beginPath();
-        gfx.moveTo(ex + 19, ey);
-        gfx.lineTo(ex - 14, ey - 12);
-        gfx.lineTo(ex - 9, ey);
-        gfx.lineTo(ex - 14, ey + 12);
-        gfx.closePath();
-        gfx.fillPath();
-        gfx.strokePath();
-        gfx.fillStyle(0xfca5a5, 0.9);
-        gfx.fillCircle(ex, ey, 4);
-      } else {
-        gfx.fillStyle(0x7f1d1d, 0.7);
-        gfx.fillRect(ex - 16, ey - 16, 32, 32);
-        gfx.strokeRect(ex - 16, ey - 16, 32, 32);
-        gfx.lineBetween(ex - 11, ey - 11, ex + 11, ey + 11);
-        gfx.lineBetween(ex + 11, ey - 11, ex - 11, ey + 11);
-      }
-    }
-  }
-
-  private renderWaypoints(delta: number): void {
-    const gfx = this.waypointsGfx;
-    gfx.clear();
-
-    if (!this.waypoint) return;
-
-    this.waypoint.alpha -= delta * 0.0015;
-    if (this.waypoint.alpha <= 0) {
-      this.waypoint = null;
-      return;
-    }
-
-    const { x, y, alpha } = this.waypoint;
-    gfx.lineStyle(2, 0x38bdf8, alpha);
-    gfx.strokeCircle(x, y, 16);
-    gfx.lineBetween(x - 8, y, x + 8, y);
-    gfx.lineBetween(x, y - 8, x, y + 8);
-  }
-
-  private redrawWater(): void {
-    const gfx = this.waterGfx;
-    if (!gfx) return;
-    const { width, height } = this.scale;
+    const cells = state.worldChunks[0]?.mapCells ?? 56;
     const camera = this.cameras.main;
-    const zoom = camera.zoom;
-    const minX = camera.scrollX;
-    const minY = camera.scrollY;
-    const spanX = width / zoom;
-    const spanY = height / zoom;
-
-    gfx.clear();
-    gfx.fillStyle(0x071520, 1);
-    gfx.fillRect(minX - 8, minY - 8, spanX + 16, spanY + 16);
-
-    const tile = TILE_SIZE;
-    const startX = Math.floor(minX / tile) * tile;
-    const startY = Math.floor(minY / tile) * tile;
-    const endX = minX + spanX + tile;
-    const endY = minY + spanY + tile;
-
-    // Grid lines
-    gfx.lineStyle(1 / zoom, 0x1e3a47, 0.35);
-    for (let x = startX; x < endX; x += tile) gfx.lineBetween(x, minY, x, endY);
-    for (let y = startY; y < endY; y += tile) gfx.lineBetween(minX, y, endX, y);
-
-    // Subtle wave flecks
-    for (let gy = startY; gy < endY; gy += tile) {
-      for (let gx = startX; gx < endX; gx += tile) {
-        const wave = Math.sin(gx * 0.017 + gy * 0.033 + this.elapsed * 0.00045);
-        if (wave < 0.15) continue;
-        const offset = (wave + 1) * 10;
-        gfx.lineStyle(1.5 / zoom, 0x38bdf8, 0.08 + wave * 0.08);
-        gfx.lineBetween(gx + 8 + offset, gy + 22, gx + 20 + offset, gy + 22);
+    const startX = Math.max(0, Math.floor(camera.scrollX / TILE) - 1);
+    const startY = Math.max(0, Math.floor(camera.scrollY / TILE) - 1);
+    const endX = Math.min(cells, Math.ceil((camera.scrollX + this.scale.width / camera.zoom) / TILE) + 2);
+    const endY = Math.min(cells, Math.ceil((camera.scrollY + this.scale.height / camera.zoom) / TILE) + 2);
+    this.ocean.clear();
+    this.ocean.fillStyle(0x06131f, 1);
+    this.ocean.fillRect(0, 0, cells * TILE, cells * TILE);
+    const t = this.elapsed * 0.0012;
+    for (let gy = startY; gy < endY; gy++) for (let gx = startX; gx < endX; gx++) {
+      const v = Math.sin(gx * 0.35 + t) * 0.5 +
+        Math.cos(gy * 0.28 - t * 0.8) * 0.5 +
+        Math.sin((gx + gy) * 0.2 + t * 0.6) * 0.3;
+      const x = gx * TILE, y = gy * TILE;
+      if (v > 0.55) {
+        this.ocean.fillStyle(0x0c273c, 1);
+        this.ocean.fillRect(x, y, TILE, TILE);
+        if (v > 0.85) {
+          this.ocean.fillStyle(0x94d2e8, 0.16);
+          this.ocean.fillRect(x + 6, y + 14, 14, 3);
+        }
+      } else if (v > -0.15) {
+        this.ocean.fillStyle(0x081c2c, 1);
+        this.ocean.fillRect(x, y, TILE, TILE);
       }
+      this.ocean.lineStyle(1, 0x38bdf8, 0.04);
+      this.ocean.strokeRect(x, y, TILE, TILE);
     }
-  }
-
-  shutdown(): void {
-    this.cleanup();
   }
 }
