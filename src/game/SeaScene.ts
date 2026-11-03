@@ -8,6 +8,7 @@ const INTERPOLATION_DELAY_MS = 100;
 /** UI-only camera navigation signals. All world positions remain server sourced. */
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
 export const FOCUS_HOME_EVENT = "sea-siege:focus-home";
+export const FOCUS_MAP_CELL_EVENT = "sea-siege:focus-map-cell";
 
 interface ShipRenderData {
   id: bigint;
@@ -94,6 +95,7 @@ export class SeaScene extends Phaser.Scene {
     // simple camera shortcut before the full terrain minimap lands.
     window.addEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
     window.addEventListener(FOCUS_HOME_EVENT, this.focusHome);
+    window.addEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     this.input.keyboard?.on("keydown-E", this.focusEnemy);
     this.input.keyboard?.on("keydown-H", this.focusHome);
 
@@ -114,6 +116,7 @@ export class SeaScene extends Phaser.Scene {
   private cleanup(): void {
     window.removeEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
     window.removeEventListener(FOCUS_HOME_EVENT, this.focusHome);
+    window.removeEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     this.input.keyboard?.off("keydown-E", this.focusEnemy);
     this.input.keyboard?.off("keydown-H", this.focusHome);
     if (this.unsubscribeClient) {
@@ -137,6 +140,13 @@ export class SeaScene extends Phaser.Scene {
     // on a fixed spawn location or reveal unrelated match coordinates.
     const target = enemies.find(row => row.entityType === "structure") ?? enemies[0];
     if (target) this.cameras.main.centerOn(target.x * TILE_SIZE, target.y * TILE_SIZE);
+  };
+
+  private focusMapCell = (event: Event): void => {
+    const detail = (event as CustomEvent<{ x: number; y: number }>).detail;
+    if (!detail || !Number.isFinite(detail.x) || !Number.isFinite(detail.y)) return;
+    if (spacetimeClient.getState().activeMatch?.phase !== "active") return;
+    this.cameras.main.centerOn(detail.x * TILE_SIZE, detail.y * TILE_SIZE);
   };
 
   private focusHome = (): void => {
