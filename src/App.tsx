@@ -12,8 +12,11 @@ export default function App() {
   const [tab, setTab] = useState<InfoTab>("multiplayer");
   const gameState = useSpacetime();
   const { status, identity, activeMatch } = gameState;
-  const [menuOpen, setMenuOpen] = useState(false);
+  // Remember which match the player deliberately opened the menu for.
+  // Starting a *new* match automatically goes back to the battlefield.
+  const [menuOpenedForMatch, setMenuOpenedForMatch] = useState<bigint | null>(null);
   const isPlaying = activeMatch?.phase === "active";
+  const menuOpen = isPlaying && menuOpenedForMatch === activeMatch?.id;
 
   return (
     <main className="relative min-h-svh overflow-hidden bg-background text-foreground">
@@ -23,7 +26,7 @@ export default function App() {
       </div>
 
       {isPlaying && !menuOpen ? (
-        <MatchHud state={gameState} onMenu={() => setMenuOpen(true)} />
+        <MatchHud state={gameState} onMenu={() => setMenuOpenedForMatch(activeMatch?.id ?? null)} />
       ) : (
         <>
       {/* Atmospheric gradient overlay */}
@@ -74,7 +77,7 @@ export default function App() {
           {isPlaying && (
             <Button
               variant="outline"
-              onClick={() => setMenuOpen(false)}
+              onClick={() => setMenuOpenedForMatch(null)}
               className="border-cyan-600/70 bg-slate-950/90 text-cyan-200"
             >
               Resume Match #{activeMatch.id.toString()}
