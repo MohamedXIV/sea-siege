@@ -55,20 +55,22 @@ const visibleStructure = t.row("GeminiBattleStructure", {
   turretAngleDeg: t.f64(),
 });
 
-function authorizedMatches(ctx: any): bigint[] {
+function authorizedMatches(
+  memberships: Iterable<{ matchId: bigint }>,
+  phaseForMatch: (matchId: bigint) => string | undefined,
+): bigint[] {
   const ids = new Set<bigint>();
-  for (const membership of ctx.db.matchMember.identity.filter(ctx.sender)) {
-    const match = ctx.db.match.id.find(membership.matchId);
-    if (!match || match.phase !== "active") continue;
-    ids.add(membership.matchId);
+  for (const membership of memberships) {
+    if (phaseForMatch(membership.matchId) === "active") ids.add(membership.matchId);
   }
-  return Array.from(ids).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+  return [...ids].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
 }
 
 export const myGeminiWorldChunks = spacetimedb.view(
   { name: "my_gemini_world_chunks", public: true },
   t.array(knownChunk),
-  (ctx) => authorizedMatches(ctx).flatMap(matchId => {
+  (ctx) => authorizedMatches(ctx.db.matchMember.identity.filter(ctx.sender),
+    id => ctx.db.match.id.find(id)?.phase).flatMap(matchId => {
     const config = ctx.db.worldConfig.matchId.find(matchId);
     if (!config) return [];
     return Array.from(ctx.db.worldChunk.matchId.filter(matchId)).map(chunk => ({
@@ -85,7 +87,8 @@ export const myGeminiWorldChunks = spacetimedb.view(
 export const myGeminiSalvage = spacetimedb.view(
   { name: "my_gemini_salvage", public: true },
   t.array(knownSalvage),
-  (ctx) => authorizedMatches(ctx).flatMap(matchId =>
+  (ctx) => authorizedMatches(ctx.db.matchMember.identity.filter(ctx.sender),
+    id => ctx.db.match.id.find(id)?.phase).flatMap(matchId =>
     Array.from(ctx.db.salvageNode.matchId.filter(matchId)).map(node => ({
       id: node.id,
       matchId,
@@ -101,7 +104,8 @@ export const myGeminiSalvage = spacetimedb.view(
 export const myGeminiShips = spacetimedb.view(
   { name: "my_gemini_ships", public: true },
   t.array(visibleShip),
-  (ctx) => authorizedMatches(ctx).flatMap(matchId =>
+  (ctx) => authorizedMatches(ctx.db.matchMember.identity.filter(ctx.sender),
+    id => ctx.db.match.id.find(id)?.phase).flatMap(matchId =>
     Array.from(ctx.db.ship.matchId.filter(matchId))
       .filter(ship => ship.hp > 0)
       .map(ship => ({
@@ -125,7 +129,8 @@ export const myGeminiShips = spacetimedb.view(
 export const myGeminiStructures = spacetimedb.view(
   { name: "my_gemini_structures", public: true },
   t.array(visibleStructure),
-  (ctx) => authorizedMatches(ctx).flatMap(matchId =>
+  (ctx) => authorizedMatches(ctx.db.matchMember.identity.filter(ctx.sender),
+    id => ctx.db.match.id.find(id)?.phase).flatMap(matchId =>
     Array.from(ctx.db.structure.matchId.filter(matchId))
       .filter(st => st.hp > 0)
       .map(st => ({
