@@ -14,6 +14,7 @@ export const FOCUS_HOME_EVENT = "sea-siege:focus-home";
 export const FOCUS_MAP_CELL_EVENT = "sea-siege:focus-map-cell";
 export const GEMINI_BUILD_MODE_EVENT = "sea-siege:gemini-build-mode";
 export const GEMINI_SELECTION_EVENT = "sea-siege:gemini-selection";
+export const GEMINI_FEEDBACK_EVENT = "sea-siege:gemini-feedback";
 
 interface VesselArt {
   container: Phaser.GameObjects.Container;
@@ -192,6 +193,12 @@ export class SeaScene extends Phaser.Scene {
     }));
   }
 
+  private reportOrderError(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, { detail: { message } }));
+    console.warn("Server rejected gameplay command:", message);
+  }
+
   private pointerCommand(pointer: Phaser.Input.Pointer): void {
     const state = spacetimeClient.getState();
     if (state.activeMatch?.phase !== "active") return;
@@ -200,7 +207,7 @@ export class SeaScene extends Phaser.Scene {
     if (this.buildKind && pointer.leftButtonReleased()) {
       const gridX = Math.floor(x), gridY = Math.floor(y);
       spacetimeClient.placeStructure(this.buildKind, gridX, gridY)
-        .catch(err => console.warn("Construction rejected by server:", err?.message ?? err));
+        .catch(err => this.reportOrderError(err));
       return;
     }
     if (pointer.leftButtonReleased()) {
@@ -238,10 +245,10 @@ export class SeaScene extends Phaser.Scene {
         const ship = state.myShips.find(s => s.id === this.selectedShipId);
         if (ship && Math.hypot(ship.x - node.gridX - 0.5, ship.y - node.gridY - 0.5) <= 3.5) {
           spacetimeClient.orderHarvest(ship.id, node.id)
-            .catch(err => console.warn("Harvest rejected:", err?.message ?? err));
+            .catch(err => this.reportOrderError(err));
         } else if (ship) {
           spacetimeClient.issueShipOrder(ship.id, node.gridX + 0.5, node.gridY + 0.5)
-            .catch(err => console.warn("Move toward salvage rejected:", err?.message ?? err));
+            .catch(err => this.reportOrderError(err));
         }
         return;
       }
@@ -253,7 +260,7 @@ export class SeaScene extends Phaser.Scene {
       const targetY = Math.round(y * 10) / 10;
       this.drawOrderMarker(targetX, targetY);
       spacetimeClient.issueShipOrder(shipId, targetX, targetY).catch(err =>
-        console.warn("Server rejected move order:", err));
+        this.reportOrderError(err));
     }
   }
 
