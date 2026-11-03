@@ -12,7 +12,7 @@ export function TacticalOverview({ state }: TacticalOverviewProps) {
   if (!match) return null;
   const cells = state.worldChunks[0]?.mapCells ?? cellsForSlots(match.maxSlots);
   const obstacles = state.worldChunks.flatMap(chunk =>
-    chunk.terrain.flatMap((kind, index) => {
+    Array.from(chunk.terrain).flatMap((kind, index) => {
       const x = chunk.chunkX * 16 + index % 16;
       const y = chunk.chunkY * 16 + Math.floor(index / 16);
       if (kind === 0 || x >= cells || y >= cells) return [];
