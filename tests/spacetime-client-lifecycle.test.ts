@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { SpacetimeClient } from "../src/network/spacetime-client";
 import { validateMatchIdInput, U64_MAX } from "../src/network/match-id-validation";
 import { DbConnection } from "../src/module_bindings";
+import { createServer } from "vite";
 
 function waitFor(predicate: () => boolean, timeoutMs = 10000, intervalMs = 50): Promise<void> {
   const start = Date.now();
@@ -407,20 +408,35 @@ describe("P0 Stabilization Verification Suite", () => {
 
   // 7. Codespaces Browser Preview Same-Origin Proxy
   describe("Codespaces Browser Preview Same-Origin Proxy", () => {
-    it("connects and applies subscriptions through the Vite dev proxy on port 5173", async () => {
-      const client = new SpacetimeClient("http://127.0.0.1:5173", "sea-siege-dev");
-      client.clearStoredToken();
+    it("connects and applies subscriptions through an isolated Vite dev proxy", async () => {
+      // Boot the actual Vite config on an OS-assigned port. The previous test
+      // assumed a separate 'npm run dev' was already listening on :5173:
+      // that made a healthy local SpacetimeDB look broken on Windows.
+      // This retains a real WS/proxy handshake assertion, not a mocked proxy.
+      const vite = await createServer({
+        server: { host: "127.0.0.1", port: 0, strictPort: true },
+      });
+      let client: SpacetimeClient | null = null;
+      try {
+        await vite.listen();
+        const address = vite.httpServer?.address();
+        if (!address || typeof address === "string")
+          throw new Error("Vite did not bind an HTTP port");
 
-      client.connect();
-      await waitFor(() => client.getState().status === "connected", 8000);
-      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
+        client = new SpacetimeClient(`http://127.0.0.1:${address.port}`, "sea-siege-dev");
+        client.clearStoredToken();
+        client.connect();
+        await waitFor(() =>
+          client!.getState().status === "connected" &&
+          client!.getState().subscriptionStatus === "applied", 12000
+        );
 
-      expect(client.getState().status).toBe("connected");
-      expect(client.getState().subscriptionStatus).toBe("applied");
-      expect(client.getState().identity).toBeTruthy();
-
-      client.disconnect();
-    }, 10000);
+        expect(client.getState().identity).toBeTruthy();
+      } finally {
+        client?.disconnect();
+        await vite.close();
+      }
+    }, 30000);
 
     it("resolves same-origin host in browser environment when accessing remote Codespaces hostname", () => {
       const originalWindow = globalThis.window;
