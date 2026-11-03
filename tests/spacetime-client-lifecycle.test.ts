@@ -597,6 +597,17 @@ describe("Playable Parity: Quick Play", () => {
       }, 8000);
       expect(client.getState().visibleEnemies.every(row => row.matchId === matchId))
         .toBe(true);
+      await waitFor(() => {
+        const world = client.getState();
+        return world.worldChunks.length > 0 && world.salvageNodes.length > 0 &&
+          world.battleShips.length >= 2 && world.battleStructures.length >= 14;
+      }, 8000);
+      const battlefield = client.getState();
+      expect(battlefield.worldChunks.every(row => row.matchId === matchId)).toBe(true);
+      expect(battlefield.salvageNodes.every(row => row.matchId === matchId)).toBe(true);
+      expect(battlefield.battleShips.map(row => row.ownerSlot).sort()).toEqual([0, 1]);
+      expect(battlefield.battleStructures.some(row =>
+        row.ownerSlot === 1 && row.kind === "command_core")).toBe(true);
       expect(state.status).toBe("connected");
       expect(state.subscriptionStatus).toBe("applied");
       // StartMatch requires >=2 real server factions. The only client-side

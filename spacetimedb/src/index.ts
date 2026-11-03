@@ -658,3 +658,4 @@ export { addBot, removeBot } from "./bot-reducers.ts";
 export { advanceBots } from "./bot-simulation.ts";
 
 export { myVisibleEnemies, myStructures } from "./visibility-views.ts";
+export { myGeminiWorldChunks, myGeminiSalvage, myGeminiShips, myGeminiStructures } from "./gemini-world-views.ts";

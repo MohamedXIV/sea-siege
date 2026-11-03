@@ -4,6 +4,8 @@
 
 > **Owner gameplay decision (3 November 2026): NO FOG OF WAR.** All static terrain, resource locations, rival bases and live enemy unit positions should be visible to every authenticated match participant, as in the direct/open Gemini-style skirmish. No sensor-gated client contacts or narrow-world knowledge. The server still owns combat, movement, production, AI and permissions; complete private DB tables are not made public.
 
+> **Owner source-of-truth update (3 Nov 2026):** **all** new art, map presentation and gameplay controls must be adapted from the preserved Gemini version, not our custom visual/gameplay inventions. Source-to-Phaser matrix and remaining gaps: [Gemini Source of Truth](./GEMINI_SOURCE_OF_TRUTH.md). This does not undo real SpacetimeDB transport, authoritative reducers or tests. The original in-browser fake server stays archived only.
+
 **Active tracking:** [Playable Gemini Parity Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23).
 
 ## The promise — restore the experience, not the fake runtime

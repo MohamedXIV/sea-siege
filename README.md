@@ -16,6 +16,8 @@
 
 **Gameplay decision (3 Nov 2026): NO Fog of War.** All terrain, resource locations, rival bases and enemy ship positions are visible to authenticated match participants. Server-owned commands, credentials and other matches remain protected. [Open Battlefield #25](https://github.com/MohamedXIV/sea-siege/issues/25) implements this visible, Gemini-first RTS direction.
 
+> **Art/gameplay source-of-truth decision (3 Nov 2026):** discard the new project's independent ocean, ship, structure, map and RTS interaction visuals. Rebuild these **from the preserved Gemini prototype** in actual Phaser 4 and SpacetimeDB. Current progress, exact mapping and missing parity items are tracked in [Gemini Source of Truth](./docs/GEMINI_SOURCE_OF_TRUTH.md). This supersedes the earlier idea that Gemini was only loose inspiration. Existing real server authority, networking and tested validation remain.
+
 ## Primary gameplay reference
 
 The original Gemini prototype and its 18-file source archive are **preserved byte-for-byte** in [`references/gemini/`](./references/gemini/README.md). The HTML file is a playable, local **Canvas 2D prototype using simulated in-browser authority**, despite the architecture-themed filename. It is a reference for enjoyment, feel, visual language, loop and balance, **not** real Phaser or SpacetimeDB code to include in production.
