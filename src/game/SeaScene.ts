@@ -5,6 +5,9 @@ import type { Ship, Structure, DetectedEnemyContact } from "../module_bindings/t
 
 const TILE_SIZE = 64;
 const INTERPOLATION_DELAY_MS = 100;
+/** UI-only camera navigation signals. All world positions remain server sourced. */
+export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
+export const FOCUS_HOME_EVENT = "sea-siege:focus-home";
 
 interface ShipRenderData {
   id: bigint;
@@ -31,7 +34,7 @@ export class SeaScene extends Phaser.Scene {
   private redrawAccum = 0;
   private drag: { x: number; y: number; scrollX: number; scrollY: number; moved: boolean } | null = null;
   private unsubscribeClient: (() => void) | null = null;
-  private initialCenterDone = false;
+  private centeredMatchId: bigint | null = null;
 
   constructor() {
     super({ key: "SeaScene" });
@@ -87,6 +90,13 @@ export class SeaScene extends Phaser.Scene {
       );
     });
 
+    // Open-map RTS: opponents may be anywhere on the map, so provide a
+    // simple camera shortcut before the full terrain minimap lands.
+    window.addEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
+    window.addEventListener(FOCUS_HOME_EVENT, this.focusHome);
+    this.input.keyboard?.on("keydown-E", this.focusEnemy);
+    this.input.keyboard?.on("keydown-H", this.focusHome);
+
     // Lifecycle cleanup
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.cleanup());
@@ -102,6 +112,10 @@ export class SeaScene extends Phaser.Scene {
   }
 
   private cleanup(): void {
+    window.removeEventListener(FOCUS_ENEMY_EVENT, this.focusEnemy);
+    window.removeEventListener(FOCUS_HOME_EVENT, this.focusHome);
+    this.input.keyboard?.off("keydown-E", this.focusEnemy);
+    this.input.keyboard?.off("keydown-H", this.focusHome);
     if (this.unsubscribeClient) {
       this.unsubscribeClient();
       this.unsubscribeClient = null;
@@ -116,6 +130,25 @@ export class SeaScene extends Phaser.Scene {
     }
     this.shipRenders.clear();
   }
+
+  private focusEnemy = (): void => {
+    const enemies = spacetimeClient.getState().visibleEnemies;
+    // A first bot structure is a useful strategic landmark; don't depend
+    // on a fixed spawn location or reveal unrelated match coordinates.
+    const target = enemies.find(row => row.entityType === "structure") ?? enemies[0];
+    if (target) this.cameras.main.centerOn(target.x * TILE_SIZE, target.y * TILE_SIZE);
+  };
+
+  private focusHome = (): void => {
+    const core = spacetimeClient.getState().myStructures
+      .find(row => row.kind === "command_core");
+    if (core) {
+      this.cameras.main.centerOn(
+        (core.gridX + core.width / 2) * TILE_SIZE,
+        (core.gridY + core.height / 2) * TILE_SIZE
+      );
+    }
+  };
 
   private handlePointerClick(pointer: Phaser.Input.Pointer): void {
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
@@ -247,15 +280,14 @@ export class SeaScene extends Phaser.Scene {
 
     this.updateSelectionRings();
 
-    // Center camera on own base once on initial spawn
-    if (!this.initialCenterDone && state.myStructures.length > 0) {
-      const core = state.myStructures.find((s) => s.kind === "command_core");
-      if (core) {
-        const cx = (core.gridX + core.width / 2) * TILE_SIZE;
-        const cy = (core.gridY + core.height / 2) * TILE_SIZE;
-        this.cameras.main.centerOn(cx, cy);
-        this.initialCenterDone = true;
-      }
+    // A scene can outlive several matches. Recenter on every new server match,
+    // instead of leaving the next spawn off-screen after returning to the menu.
+    if (state.activeMatch?.id !== undefined &&
+        this.centeredMatchId !== state.activeMatch.id &&
+        state.myStructures.some(row => row.kind === "command_core")) {
+      this.focusHome();
+      this.centeredMatchId = state.activeMatch.id;
+      this.redrawWater();
     }
   }
 
@@ -386,27 +418,33 @@ export class SeaScene extends Phaser.Scene {
     const state = spacetimeClient.getState();
     const enemies: DetectedEnemyContact[] = state.visibleEnemies;
 
-    // Render authorized enemy sensor contacts (no secret data / HP)
+    // Open battlefield: every rival ship/structure is visible in match intel.
+    // Ship and structure silhouettes differ; HP, targets and AI plans remain
+    // private until production gameplay actually needs those projected fields.
     for (const enemy of enemies) {
       const ex = enemy.x * TILE_SIZE;
       const ey = enemy.y * TILE_SIZE;
-
-      // Hostile red diamond contact blip
-      gfx.fillStyle(0xef4444, 0.85);
       gfx.lineStyle(2, 0xfca5a5, 1);
-      gfx.beginPath();
-      gfx.moveTo(ex, ey - 14);
-      gfx.lineTo(ex + 14, ey);
-      gfx.lineTo(ex, ey + 14);
-      gfx.lineTo(ex - 14, ey);
-      gfx.closePath();
-      gfx.fillPath();
-      gfx.strokePath();
 
-      // Hostile detection pulse
-      const pulse = 16 + Math.sin(this.elapsed * 0.008) * 4;
-      gfx.lineStyle(1, 0xef4444, 0.5);
-      gfx.strokeCircle(ex, ey, pulse);
+      if (enemy.entityType === "ship") {
+        gfx.fillStyle(0xb91c1c, 0.95);
+        gfx.beginPath();
+        gfx.moveTo(ex + 19, ey);
+        gfx.lineTo(ex - 14, ey - 12);
+        gfx.lineTo(ex - 9, ey);
+        gfx.lineTo(ex - 14, ey + 12);
+        gfx.closePath();
+        gfx.fillPath();
+        gfx.strokePath();
+        gfx.fillStyle(0xfca5a5, 0.9);
+        gfx.fillCircle(ex, ey, 4);
+      } else {
+        gfx.fillStyle(0x7f1d1d, 0.7);
+        gfx.fillRect(ex - 16, ey - 16, 32, 32);
+        gfx.strokeRect(ex - 16, ey - 16, 32, 32);
+        gfx.lineBetween(ex - 11, ey - 11, ex + 11, ey + 11);
+        gfx.lineBetween(ex + 11, ey - 11, ex - 11, ey + 11);
+      }
     }
   }
 
