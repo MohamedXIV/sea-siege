@@ -1,26 +1,25 @@
 import { useState } from "react";
-import { Anchor, Compass, DatabaseZap, Layers3, Waves } from "lucide-react";
+import { Anchor, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PhaserViewport } from "@/game/PhaserViewport";
 import { DevControls } from "@/components/DevControls";
 import { MatchHud } from "@/components/MatchHud";
 import { useSpacetime } from "@/network/useSpacetime";
 
-type InfoTab = "multiplayer" | "status" | "controls";
-
+/**
+ * Gemini's original Tactical Deployment screen and Battlefield overlay.
+ * React only renders menus; Phaser owns the actual battlefield canvas.
+ */
 export default function App() {
-  const [tab, setTab] = useState<InfoTab>("multiplayer");
   const gameState = useSpacetime();
-  const { status, identity, activeMatch } = gameState;
-  // Remember which match the player deliberately opened the menu for.
-  // Starting a *new* match automatically goes back to the battlefield.
+  const { status, subscriptionStatus, identity, activeMatch } = gameState;
   const [menuOpenedForMatch, setMenuOpenedForMatch] = useState<bigint | null>(null);
   const isPlaying = activeMatch?.phase === "active";
   const menuOpen = isPlaying && menuOpenedForMatch === activeMatch?.id;
+  const ready = status === "connected" && subscriptionStatus === "applied";
 
   return (
-    <main className="relative min-h-svh overflow-hidden bg-background text-foreground">
-      {/* Authoritative Phaser Viewport */}
+    <main className="relative min-h-svh overflow-hidden bg-[#040d17] text-slate-100">
       <div className="absolute inset-0">
         <PhaserViewport />
       </div>
@@ -29,125 +28,71 @@ export default function App() {
         <MatchHud state={gameState} onMenu={() => setMenuOpenedForMatch(activeMatch?.id ?? null)} />
       ) : (
         <>
-      {/* Atmospheric gradient overlay */}
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(4,13,21,.92),rgba(4,13,21,.5)_50%,rgba(4,13,21,.12))]" />
+          <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(90deg,rgba(4,13,23,.97),rgba(4,13,23,.87)_64%,rgba(4,13,23,.72))]" />
+          <div className="pointer-events-none relative z-10 flex min-h-svh flex-col justify-between p-4 md:p-8">
+            <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 border-b border-sky-500/20 pb-3">
+              <div className="flex items-center gap-3 font-mono text-xs uppercase tracking-wider text-sky-300">
+                <span className={`size-3 rounded-full ${ready ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
+                SpacetimeDB Authority Engine // {ready ? "Online" : "Connecting"}
+              </div>
+              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
+                Client Identity:
+                <span className="rounded border border-amber-500/30 bg-slate-900/90 px-2 py-0.5 text-amber-400">
+                  {identity ? `${identity.slice(0, 9)}...${identity.slice(-6)}` : "Not connected"}
+                </span>
+              </div>
+            </header>
 
-      {/* UI Overlay */}
-      <div className="relative z-10 flex min-h-svh flex-col justify-between p-5 md:p-8 pointer-events-none">
-        {/* Top bar */}
-        <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
-          <div className="flex items-center gap-2 text-xs uppercase tracking-[.24em] text-primary">
-            <Anchor className="size-4" /> SEA SIEGE{" "}
-            <span className="text-muted-foreground">/ Connected Slice</span>
+            <section className="pointer-events-auto my-auto mx-auto grid w-full max-w-5xl grid-cols-1 items-center gap-6 py-7 lg:grid-cols-12">
+              <div className="space-y-4 lg:col-span-7">
+                {isPlaying && (
+                  <Button variant="outline" onClick={() => setMenuOpenedForMatch(null)}
+                    className="border-sky-500/50 bg-slate-950 text-sky-300">
+                    Resume Match #{activeMatch.id.toString()}
+                  </Button>
+                )}
+                <div className="inline-flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs uppercase tracking-widest text-amber-300">
+                  <Waves className="size-3.5" /> Drowned Industrial Naval Warfare
+                </div>
+                <h1 className="text-5xl font-extrabold leading-none tracking-tight text-white md:text-6xl">
+                  SEA <span className="text-sky-400">SIEGE</span>
+                </h1>
+                <p className="max-w-xl text-sm leading-relaxed text-slate-300 md:text-base">
+                  Command a fragile industrial citadel in a world swallowed by the abyss.
+                  Dredge submerged salvage, expand modular floating platforms, construct
+                  shipyards and rotary artillery, and shatter rival strongholds across a living reactive ocean.
+                </p>
+                <div className="grid max-w-lg grid-cols-3 gap-2 pt-1 font-mono text-xs">
+                  <div className="rounded border border-slate-800 bg-slate-900/80 p-2">
+                    <div className="font-bold text-sky-400">2–8 Factions</div>
+                    <div className="text-[11px] text-slate-400">Human or Server AI</div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-900/80 p-2">
+                    <div className="font-bold text-amber-400">Multi-Layer Grid</div>
+                    <div className="text-[11px] text-slate-400">Platforms & Bridges</div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-900/80 p-2">
+                    <div className="font-bold text-emerald-400">Open Battlefield</div>
+                    <div className="text-[11px] text-slate-400">Server-Owned Combat</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2.5 rounded-xl border border-slate-700 bg-slate-950/90 p-5 shadow-2xl backdrop-blur-sm lg:col-span-5">
+                <div className="border-b border-slate-800 pb-2 font-mono text-xs uppercase tracking-wider text-slate-400">
+                  Tactical Deployment Console
+                </div>
+                <DevControls />
+              </div>
+            </section>
+
+            <footer className="pointer-events-auto flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 pt-3 font-mono text-xs text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <Anchor className="size-3.5" /> SEA SIEGE // Gemini Pixel-Art Reference · Real Phaser 4 + SpacetimeDB
+              </span>
+              <span>LMB Select/Build · RMB Move · Scroll Zoom · E Enemy · H Home</span>
+            </footer>
           </div>
-
-          <div
-            role="status"
-            className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-mono ${
-              status === "connected"
-                ? "border-emerald-600/40 bg-emerald-950/40 text-emerald-300"
-                : status === "connecting" || status === "reconnecting"
-                ? "border-amber-600/40 bg-amber-950/40 text-amber-300"
-                : "border-rose-600/40 bg-rose-950/40 text-rose-300"
-            }`}
-          >
-            <span
-              className={`size-2 rounded-full ${
-                status === "connected"
-                  ? "bg-emerald-400"
-                  : status === "connecting" || status === "reconnecting"
-                  ? "bg-amber-400 animate-pulse"
-                  : "bg-rose-500"
-              }`}
-            />
-            <span>
-              {status === "connected"
-                ? `Connected (${identity?.slice(0, 8)}...)`
-                : status === "reconnecting"
-                ? "Reconnecting..."
-                : status === "connecting"
-                ? "Connecting..."
-                : "Disconnected"}
-            </span>
-          </div>
-        </header>
-
-        {/* Main Content Area */}
-        <section className="pointer-events-auto max-w-xl space-y-4 py-6">
-          {isPlaying && (
-            <Button
-              variant="outline"
-              onClick={() => setMenuOpenedForMatch(null)}
-              className="border-cyan-600/70 bg-slate-950/90 text-cyan-200"
-            >
-              Resume Match #{activeMatch.id.toString()}
-            </Button>
-          )}
-          <div className="flex items-center gap-2 text-xs tracking-[.26em] uppercase text-primary">
-            <Waves className="size-4" /> A world below the waterline
-          </div>
-          <h1 className="text-5xl font-black tracking-tight sm:text-6xl">
-            SEA<br />
-            <span className="text-primary">SIEGE</span>
-          </h1>
-
-          {/* Navigation Tabs */}
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant={tab === "multiplayer" ? "default" : "outline"}
-              onClick={() => setTab("multiplayer")}
-            >
-              <Anchor className="size-4" /> Multiplayer Match
-            </Button>
-            <Button
-              size="sm"
-              variant={tab === "status" ? "default" : "outline"}
-              onClick={() => setTab("status")}
-            >
-              <DatabaseZap className="size-4" /> Architecture
-            </Button>
-            <Button
-              size="sm"
-              variant={tab === "controls" ? "default" : "outline"}
-              onClick={() => setTab("controls")}
-            >
-              <Compass className="size-4" /> Navigation
-            </Button>
-          </div>
-
-          {tab === "multiplayer" ? (
-            <DevControls />
-          ) : tab === "status" ? (
-            <div className="max-w-md rounded-lg border border-border/70 bg-card/90 p-5 shadow-2xl backdrop-blur-sm space-y-3 text-sm text-slate-300">
-              <p className="flex items-center gap-2 font-semibold text-foreground">
-                <Layers3 className="size-4 text-primary" /> Official SpacetimeDB Integration
-              </p>
-              <p>
-                Connected directly to local standalone SpacetimeDB instance (`sea-siege-dev`).
-              </p>
-              <ul className="list-disc list-inside text-xs space-y-1 text-slate-400">
-                <li>Authoritative simulation running server-side (WASM).</li>
-                <li>Private tables protected by server visibility views.</li>
-                <li>Live per-identity subscriptions streaming to Phaser.</li>
-                <li>Bounded interpolation via SnapshotBuffer for smooth naval motion.</li>
-              </ul>
-            </div>
-          ) : (
-            <div className="max-w-md rounded-lg border border-border/70 bg-card/90 p-5 shadow-2xl backdrop-blur-sm space-y-2 text-sm text-slate-300">
-              <p>Middle or right mouse drag: pan ocean view.</p>
-              <p>Mouse wheel: zoom camera in and out.</p>
-              <p>Left-click owned ship: select vessel.</p>
-              <p>Click water with vessel selected: send authoritative server move order.</p>
-            </div>
-          )}
-        </section>
-
-        {/* Footer */}
-        <footer className="text-xs text-slate-400">
-          Phase 2 Connected Client · Phaser 4.2.1 / TypeScript / SpacetimeDB 2.14.0 / React 19
-        </footer>
-      </div>
         </>
       )}
     </main>
