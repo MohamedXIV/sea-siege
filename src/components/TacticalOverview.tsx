@@ -1,23 +1,24 @@
 import type { MouseEvent } from "react";
 import { FOCUS_MAP_CELL_EVENT } from "@/game/SeaScene";
+import { geminiFactionColor } from "@/game/art/GeminiPixelArt";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 import { cellsForSlots } from "../../spacetimedb/src/sim/worldgen";
 
-interface TacticalOverviewProps {
-  state: SpacetimeClientState;
-}
+interface TacticalOverviewProps { state: SpacetimeClientState }
 
-/**
- * Small open-world navigation map using actual authorized match entities.
- * Terrain and salvage artwork will be supplied by the next world projection
- * slice. This deliberately does not generate a fake client-side world.
- */
+/** Gemini's 168px minimap: actual known terrain, salvage and *all* fleets. */
 export function TacticalOverview({ state }: TacticalOverviewProps) {
   const match = state.activeMatch;
   if (!match) return null;
-  const cells = cellsForSlots(match.maxSlots);
-  const guidePositions = [0.25, 0.5, 0.75].map(fraction => fraction * cells);
-
+  const cells = state.worldChunks[0]?.mapCells ?? cellsForSlots(match.maxSlots);
+  const obstacles = state.worldChunks.flatMap(chunk =>
+    chunk.terrain.flatMap((kind, index) => {
+      const x = chunk.chunkX * 16 + index % 16;
+      const y = chunk.chunkY * 16 + Math.floor(index / 16);
+      if (kind === 0 || x >= cells || y >= cells) return [];
+      return [{ x, y, kind }];
+    })
+  );
   const jumpToCell = (event: MouseEvent<HTMLButtonElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
@@ -27,70 +28,46 @@ export function TacticalOverview({ state }: TacticalOverviewProps) {
   };
 
   return (
-    <aside className="pointer-events-auto absolute right-3 top-20 w-40 rounded-lg border border-cyan-900/80 bg-slate-950/90 p-2 text-slate-200 shadow-xl backdrop-blur-md sm:right-4 sm:w-48">
-      <div className="mb-1 flex items-center justify-between gap-1 text-[10px] uppercase tracking-wide">
-        <span className="font-bold text-cyan-300">Battlefield overview</span>
-        <span className="font-mono text-slate-500">{cells}²</span>
+    <aside className="pointer-events-auto absolute right-3 top-20 w-40 rounded-lg border border-slate-700 bg-slate-950/90 p-2 text-slate-200 shadow-xl backdrop-blur-sm sm:right-4 sm:w-48">
+      <div className="mb-1 flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-sky-400">
+        <span>Strategic Minimap</span>
+        <span className="font-mono text-slate-400">{cells}×{cells}</span>
       </div>
       <button
         type="button"
         onClick={jumpToCell}
-        className="block aspect-square w-full overflow-hidden rounded border border-slate-700 bg-[#061521] focus-visible:outline-2 focus-visible:outline-cyan-400"
-        title="Click anywhere to move the camera to that location"
-        aria-label="Open battlefield overview. Click to focus the Phaser camera."
+        className="block aspect-square w-full overflow-hidden rounded border border-slate-700 bg-[#06131f] focus-visible:outline-2 focus-visible:outline-sky-400"
+        title="Click to pan the camera"
+        aria-label="Full Gemini battlefield minimap. Click to pan the camera."
       >
-        <svg
-          viewBox={`0 0 ${cells} ${cells}`}
-          preserveAspectRatio="xMidYMid meet"
-          className="h-full w-full"
-          aria-hidden="true"
-        >
-          <rect x="0" y="0" width={cells} height={cells} fill="#071520" />
-          {guidePositions.map(position => (
-            <g key={position} stroke="#1a3848" strokeWidth=".22">
-              <line x1={position} y1="0" x2={position} y2={cells} />
-              <line x1="0" y1={position} x2={cells} y2={position} />
+        <svg viewBox={`0 0 ${cells} ${cells}`} className="h-full w-full" aria-hidden="true">
+          <rect x="0" y="0" width={cells} height={cells} fill="#06131f" />
+          {obstacles.map(cell => (
+            <rect key={`terrain-${cell.x}-${cell.y}`} x={cell.x} y={cell.y}
+              width="1" height="1"
+              fill={cell.kind === 1 ? "#145374" : cell.kind === 2 ? "#475569" : "#9a3412"}
+              opacity={cell.kind === 1 ? 0.4 : 1} />
+          ))}
+          {state.salvageNodes.filter(node => node.remaining > 0).map(node => (
+            <rect key={`node-${node.id}`} x={node.gridX - 0.55} y={node.gridY - 0.55}
+              width="1.1" height="1.1" fill={node.contested ? "#f97316" : "#eab308"} />
+          ))}
+          {state.battleStructures.map(st => (
+            <rect key={`structure-${st.id}`} x={st.gridX} y={st.gridY}
+              width={st.width} height={st.height} fill={geminiFactionColor(st.ownerSlot)}
+              opacity={st.complete ? 1 : 0.5} />
+          ))}
+          {state.battleShips.map(ship => (
+            <g key={`ship-${ship.id}`}>
+              <circle cx={ship.x} cy={ship.y} r="1.0" fill="#fff" />
+              <rect x={ship.x - 0.65} y={ship.y - 0.65} width="1.3" height="1.3"
+                fill={geminiFactionColor(ship.ownerSlot)} />
             </g>
-          ))}
-          {state.myStructures.map(st => (
-            <rect
-              key={`own-structure-${st.id}`}
-              x={st.gridX} y={st.gridY}
-              width={st.width} height={st.height}
-              fill={st.kind === "command_core" ? "#22d3ee" : "#0e7490"}
-              opacity=".88"
-            />
-          ))}
-          {state.visibleEnemies.map(contact =>
-            contact.entityType === "ship" ? (
-              <circle
-                key={contact.contactKey}
-                cx={contact.x} cy={contact.y}
-                r=".85" fill="#f87171" stroke="#fca5a5" strokeWidth=".25"
-              />
-            ) : (
-              <rect
-                key={contact.contactKey}
-                x={contact.x - .65} y={contact.y - .65}
-                width="1.3" height="1.3" fill="#ef4444"
-              />
-            )
-          )}
-          {state.myShips.map(ship => (
-            <circle
-              key={`own-ship-${ship.id}`}
-              cx={ship.x} cy={ship.y}
-              r=".85" fill="#67e8f9" stroke="#ecfeff" strokeWidth=".3"
-            />
           ))}
         </svg>
       </button>
-      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
-        <span><span className="text-cyan-300">●</span> Yours</span>
-        <span><span className="text-rose-400">●</span> Enemy</span>
-      </div>
-      <div className="mt-1 text-[9px] text-slate-500">
-        Terrain and salvage map rendering next
+      <div className="mt-1 text-[10px] text-slate-400">
+        {state.worldChunks.length ? "Full known world · click to navigate" : "Loading world from server…"}
       </div>
     </aside>
   );
