@@ -794,6 +794,7 @@ export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
 export { finishMatchAtDeadline } from "./match-reducers.ts";
 export { refitShip } from "./ship-refit-reducers.ts";
 export { myShipRefits } from "./ship-refit-views.ts";
+export { myProductionJobs } from "./production-views.ts";
 
 export { addBot, removeBot } from "./bot-reducers.ts";
 
