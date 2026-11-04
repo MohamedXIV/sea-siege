@@ -642,6 +642,20 @@ export class SpacetimeClient {
     await this.conn.reducers.placeStructure({ matchId, kind, gridX, gridY });
   }
 
+  /** Single atomic transaction for an entire validated build rectangle. */
+  async placeStructuresBox(
+    kind: string,
+    startX: number, startY: number,
+    endX: number, endY: number,
+  ): Promise<void> {
+    const matchId = this.getState().activeMatchId;
+    if (!this.conn || this.status !== "connected" || matchId === null)
+      throw new Error("No connected match for box construction");
+    await this.conn.reducers.placeStructuresBox({
+      matchId, kind, startX, startY, endX, endY,
+    });
+  }
+
   async orderHarvest(shipId: bigint, nodeId: bigint): Promise<void> {
     if (!this.conn || this.status !== "connected")
       throw new Error("Not connected for salvage harvesting");
