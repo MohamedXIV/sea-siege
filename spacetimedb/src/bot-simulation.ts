@@ -14,6 +14,7 @@ import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts"
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
 import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-command-dispatch.ts";
+import { dispatchAttackOrder, type AttackableTarget } from "./sim/attack-order.ts";
 
 /**
  * One server-owned strategic scheduler per active match.
@@ -273,7 +274,57 @@ export const advanceBots = spacetimedb.reducer(
             ensureMotionTick: startMotion,
           });
           if (!result.ok) continue;
+        } else if (intent.type === "attack") {
+          const vessel = ctx.db.ship.id.find(intent.shipId);
+          const enemyShip = intent.targetType === "ship" ?
+            ctx.db.ship.id.find(intent.targetId) : undefined;
+          const enemyStructure = intent.targetType === "structure" ?
+            ctx.db.structure.id.find(intent.targetId) : undefined;
+          const target: AttackableTarget | null = enemyShip
+            ? { id: enemyShip.id, matchId: enemyShip.matchId,
+                ownerSlot: enemyShip.ownerSlot, type: "ship",
+                x: enemyShip.x, y: enemyShip.y, hp: enemyShip.hp }
+            : enemyStructure
+              ? { id: enemyStructure.id, matchId: enemyStructure.matchId,
+                  ownerSlot: enemyStructure.ownerSlot, type: "structure",
+                  x: enemyStructure.gridX + enemyStructure.width / 2,
+                  y: enemyStructure.gridY + enemyStructure.height / 2,
+                  hp: enemyStructure.hp }
+              : null;
+          const observed = visibleEnemies.some(row =>
+            row.id === intent.targetId && row.entityType === intent.targetType);
+          const existingOrder = ctx.db.attackOrder.shipId.find(intent.shipId);
+          if (existingOrder && existingOrder.targetType === intent.targetType &&
+              existingOrder.targetId === intent.targetId) continue;
+          const result = dispatchAttackOrder({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: faction.eliminated },
+            ship: vessel ?? null, target, nowUs, targetObserved: observed,
+          }, {
+            clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
+            clearHarvest: id => {
+              ctx.db.harvestOrder.shipId.delete(id);
+              ctx.db.materialHarvestOrder.shipId.delete(id);
+            },
+            upsertOrder: order => {
+              const existing = ctx.db.attackOrder.shipId.find(order.shipId);
+              if (existing) ctx.db.attackOrder.shipId.update({ ...existing, ...order });
+              else ctx.db.attackOrder.insert(order);
+            },
+            stopShip: (id, revision) => {
+              if (!vessel) throw new Error("Attack ship disappeared in transaction");
+              ctx.db.ship.id.update({
+                ...vessel, velocityX: 0, velocityY: 0,
+                targetX: vessel.x, targetY: vessel.y,
+                revision, updatedAt: ctx.timestamp,
+              });
+            },
+            ensureCombatTick: startCombat,
+          });
+          if (!result.ok) continue;
         } else if (intent.type === "aim") {
+          // The persistent attack order already owns approach, aim and fire.
+          if (ctx.db.attackOrder.shipId.find(intent.shipId)) continue;
           const vessel = ctx.db.ship.id.find(intent.shipId);
           const weapon = vessel ? weaponDefinition(vessel.kind) : null;
           if (!vessel || !weapon) continue;
@@ -315,6 +366,8 @@ export const advanceBots = spacetimedb.reducer(
           });
           if (!result.ok) continue;
         } else if (intent.type === "fire") {
+          // An active attack order already fires under the same rules.
+          if (ctx.db.attackOrder.shipId.find(intent.shipId)) continue;
           const vessel = ctx.db.ship.id.find(intent.shipId);
           if (!vessel) continue;
           const seen = visibleEnemies.find(row =>

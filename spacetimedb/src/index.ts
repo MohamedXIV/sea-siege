@@ -313,6 +313,8 @@ export const issueShipOrder = spacetimedb.reducer(
       },
     });
     if (!result.ok) throw new SenderError(result.reason);
+    // A successful move order replaces any persistent Attack Target order.
+    ctx.db.attackOrder.shipId.delete(shipId);
   },
 );
 
@@ -360,6 +362,8 @@ export const stopShip = spacetimedb.reducer(
     ctx.db.shipRoute.shipId.delete(shipId);
     ctx.db.harvestOrder.shipId.delete(shipId);
     ctx.db.materialHarvestOrder.shipId.delete(shipId);
+    // Stop also cancels an active Attack Target order.
+    ctx.db.attackOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
       ...current,
       velocityX: 0, velocityY: 0,
@@ -789,7 +793,8 @@ export {
   repairStructure, repairShip, upgradeWorkshop,
 } from "./workshop-reducers.ts";
 
-export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
+export { aimWeapon, fireWeapon, issueAttackOrder, advanceCombat } from "./combat-reducers.ts";
+export { myAttackOrders, myBattleProjectiles } from "./combat-views.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
 export { refitShip } from "./ship-refit-reducers.ts";

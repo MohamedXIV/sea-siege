@@ -324,6 +324,25 @@ export const combatSchedule = table(
 );
 
 
+/**
+ * Persistent server-owned Attack Target order. The combat scheduler re-reads
+ * the live target every tick, approaches when required, aims, and fires only
+ * through the same weapon rules as a manual Fire command. One order per ship;
+ * Move, Stop, Harvest or a new Attack replace it atomically.
+ */
+export const attackOrder = table(
+  { name: "attack_order" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    targetType: t.string(),
+    targetId: t.u64(),
+    issuedAtUs: t.i64(),
+    /** Rate limit for chase re-pathing; never a client-controlled timestamp. */
+    nextChaseAtUs: t.i64(),
+  },
+);
+
 /** Ephemeral but persisted rotation intentions. No client-supplied transform updates. */
 const turretAim = table(
   { name: "turret_aim" },
@@ -364,6 +383,6 @@ const spacetimedb = schema({
   materialNode, materialBalance, materialHarvestOrder,
   structure, constructionSchedule,
   harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
-  matchDeadline, botSchedule,
+  attackOrder, matchDeadline, botSchedule,
 });
 export default spacetimedb;

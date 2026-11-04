@@ -62,5 +62,7 @@ export const finishMatchAtDeadline = spacetimedb.reducer(
       ctx.db.projectile.id.delete(projectile.id);
     for (const aim of Array.from(ctx.db.turretAim.matchId.filter(match.id)))
       ctx.db.turretAim.id.delete(aim.id);
+    for (const order of Array.from(ctx.db.attackOrder.matchId.filter(match.id)))
+      ctx.db.attackOrder.shipId.delete(order.shipId);
   },
 );

@@ -17,6 +17,8 @@ import type {
   OwnedMaterialBalance,
   OwnedShipRefit,
   OwnedProductionJob,
+  OwnedAttackOrder,
+  BattleProjectile,
 } from "../module_bindings/types";
 
 export type ConnectionStatus =
@@ -53,6 +55,8 @@ export interface SpacetimeClientState {
   materialBalances: OwnedMaterialBalance[];
   shipRefits: OwnedShipRefit[];
   productionJobs: OwnedProductionJob[];
+  attackOrders: OwnedAttackOrder[];
+  battleProjectiles: BattleProjectile[];
 }
 
 export type StateListener = (state: SpacetimeClientState) => void;
@@ -187,6 +191,8 @@ export class SpacetimeClient {
     let materialBalances: OwnedMaterialBalance[] = [];
     let shipRefits: OwnedShipRefit[] = [];
     let productionJobs: OwnedProductionJob[] = [];
+    let attackOrders: OwnedAttackOrder[] = [];
+    let battleProjectiles: BattleProjectile[] = [];
 
     if (conn && this.status === "connected") {
       try {
@@ -204,6 +210,8 @@ export class SpacetimeClient {
         materialBalances = Array.from(conn.db.myMaterialBalances.iter());
         shipRefits = Array.from(conn.db.myShipRefits.iter());
         productionJobs = Array.from(conn.db.myProductionJobs.iter());
+        attackOrders = Array.from(conn.db.myAttackOrders.iter());
+        battleProjectiles = Array.from(conn.db.myBattleProjectiles.iter());
       } catch {
         // Cache during transition
       }
@@ -273,6 +281,8 @@ export class SpacetimeClient {
       materialBalances: activeMatchId === null ? [] : materialBalances.filter(row => row.matchId === activeMatchId),
       shipRefits: activeMatchId === null ? [] : shipRefits.filter(row => row.matchId === activeMatchId),
       productionJobs: activeMatchId === null ? [] : productionJobs.filter(row => row.matchId === activeMatchId),
+      attackOrders: activeMatchId === null ? [] : attackOrders.filter(row => row.matchId === activeMatchId),
+      battleProjectiles: activeMatchId === null ? [] : battleProjectiles.filter(row => row.matchId === activeMatchId),
     };
   }
 
@@ -455,7 +465,8 @@ export class SpacetimeClient {
     for (const table of [conn.db.myGeminiWorldChunks, conn.db.myGeminiSalvage,
       conn.db.myGeminiShips, conn.db.myGeminiStructures,
       conn.db.myMaterialDeposits, conn.db.myMaterialBalances,
-      conn.db.myShipRefits, conn.db.myProductionJobs]) {
+      conn.db.myShipRefits, conn.db.myProductionJobs,
+      conn.db.myAttackOrders, conn.db.myBattleProjectiles]) {
       table.onInsert(notifyChange);
       table.onUpdate(notifyChange);
       table.onDelete(notifyChange);
@@ -504,6 +515,8 @@ export class SpacetimeClient {
         "SELECT * FROM my_material_balances",
         "SELECT * FROM my_ship_refits",
         "SELECT * FROM my_production_jobs",
+        "SELECT * FROM my_attack_orders",
+        "SELECT * FROM my_battle_projectiles",
       ]);
   }
 
@@ -780,6 +793,20 @@ export class SpacetimeClient {
       targetX,
       targetY,
     });
+  }
+
+  /**
+   * Persistent, server-authoritative attack order. The server owns approach,
+   * turret aiming, cooldown and impact; the client only names the target once.
+   */
+  async issueAttackOrder(
+    shipId: bigint,
+    targetType: "ship" | "structure",
+    targetId: bigint,
+  ): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for naval combat");
+    await this.conn.reducers.issueAttackOrder({ shipId, targetType, targetId });
   }
 
   getConnection(): DbConnection | null {

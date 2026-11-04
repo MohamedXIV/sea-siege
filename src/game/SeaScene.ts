@@ -14,6 +14,7 @@ import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
 import { shipsInSelectionBox } from "./input/selection-box";
 import { selectStructureAt } from "./input/structure-selection";
+import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import {
   RESOURCE_TYPES, type AdvancedResourceKind,
@@ -38,11 +39,29 @@ interface VesselArt {
   lastSnapshot: MotionSnapshot | null;
   kind: string;
   slot: number;
+  hp: number;
 }
 
 interface BuildingArt {
   image: Phaser.GameObjects.Image;
   key: string;
+  hp: number;
+}
+
+interface ProjectileArt {
+  displayX: number;
+  displayY: number;
+  serverX: number;
+  serverY: number;
+  sourceFaction: number;
+}
+
+interface CombatEffect {
+  kind: "muzzle" | "splash" | "hit" | "explosion";
+  x: number;
+  y: number;
+  age: number;
+  duration: number;
 }
 
 interface LeftDrag {
@@ -69,6 +88,12 @@ export class SeaScene extends Phaser.Scene {
   private terrain!: Phaser.GameObjects.Graphics;
   private deposits!: Phaser.GameObjects.Graphics;
   private markers!: Phaser.GameObjects.Graphics;
+  private combatGraphics!: Phaser.GameObjects.Graphics;
+  private projectileGraphics!: Phaser.GameObjects.Graphics;
+  private effectsGraphics!: Phaser.GameObjects.Graphics;
+  private projectiles = new Map<bigint, ProjectileArt>();
+  private effects: CombatEffect[] = [];
+  private attackTargets = new Map<bigint, { targetType: string; targetId: bigint }>();
   private vessels = new Map<bigint, VesselArt>();
   private buildings = new Map<bigint, BuildingArt>();
   private selectedShipId: bigint | null = null;
@@ -103,7 +128,10 @@ export class SeaScene extends Phaser.Scene {
     this.ocean = this.add.graphics().setDepth(0);
     this.terrain = this.add.graphics().setDepth(2);
     this.deposits = this.add.graphics().setDepth(4);
+    this.combatGraphics = this.add.graphics().setDepth(30);
     this.markers = this.add.graphics().setDepth(31);
+    this.projectileGraphics = this.add.graphics().setDepth(26);
+    this.effectsGraphics = this.add.graphics().setDepth(27);
     this.buildPreview = this.add.graphics().setDepth(34);
     this.selectionGraphics = this.add.graphics().setDepth(35);
     this.buildingSelectionGraphics = this.add.graphics().setDepth(33);
@@ -258,6 +286,12 @@ export class SeaScene extends Phaser.Scene {
     this.vessels.clear();
     for (const art of this.buildings.values()) art.image.destroy();
     this.buildings.clear();
+    this.projectiles.clear();
+    this.projectileGraphics?.clear();
+    this.effects = [];
+    this.effectsGraphics?.clear();
+    this.attackTargets.clear();
+    this.combatGraphics?.clear();
     this.selectedShipId = null;
     this.selectedShipIds.clear();
     this.selectionGraphics?.clear();
@@ -548,27 +582,37 @@ export class SeaScene extends Phaser.Scene {
       return;
     }
 
-    if (this.selectedShipId !== null && button === 2) {
-      const node = state.salvageNodes.find(n =>
-        n.remaining > 0 && Math.abs(x - n.gridX - 0.5) < 0.8 &&
-        Math.abs(y - n.gridY - 0.5) < 0.8
+    if (button === 2) {
+      const command = resolveRightClickCommand(
+        { x, y }, state.myMembership?.slot,
+        state.battleShips, state.battleStructures, state.salvageNodes,
       );
-      if (node) {
+      if (command.kind === "attack") {
+        if (!this.selectedShipIds.size) {
+          this.reportOrderError("Select at least one ship before attacking");
+          return;
+        }
+        this.issueAttackOrders([...this.selectedShipIds], command);
+        return;
+      }
+      if (command.kind === "salvage" && this.selectedShipId !== null) {
         const ship = state.myShips.find(s => s.id === this.selectedShipId);
-        if (ship && Math.hypot(ship.x - node.gridX - 0.5, ship.y - node.gridY - 0.5) <= 3.5) {
-          spacetimeClient.orderHarvest(ship.id, node.id)
-            .catch(err => this.reportOrderError(err));
-        } else if (ship) {
-          spacetimeClient.issueShipOrder(ship.id, node.gridX + 0.5, node.gridY + 0.5)
-            .catch(err => this.reportOrderError(err));
+        if (ship) {
+          if (Math.hypot(ship.x - command.gridX - 0.5, ship.y - command.gridY - 0.5) <= 3.5) {
+            spacetimeClient.orderHarvest(ship.id, command.nodeId)
+              .catch(err => this.reportOrderError(err));
+          } else {
+            spacetimeClient.issueShipOrder(
+              ship.id, command.gridX + 0.5, command.gridY + 0.5,
+            ).catch(err => this.reportOrderError(err));
+          }
         }
         return;
       }
-    }
-    // Box-selected fleets receive independent authoritative move orders.
-    // Give each vessel a small formation offset, rather than stacking every
-    // collision hull onto precisely the same endpoint.
-    if (this.selectedShipIds.size && button === 2) {
+      if (!this.selectedShipIds.size) return;
+      // Box-selected fleets receive independent authoritative move orders.
+      // Give each vessel a small formation offset, rather than stacking every
+      // collision hull onto precisely the same endpoint.
       const ids = [...this.selectedShipIds];
       this.drawOrderMarker(x, y);
       const columns = Math.ceil(Math.sqrt(ids.length));
@@ -588,6 +632,47 @@ export class SeaScene extends Phaser.Scene {
         );
       });
     }
+  }
+
+  /** One persistent Attack Target order per selected owned ship. */
+  private issueAttackOrders(
+    shipIds: readonly bigint[],
+    command: Extract<RightClickCommand, { kind: "attack" }>,
+  ): void {
+    this.drawAttackMarker(command.x, command.y);
+    void Promise.allSettled(shipIds.map(shipId =>
+      spacetimeClient.issueAttackOrder(
+        shipId, command.targetType, command.targetId,
+      ),
+    )).then(results => {
+      const failures = results.filter(result => result.status === "rejected");
+      if (failures.length) {
+        const first = failures[0] as PromiseRejectedResult;
+        this.reportOrderError(
+          failures.length === shipIds.length
+            ? (first.reason instanceof Error ? first.reason.message : "Attack order rejected")
+            : `${failures.length} of ${shipIds.length} attack orders were rejected`,
+        );
+        return;
+      }
+      window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
+        detail: {
+          message: `${shipIds.length === 1 ? "Ship" : `${shipIds.length} ships`} attacking ${command.targetType}`,
+          success: true,
+        },
+      }));
+    });
+  }
+
+  private drawAttackMarker(x: number, y: number): void {
+    this.markers.clear();
+    this.markers.lineStyle(2, 0xf87171, 0.95);
+    this.markers.strokeCircle(x * TILE, y * TILE, 16);
+    this.markers.lineBetween(x * TILE - 22, y * TILE, x * TILE - 10, y * TILE);
+    this.markers.lineBetween(x * TILE + 10, y * TILE, x * TILE + 22, y * TILE);
+    this.markers.lineBetween(x * TILE, y * TILE - 22, x * TILE, y * TILE - 10);
+    this.markers.lineBetween(x * TILE, y * TILE + 10, x * TILE, y * TILE + 22);
+    this.time.delayedCall(900, () => this.markers.clear());
   }
 
   private drawOrderMarker(x: number, y: number): void {
@@ -618,6 +703,8 @@ export class SeaScene extends Phaser.Scene {
     this.syncMap(state);
     this.syncBuildings(state.battleStructures);
     this.syncShips(state.battleShips);
+    this.syncAttackOrders(state);
+    this.syncProjectiles(state);
     if (this.centeredMatchId !== matchId && state.myStructures
       .some(st => st.kind === "command_core")) {
       this.focusHome();
@@ -707,7 +794,16 @@ export class SeaScene extends Phaser.Scene {
   private syncBuildings(buildings: readonly GeminiBattleStructure[]): void {
     const alive = new Set(buildings.map(st => st.id));
     for (const [id, art] of this.buildings) {
-      if (!alive.has(id)) { art.image.destroy(); this.buildings.delete(id); }
+      if (!alive.has(id)) {
+        this.spawnEffect(
+          "explosion",
+          art.image.x + art.image.displayWidth / 2,
+          art.image.y + art.image.displayHeight / 2,
+          620,
+        );
+        art.image.destroy();
+        this.buildings.delete(id);
+      }
     }
     if (this.selectedBuildingId !== null && !alive.has(this.selectedBuildingId)) {
       this.selectEntity(null);
@@ -718,10 +814,19 @@ export class SeaScene extends Phaser.Scene {
       if (!art) {
         const image = this.add.image(st.gridX * TILE, st.gridY * TILE, key)
           .setOrigin(0, 0).setDepth(10);
-        art = { image, key };
+        art = { image, key, hp: st.hp };
         this.buildings.set(st.id, art);
       } else {
         if (art.key !== key) { art.image.setTexture(key); art.key = key; }
+        if (st.hp < art.hp) {
+          this.spawnEffect(
+            "hit",
+            (st.gridX + st.width / 2) * TILE,
+            (st.gridY + st.height / 2) * TILE,
+            260,
+          );
+        }
+        art.hp = st.hp;
         art.image.setPosition(st.gridX * TILE, st.gridY * TILE);
       }
     }
@@ -759,6 +864,7 @@ export class SeaScene extends Phaser.Scene {
     let selectionChanged = false;
     for (const [id, art] of this.vessels) {
       if (!alive.has(id)) {
+        this.spawnEffect("explosion", art.container.x, art.container.y, 620);
         art.motion.clear();
         art.container.destroy();
         this.vessels.delete(id);
@@ -779,7 +885,7 @@ export class SeaScene extends Phaser.Scene {
         art = {
           container, hull, turret, highlight, wake,
           motion: new SnapshotBuffer({ capacity: 16, maxExtrapolationMs: 120 }),
-          lastSnapshot: null, kind: "", slot: -1,
+          lastSnapshot: null, kind: "", slot: -1, hp: ship.hp,
         };
         this.vessels.set(ship.id, art);
       }
@@ -788,6 +894,10 @@ export class SeaScene extends Phaser.Scene {
         art.slot = ship.ownerSlot;
         this.drawVessel(art, ship);
       }
+      if (ship.hp < art.hp) {
+        this.spawnEffect("hit", art.container.x, art.container.y, 240);
+      }
+      art.hp = ship.hp;
       // Motion schedule updates position/velocity WITHOUT incrementing the
       // command revision. The previous condition ignored a final zero-speed
       // arrival, then snapped to the real endpoint when the next order bumped
@@ -804,6 +914,190 @@ export class SeaScene extends Phaser.Scene {
       if (shouldRecordMotionSample(previous, sample)) {
         art.motion.push(sample);
         art.lastSnapshot = sample;
+      }
+    }
+  }
+
+  private syncAttackOrders(state: SpacetimeClientState): void {
+    this.attackTargets.clear();
+    for (const order of state.attackOrders) {
+      this.attackTargets.set(order.shipId, {
+        targetType: order.targetType, targetId: order.targetId,
+      });
+    }
+  }
+
+  /**
+   * Authoritative projectile rows arrive at the 10Hz combat cadence. The client
+   * only interpolates their presentation; damage still resolves server-side.
+   */
+  private syncProjectiles(state: SpacetimeClientState): void {
+    const seen = new Set<bigint>();
+    for (const row of state.battleProjectiles) {
+      seen.add(row.id);
+      const existing = this.projectiles.get(row.id);
+      if (existing) {
+        existing.serverX = row.x;
+        existing.serverY = row.y;
+        continue;
+      }
+      const muzzle = row.sourceType === "ship"
+        ? this.vessels.get(row.sourceId)?.container
+        : undefined;
+      const building = row.sourceType === "structure"
+        ? this.buildings.get(row.sourceId)?.image : undefined;
+      if (muzzle) this.spawnEffect("muzzle", muzzle.x, muzzle.y, 130);
+      else if (building) this.spawnEffect(
+        "muzzle",
+        building.x + building.displayWidth / 2,
+        building.y + building.displayHeight / 2, 130,
+      );
+      this.projectiles.set(row.id, {
+        displayX: row.x, displayY: row.y,
+        serverX: row.x, serverY: row.y,
+        sourceFaction: row.sourceFaction,
+      });
+    }
+    for (const [id, art] of this.projectiles) {
+      if (seen.has(id)) continue;
+      this.spawnEffect("splash", art.displayX * TILE, art.displayY * TILE, 320);
+      this.projectiles.delete(id);
+    }
+  }
+
+  private spawnEffect(
+    kind: CombatEffect["kind"], x: number, y: number, duration: number,
+  ): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (this.effects.length > 120) this.effects.shift();
+    this.effects.push({ kind, x, y, age: 0, duration });
+  }
+
+  private drawCombatOverlay(state: SpacetimeClientState): void {
+    const gfx = this.combatGraphics;
+    if (!gfx) return;
+    gfx.clear();
+    const ownSlot = state.myMembership?.slot;
+
+    for (const [shipId, order] of this.attackTargets) {
+      const own = this.vessels.get(shipId)?.container;
+      if (!own) continue;
+      const target = order.targetType === "ship"
+        ? state.battleShips.find(ship => ship.id === order.targetId)
+        : state.battleStructures.find(st => st.id === order.targetId);
+      if (!target) continue;
+      const tx = "gridX" in target
+        ? (target.gridX + target.width / 2) * TILE
+        : target.x * TILE;
+      const ty = "gridY" in target
+        ? (target.gridY + target.height / 2) * TILE
+        : target.y * TILE;
+      gfx.lineStyle(1, 0xf87171, 0.55);
+      gfx.lineBetween(own.x, own.y, tx, ty);
+      gfx.lineStyle(2, 0xf87171, 0.9);
+      gfx.strokeCircle(tx, ty, "gridX" in target
+        ? Math.max(target.width, target.height) * TILE * 0.62 : 16);
+      gfx.lineBetween(tx - 4, ty, tx + 4, ty);
+      gfx.lineBetween(tx, ty - 4, tx, ty + 4);
+    }
+
+    // HP bars remain presentation-only and disappear at full health.
+    for (const ship of state.battleShips) {
+      const maxHp = ECONOMY_RULES.ships[ship.kind as keyof typeof ECONOMY_RULES.ships]?.hp;
+      if (!maxHp || ship.hp >= maxHp) continue;
+      const art = this.vessels.get(ship.id);
+      if (!art) continue;
+      this.drawHealthBar(
+        art.container.x, art.container.y - (ship.radiusCells * TILE + 14),
+        30, 4, ship.hp / maxHp, ship.ownerSlot === ownSlot,
+      );
+    }
+    for (const st of state.battleStructures) {
+      const maxHp = structureDefinition(st.kind)?.hp;
+      if (!maxHp || st.hp >= maxHp) continue;
+      const art = this.buildings.get(st.id);
+      if (!art) continue;
+      this.drawHealthBar(
+        art.image.x + art.image.displayWidth / 2,
+        art.image.y - 8,
+        Math.max(26, art.image.displayWidth - 8), 4, st.hp / maxHp,
+        st.ownerSlot === ownSlot,
+      );
+    }
+  }
+
+  private drawHealthBar(
+    x: number, y: number, width: number, height: number,
+    fraction: number, own: boolean,
+  ): void {
+    const gfx = this.combatGraphics;
+    const clamped = Math.max(0, Math.min(1, fraction));
+    const color = clamped > 0.55 ? 0x4ade80 : clamped > 0.25 ? 0xfacc15 : 0xf87171;
+    gfx.fillStyle(0x020617, 0.85);
+    gfx.fillRect(x - width / 2 - 1, y - 1, width + 2, height + 2);
+    gfx.fillStyle(color, 1);
+    gfx.fillRect(x - width / 2, y, width * clamped, height);
+    if (own) {
+      gfx.lineStyle(1, 0x67e8f9, 0.7);
+      gfx.strokeRect(x - width / 2 - 1, y - 1, width + 2, height + 2);
+    }
+  }
+
+  private drawProjectiles(delta: number): void {
+    const gfx = this.projectileGraphics;
+    if (!gfx) return;
+    gfx.clear();
+    const t = Math.min(1, delta / 110);
+    for (const art of this.projectiles.values()) {
+      art.displayX += (art.serverX - art.displayX) * t;
+      art.displayY += (art.serverY - art.displayY) * t;
+      const x = art.displayX * TILE, y = art.displayY * TILE;
+      const dx = (art.serverX - art.displayX) * TILE;
+      const dy = (art.serverY - art.displayY) * TILE;
+      const length = Math.hypot(dx, dy) || 1;
+      const tint = Number.parseInt(geminiFactionColor(art.sourceFaction).slice(1), 16);
+      gfx.lineStyle(2, tint, 0.6);
+      gfx.lineBetween(x - dx / length * 7, y - dy / length * 7, x, y);
+      gfx.fillStyle(0xfef3c7, 0.95);
+      gfx.fillCircle(x, y, 2.4);
+      gfx.fillStyle(tint, 0.55);
+      gfx.fillCircle(x, y, 5);
+    }
+  }
+
+  private drawEffects(delta: number): void {
+    const gfx = this.effectsGraphics;
+    if (!gfx) return;
+    gfx.clear();
+    if (!this.effects.length) return;
+    this.effects = this.effects.filter(effect => {
+      effect.age += delta;
+      return effect.age < effect.duration;
+    });
+    for (const effect of this.effects) {
+      const progress = effect.age / effect.duration;
+      if (effect.kind === "muzzle") {
+        gfx.fillStyle(0xfef08a, 1 - progress);
+        gfx.fillCircle(effect.x, effect.y, 4 + progress * 10);
+        gfx.fillStyle(0xfef3c7, (1 - progress) * 0.8);
+        gfx.fillCircle(effect.x, effect.y, 2 + progress * 3);
+      } else if (effect.kind === "splash") {
+        gfx.lineStyle(2, 0x93c5fd, 1 - progress);
+        gfx.strokeCircle(effect.x, effect.y, 4 + progress * 16);
+        gfx.fillStyle(0xbae6fd, (1 - progress) * 0.8);
+        gfx.fillCircle(effect.x, effect.y, 2.5);
+      } else if (effect.kind === "hit") {
+        gfx.fillStyle(0xfca5a5, 1 - progress);
+        gfx.fillCircle(effect.x, effect.y, 3 + progress * 7);
+        gfx.fillStyle(0xfff7ed, (1 - progress) * 0.9);
+        gfx.fillCircle(effect.x, effect.y, 1.5 + progress * 2);
+      } else {
+        gfx.lineStyle(3, 0xf97316, 1 - progress);
+        gfx.strokeCircle(effect.x, effect.y, 8 + progress * 34);
+        gfx.fillStyle(0xfde68a, (1 - progress) * 0.9);
+        gfx.fillCircle(effect.x, effect.y, 8 + progress * 10);
+        gfx.fillStyle(0xf97316, (1 - progress) * 0.5);
+        gfx.fillCircle(effect.x, effect.y, 14 + progress * 16);
       }
     }
   }
@@ -874,6 +1168,9 @@ export class SeaScene extends Phaser.Scene {
         art.wake.strokeCircle(-18, 0, 6);
       }
     }
+    this.drawCombatOverlay(state);
+    this.drawProjectiles(delta);
+    this.drawEffects(delta);
   }
 
   private redrawOcean(): void {

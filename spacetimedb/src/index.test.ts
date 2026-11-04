@@ -1741,3 +1741,251 @@ it("real Shipyard makes a ship, exposes queue only to owner and supports authori
   expect([...test.db.ship.matchId.filter(matchId)]
     .filter(ship => ship.ownerSlot === 0)).toHaveLength(fleetBefore + 1);
 });
+
+
+/** Shared setup for the playable-combat regression slice. */
+function newActiveSkirmish() {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const ships = [...test.db.ship.matchId.filter(matchId)];
+  const attacker = ships.find(row => row.ownerSlot === 0)!;
+  const defender = ships.find(row => row.ownerSlot === 1)!;
+  return { test, alice, bob, matchId, attacker, defender };
+}
+
+function advanceCombatTick(test: any): boolean {
+  test.clock.advance(TimeDuration.fromMillis(100));
+  const timer = [...test.db.combatSchedule.iter()][0];
+  if (!timer) return false;
+  test.withReducerTx(TestAuth.internal(), (ctx: any) =>
+    moduleExports.advanceCombat(ctx, { arg: timer })
+  );
+  return true;
+}
+
+/** Deterministic clear-water lane that is also free of building footprints. */
+function findOpenWaterLane(test: any, matchId: bigint, length: number) {
+  const config = test.db.worldConfig.matchId.find(matchId)!;
+  const world = generateDeterministicWorld(config.seed, 2);
+  const size = world.mapCells;
+  const structures = [...test.db.structure.matchId.filter(matchId)];
+  const clearOfBuildings = (x: number, y: number) => !structures.some(st =>
+    x >= st.gridX - 1 && x < st.gridX + st.width + 1 &&
+    y >= st.gridY - 1 && y < st.gridY + st.height + 1);
+  for (let y = 3; y < size - 3; y++) {
+    for (let x = 3; x < size - 3 - length; x++) {
+      let clear = true;
+      for (let i = 0; i <= length && clear; i++) {
+        if (world.cells[y * size + x + i] !== 0 ||
+            !clearOfBuildings(x + i, y)) clear = false;
+      }
+      if (clear) return { x, y };
+    }
+  }
+  throw new Error("No clear water lane available for this test");
+}
+
+it("attack orders are owner-scoped, replace other tasks, and preserve cancel paths", () => {
+  const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
+  expect(() => test.withReducerTx(bob, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }))).toThrow("Cannot command another");
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: attacker.id,
+  }))).toThrow("Target not visible");
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "planet", targetId: defender.id,
+  }))).toThrow("Target not visible");
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  expect(test.db.attackOrder.count()).toBe(1n);
+  expect(test.db.attackOrder.shipId.find(attacker.id)?.targetId).toBe(defender.id);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: attacker.id }));
+  expect(test.db.attackOrder.count()).toBe(0n);
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
+    shipId: attacker.id, targetX: attacker.x + 1, targetY: attacker.y,
+  }));
+  expect(test.db.attackOrder.count()).toBe(0n);
+  expect(test.db.shipRoute.shipId.find(attacker.id)).toBeTruthy();
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  const enemyStructure = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1)!;
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "structure", targetId: enemyStructure.id,
+  }));
+  expect(test.db.attackOrder.count()).toBe(1n);
+});
+
+it("an in-range attack order aims, fires on cooldown, and applies server damage", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y, hp: 500 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+
+  advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)?.lastFiredAtUs).not.toBe(-1n);
+  expect(test.db.projectile.count()).toBe(1n);
+  const firedAt = test.db.ship.id.find(attacker.id)!.lastFiredAtUs;
+
+  advanceCombatTick(test);
+  // Scout 18 damage minus 2 armour, exactly once.
+  expect(test.db.ship.id.find(defender.id)?.hp).toBe(484);
+
+  // Repeated ticks inside the 950ms cooldown must not create a second shot.
+  for (let i = 0; i < 4; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)?.lastFiredAtUs).toBe(firedAt);
+
+  // After the cooldown the same order fires again without client input.
+  for (let i = 0; i < 5; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)!.lastFiredAtUs - firedAt)
+    .toBeGreaterThanOrEqual(950_000n);
+  // Let that second authoritative projectile reach the target.
+  for (let i = 0; i < 3; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(defender.id)!.hp).toBeLessThan(484);
+});
+
+it("an out-of-range order chases the live target and re-paths when it moves", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  const lane = findOpenWaterLane(test, matchId, 20);
+  const ax = lane.x + 0.5, ay = lane.y + 0.5;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const own = ctx.db.ship.id.find(attacker.id)!;
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...own, x: ax, y: ay });
+    ctx.db.ship.id.update({ ...enemy, x: ax + 12, y: ay, hp: 500 });
+  });
+  const defenderNow = test.db.ship.id.find(defender.id)!;
+
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  const route = test.db.shipRoute.shipId.find(attacker.id);
+  expect(route).toBeTruthy();
+  const routeEnd = route!.cellPath[route!.cellPath.length - 1]!;
+  const cells = test.db.worldConfig.matchId.find(matchId)!.mapCells;
+  const goal = { x: (routeEnd % cells) + 0.5, y: Math.floor(routeEnd / cells) + 0.5 };
+  expect(Math.hypot(goal.x - defenderNow.x, goal.y - defenderNow.y)).toBeLessThanOrEqual(5.5);
+  expect(test.db.attackOrder.count()).toBe(1n);
+
+  // Target movement is re-evaluated: clear the stale route, move the target,
+  // wait past the chase throttle, and verify a fresh approach route.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.shipRoute.shipId.delete(attacker.id);
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...enemy, x: ax + 18, y: ay });
+  });
+  test.clock.advance(TimeDuration.fromMillis(700));
+  const timer = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: timer })
+  );
+  const repathed = test.db.shipRoute.shipId.find(attacker.id);
+  expect(repathed).toBeTruthy();
+  const end = repathed!.cellPath[repathed!.cellPath.length - 1]!;
+  const newGoal = { x: (end % cells) + 0.5, y: Math.floor(end / cells) + 0.5 };
+  expect(Math.hypot(newGoal.x - (ax + 18), newGoal.y - ay)).toBeLessThanOrEqual(5.5);
+});
+
+it("multiple owned ships keep independent attack orders and never duplicate shots", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.insert({
+      ...attacker, id: 0n, x: attacker.x - 1, y: attacker.y,
+      targetX: attacker.x - 1, targetY: attacker.y,
+    });
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y, hp: 900 });
+  });
+  const ownShips = [...test.db.ship.matchId.filter(matchId)]
+    .filter(row => row.ownerSlot === 0)
+    .sort((a, b) => a.id < b.id ? -1 : 1);
+  expect(ownShips).toHaveLength(2);
+  for (const ship of ownShips) {
+    test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+      shipId: ship.id, targetType: "ship", targetId: defender.id,
+    }));
+  }
+  expect(test.db.attackOrder.count()).toBe(2n);
+  advanceCombatTick(test);
+  expect(test.db.projectile.count()).toBe(2n);
+  for (const ship of ownShips)
+    expect(test.db.ship.id.find(ship.id)?.lastFiredAtUs).not.toBe(-1n);
+  const hpAfterOne = test.db.ship.id.find(defender.id)!.hp;
+  advanceCombatTick(test);
+  // Two projectiles, each 16 damage; no extra hidden shots.
+  expect(test.db.ship.id.find(defender.id)!.hp).toBe(hpAfterOne - 32);
+});
+
+it("destroying the target clears the attack order and stops further fire", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y, hp: 1 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)?.lastFiredAtUs).not.toBe(-1n);
+  advanceCombatTick(test);
+  expect(test.db.ship.id.find(defender.id)).toBeFalsy();
+  expect(test.db.attackOrder.count()).toBe(0n);
+  expect(test.db.projectile.count()).toBe(0n);
+  expect(test.db.match.id.find(matchId)?.phase).toBe("active");
+});
+
+it("harvesting still works, replaces attack orders, and combat views stay member-scoped", () => {
+  const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
+  const node = [...test.db.salvageNode.matchId.filter(matchId)]
+    .sort((a, b) => a.id < b.id ? -1 : 1)[0]!;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.salvageNode.id.update({
+      ...node, gridX: Math.floor(attacker.x) + 1, gridY: Math.floor(attacker.y),
+      remaining: node.capacity,
+    });
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.orderHarvest(ctx, {
+    shipId: attacker.id, nodeId: node.id,
+  }));
+  expect(test.db.harvestOrder.count()).toBe(1n);
+  expect(test.db.attackOrder.count()).toBe(0n);
+
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  expect(test.db.harvestOrder.count()).toBe(0n);
+  expect(test.db.attackOrder.count()).toBe(1n);
+
+  test.withReducerTx(alice, ctx => moduleExports.orderHarvest(ctx, {
+    shipId: attacker.id, nodeId: node.id,
+  }));
+  expect(test.db.attackOrder.count()).toBe(0n);
+  expect(test.db.harvestOrder.count()).toBe(1n);
+
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  const aliceOrders = moduleExports.myAttackOrders(test.viewContext(alice));
+  const bobOrders = moduleExports.myAttackOrders(test.viewContext(bob));
+  expect(aliceOrders).toHaveLength(1);
+  expect(bobOrders).toHaveLength(0);
+  const aliceShots = moduleExports.myBattleProjectiles(test.viewContext(alice));
+  const bobShots = moduleExports.myBattleProjectiles(test.viewContext(bob));
+  expect(aliceShots.length).toBeGreaterThan(0);
+  expect(bobShots.length).toBe(aliceShots.length);
+});
