@@ -1479,3 +1479,115 @@ it("atomic box building creates an entire connected deck and schedules its compl
     .filter(row => newDeck.some(st => st.id === row.id));
   expect(completed.every(row => row.complete && row.connected)).toBe(true);
 });
+
+it("new matches seed fair advanced resources and keep wallets private to each identity", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("material-alice", 1101n);
+  const bob = auth("material-bob", 1102n);
+  const stranger = auth("material-stranger", 1103n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  const rawNodes = [...test.db.materialNode.matchId.filter(match.id)];
+  expect(rawNodes.filter(n => n.kind === "oil")).toHaveLength(2);
+  expect(rawNodes.filter(n => n.kind === "alloy")).toHaveLength(2);
+  expect(rawNodes.filter(n => n.kind === "isotope")).toHaveLength(1);
+  expect([...test.db.materialBalance.matchId.filter(match.id)]).toHaveLength(3);
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: match.id }));
+  expect([...test.db.materialBalance.matchId.filter(match.id)]).toHaveLength(6);
+  expect(moduleExports.myMaterialDeposits(test.viewContext(stranger))).toHaveLength(0);
+  expect(moduleExports.myMaterialBalances(test.viewContext(stranger))).toHaveLength(0);
+
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  expect(moduleExports.myMaterialDeposits(test.viewContext(alice))).toHaveLength(rawNodes.length);
+  expect(moduleExports.myMaterialDeposits(test.viewContext(bob))).toHaveLength(rawNodes.length);
+  const aliceWallet = moduleExports.myMaterialBalances(test.viewContext(alice));
+  const bobWallet = moduleExports.myMaterialBalances(test.viewContext(bob));
+  expect(aliceWallet).toHaveLength(3);
+  expect(bobWallet).toHaveLength(3);
+  expect(aliceWallet.every(row => row.amount === 0)).toBe(true);
+  expect(aliceWallet.every(row => !bobWallet.some(other => other.id === row.id))).toBe(true);
+});
+
+it("a real Scout gathers Oil but a foreign identity cannot issue the order", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("oil-scout-owner", 1111n);
+  const bob = auth("oil-scout-outsider", 1112n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId: match.id, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const ship = [...test.db.ship.matchId.filter(match.id)].find(row => row.ownerSlot === 0)!;
+  const oil = [...test.db.materialNode.matchId.filter(match.id)].find(row => row.kind === "oil")!;
+
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({
+      ...ship, x: oil.gridX + 0.5, y: oil.gridY + 0.5,
+    })
+  );
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.orderMaterialHarvest(ctx, { shipId: ship.id, nodeId: oil.id })
+  )).toThrow("Cannot command another");
+  expect(test.db.materialHarvestOrder.count()).toBe(0n);
+
+  test.withReducerTx(alice, ctx =>
+    moduleExports.orderMaterialHarvest(ctx, { shipId: ship.id, nodeId: oil.id })
+  );
+  expect(test.db.materialHarvestOrder.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: timer })
+  );
+  const oilBalance = [...test.db.materialBalance.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "oil")!;
+  expect(oilBalance.amount).toBe(7); // Scout's advanced-material rate, 14 / 2
+  expect(oilBalance.totalGathered).toBe(7n);
+  expect(test.db.materialNode.id.find(oil.id)!.remaining)
+    .toBe(oil.capacity - 7 + oil.regenPerSec);
+
+  // Stopping a hybrid collection order cannot leave a background extractor.
+  test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: ship.id }));
+  expect(test.db.materialHarvestOrder.count()).toBe(0n);
+});
+
+it("connected extractor splits finite throughput across two nearby advanced nodes", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("mixed-rig-owner", 1121n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId: match.id, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  const oil = [...test.db.materialNode.matchId.filter(match.id)]
+    .find(row => row.kind === "oil")!;
+  const alloy = [...test.db.materialNode.matchId.filter(match.id)]
+    .find(row => row.kind === "alloy")!;
+  // Internal harness setup is not an RPC a player can call.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.materialNode.id.update({ ...oil, gridX: core.gridX + 1, gridY: core.gridY + 4 });
+    ctx.db.materialNode.id.update({ ...alloy, gridX: core.gridX + 2, gridY: core.gridY + 4 });
+    ctx.db.structure.insert({
+      id: 0n, matchId: match.id, ownerSlot: 0, kind: "salvage_rig",
+      channel: "superstructure", gridX: core.gridX, gridY: core.gridY + 3,
+      width: 2, height: 2, hp: 560, lastFiredAtUs: -1n,
+      turretAngleDeg: 0, level: 1, upgradeRemainingUs: 0n,
+      upgradeStartedAtUs: 0n, complete: true, connected: true, completeAtUs: 0n,
+    });
+  });
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: timer })
+  );
+  const balances = [...test.db.materialBalance.matchId.filter(match.id)]
+    .filter(row => row.ownerSlot === 0);
+  expect(balances.find(row => row.kind === "oil")?.amount).toBe(4);
+  expect(balances.find(row => row.kind === "alloy")?.amount).toBe(4);
+  const credited = balances.reduce((sum, row) => sum + row.amount, 0);
+  expect(credited).toBe(8); // hard total budget despite two deposits
+});
