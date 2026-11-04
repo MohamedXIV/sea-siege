@@ -3,6 +3,7 @@ import { FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT } from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
 import { TacticalOverview } from "@/components/TacticalOverview";
 import { GeminiCommandDock } from "@/components/GeminiCommandDock";
+import { MaterialInventory } from "@/components/MaterialInventory";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 
 interface MatchHudProps {
@@ -67,9 +68,10 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
         )}
 
         <div className="pointer-events-auto w-full max-w-2xl rounded-lg border border-slate-700/70 bg-slate-950/85 p-3 shadow-xl backdrop-blur-md">
-          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <MaterialInventory state={state} />
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-slate-400">Salvage</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-400">Iron (legacy)</div>
               <div className="font-mono text-lg font-bold text-amber-300">
                 {state.myFaction?.salvage ?? "—"}
               </div>
