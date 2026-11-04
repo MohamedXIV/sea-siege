@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { spacetimeClient, type SpacetimeClientState } from "../network/spacetime-client";
-import { SnapshotBuffer, type MotionSnapshot } from "./motion/SnapshotBuffer";
+import { SnapshotBuffer, shouldRecordMotionSample, type MotionSnapshot } from "./motion/SnapshotBuffer";
 import {
   GEMINI_TILE_SIZE as TILE,
   geminiFactionColor,
@@ -493,12 +493,7 @@ export class SeaScene extends Phaser.Scene {
         hullAngle: ship.hullAngleDeg * Math.PI / 180,
         turretAngle: ship.turretAngleDeg * Math.PI / 180,
       };
-      if (!previous ||
-          sample.revision !== previous.revision ||
-          sample.x !== previous.x || sample.y !== previous.y ||
-          sample.vx !== previous.vx || sample.vy !== previous.vy ||
-          sample.hullAngle !== previous.hullAngle ||
-          sample.turretAngle !== previous.turretAngle) {
+      if (shouldRecordMotionSample(previous, sample)) {
         art.motion.push(sample);
         art.lastSnapshot = sample;
       }
