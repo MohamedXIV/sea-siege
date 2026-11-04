@@ -30,6 +30,17 @@ The original single-page renderer is Canvas 2D **only as a source example**. Ren
 - Treat all present changes as **Draft / NOT TESTED** until the owner runs Windows local SpacetimeDB + Vite checks and actually plays. Server table/view changes need **non-destructive** module publish and regenerated client bindings.
 - Don't change the preserved archive's original hashes or ship its fake network implementation.
 
+## Active gameplay control fixes (4 November 2026)
+
+The owner playtested the Gemini world and requested these input / world-presence repairs. They are implemented as **unverified draft code** on `feat/gemini-box-selection-construction-ocean` (stacked after the prior gameplay fixes):
+
+- **Esc or right-click** cancels active build mode, clears the preview and updates React and Phaser together.
+- **Left-drag, no build selected:** selects all friendly ships whose hull intersects the marquee. Empty drag clears selection. Selected fleet may receive server-authoritative movement orders with loose spacing.
+- **Left-drag, build selected:** previews a bounded rectangular batch. A start cell, end cell and every footprint must validate with the *existing server rules*; any gap, obstructing terrain/deposit/hull/building, insufficient Salvage, unsupported platform or misaligned 2×2 footprint rejects the **entire** batch. Max 64 structures. One authenticated SpacetimeDB reducer commits it atomically and schedules normal construction completion; no partial purchases and no fake client-side placement.
+- **Continuous ocean:** view bounds now come from the actual camera inverse projection at every zoom; endless animated sea is rendered even beyond the finite authoritative map. The camera is no longer hard-clamped to the map edges; movement/building legality remains server-bounded.
+
+The branch changes the server reducer API, not tables. Local tests require a **non-destructive** `spacetime publish --server local` and `npm run db:generate` before client typechecking. Browser acceptance remains mandatory; don't mark this complete based on source alone.
+
 ## Required parity acceptance
 
 1. Open Quick Play: see both factions, their command cores and scouts; map matches real seeded server data.
