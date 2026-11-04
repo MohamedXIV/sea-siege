@@ -9,6 +9,8 @@ import { factionKey, mayControlFaction } from "./sim/faction-ownership.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
+import { generateMaterialNodes } from "./sim/material-world.ts";
+import { ADVANCED_RESOURCE_KINDS, materialBalanceKey } from "./sim/materials.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { BOT_RULES } from "./sim/bot-policy.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
@@ -76,6 +78,16 @@ export const createMatch = spacetimedb.reducer(
         regenPerSec: node.regenPerSec, contested: node.contested,
       });
     }
+    // Advanced materials live alongside the legacy Salvage/Iron nodes. This
+    // is additive: old persisted matches and currencies remain valid.
+    for (const node of generateMaterialNodes(world)) {
+      ctx.db.materialNode.insert({
+        id: 0n, matchId: created.id, kind: node.kind,
+        gridX: node.gridX, gridY: node.gridY,
+        capacity: node.capacity, remaining: node.capacity,
+        regenPerSec: node.regenPerSec, contested: node.contested,
+      });
+    }
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       factionKey: factionKey(created.id, 0),
@@ -86,6 +98,13 @@ export const createMatch = spacetimedb.reducer(
       salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId: created.id, ownerSlot: 0,
+        materialKey: materialBalanceKey(created.id, 0, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
     const initial = world.spawns[0]!;
     for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
       const definition = CONSTRUCTION_RULES.definitions[base.kind];
@@ -145,6 +164,13 @@ export const joinMatch = spacetimedb.reducer(
       controller: "human", salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId, ownerSlot: slot,
+        materialKey: materialBalanceKey(matchId, slot, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
     if (!spawn) throw new SenderError("Missing server-owned spawn assignment");
     for (const base of initialStructures(slot, spawn.gridX, spawn.gridY)) {
