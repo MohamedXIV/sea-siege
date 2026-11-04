@@ -132,6 +132,51 @@ const salvageNode = table(
 );
 
 
+/**
+ * Additive resource-economy migration: existing faction_state.salvage and
+ * salvage_node remain authoritative for ordinary Iron/legacy Salvage. Older
+ * matches continue working unmodified; new matches gain typed advanced nodes.
+ * All three tables below are PRIVATE. Publish views, never raw tables.
+ */
+export const materialNode = table(
+  { name: "material_node" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    kind: t.string(), // oil | alloy | isotope
+    gridX: t.u32(),
+    gridY: t.u32(),
+    capacity: t.u32(),
+    remaining: t.u32(),
+    regenPerSec: t.u32(),
+    contested: t.bool(),
+  },
+);
+
+export const materialBalance = table(
+  { name: "material_balance" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    ownerSlot: t.u32(),
+    materialKey: t.string().unique(), // matchId:slot:kind
+    kind: t.string(),
+    amount: t.u32(),
+    totalGathered: t.u64(),
+  },
+);
+
+/** One advanced-material target per ship; ordinary Iron harvest stays intact. */
+export const materialHarvestOrder = table(
+  { name: "material_harvest_order" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    nodeId: t.u64(),
+    assignedAtUs: t.i64(),
+  },
+);
+
 /** Each ship can harvest one server-authorized salvage node at a time. */
 const harvestOrder = table(
   { name: "harvest_order" },
@@ -300,7 +345,9 @@ export const botSchedule = table(
 
 const spacetimedb = schema({
   match, matchMember, factionState, botController, ship, shipRoute, motionSchedule,
-  worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
+  worldConfig, worldSpawn, worldChunk, salvageNode,
+  materialNode, materialBalance, materialHarvestOrder,
+  structure, constructionSchedule,
   harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
   matchDeadline, botSchedule,
 });
