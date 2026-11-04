@@ -7,6 +7,10 @@ import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
 import { terrainLineOfSight } from "./sim/combat.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
+  ADVANCED_RESOURCE_KINDS, allocateResourceDraws, materialBalanceKey,
+  MAX_MATERIAL_BALANCE, type AdvancedResourceKind,
+} from "./sim/materials.ts";
+import {
   ECONOMY_RULES, advanceProduction, cappedElapsedUs, creditSalvage,
   debitSalvage, drawSalvage, replenishSalvage, inRange, rigExtraction,
   shipDefinition, findShipyardSpawn, type ShipKind,
@@ -58,6 +62,66 @@ export const orderHarvest = spacetimedb.reducer(
       },
     });
     if (!result.ok) throw new SenderError(result.reason);
+    // A hybrid fighting ship may have one resource task, never two paid
+    // extraction orders that duplicate production from the same hull.
+    ctx.db.materialHarvestOrder.shipId.delete(shipId);
+  },
+);
+
+/**
+ * Direct advanced-material harvest. Scouts/Gunboats still fight AND gather.
+ * Action is server-authorized, stopped within physical range, and competes
+ * for the same physical node reserve as nearby fixed extractors.
+ */
+export const orderMaterialHarvest = spacetimedb.reducer(
+  { shipId: t.u64(), nodeId: t.u64() },
+  (ctx, { shipId, nodeId }) => {
+    const vessel = ctx.db.ship.id.find(shipId);
+    const node = ctx.db.materialNode.id.find(nodeId);
+    if (!vessel || !node || node.matchId !== vessel.matchId ||
+        node.remaining === 0 ||
+        !ADVANCED_RESOURCE_KINDS.includes(node.kind as AdvancedResourceKind))
+      throw new SenderError("Material deposit unavailable");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(vessel.matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    const faction = Array.from(ctx.db.factionState.matchId.filter(vessel.matchId))
+      .find(row => row.slot === vessel.ownerSlot && row.controller === "human");
+    if (!mayControlFaction(member?.slot, vessel.ownerSlot, faction?.eliminated ?? true))
+      throw new SenderError("Cannot command another player's ship");
+    const match = ctx.db.match.id.find(vessel.matchId);
+    if (!match || !matchStillActive(match.phase, match.startedAtUs,
+      ctx.timestamp.microsSinceUnixEpoch))
+      throw new SenderError("Match is not active");
+    const definition = shipDefinition(vessel.kind);
+    if (!definition || definition.harvestPerSecond === 0 || vessel.hp === 0)
+      throw new SenderError("This ship cannot collect materials");
+    if (!inRange({ x: vessel.x, y: vessel.y },
+      { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+      ECONOMY_RULES.harvestRangeCells))
+      throw new SenderError("Material deposit out of range");
+    const world = ctx.db.worldConfig.matchId.find(vessel.matchId);
+    if (!world) throw new SenderError("Missing authoritative world");
+    const terrain = decodeTerrainChunks(world.mapCells,
+      Array.from(ctx.db.worldChunk.matchId.filter(vessel.matchId)));
+    if (!terrainLineOfSight(
+      { x: vessel.x, y: vessel.y },
+      { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+      terrain, world.mapCells))
+      throw new SenderError("Terrain blocks the material deposit");
+    const existing = ctx.db.materialHarvestOrder.shipId.find(shipId);
+    const order = {
+      shipId, matchId: vessel.matchId, nodeId,
+      assignedAtUs: ctx.timestamp.microsSinceUnixEpoch,
+    };
+    if (existing) ctx.db.materialHarvestOrder.shipId.update({ ...existing, ...order });
+    else ctx.db.materialHarvestOrder.insert(order);
+    ctx.db.harvestOrder.shipId.delete(shipId);
+    ctx.db.shipRoute.shipId.delete(shipId);
+    ctx.db.ship.id.update({
+      ...vessel, velocityX: 0, velocityY: 0,
+      targetX: vessel.x, targetY: vessel.y,
+      revision: vessel.revision + 1n, updatedAt: ctx.timestamp,
+    });
   },
 );
 
