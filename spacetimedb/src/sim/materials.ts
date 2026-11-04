@@ -13,6 +13,8 @@ export const RESOURCE_TYPES = {
 } as const;
 export type ResourceKind = keyof typeof RESOURCE_TYPES;
 export type AdvancedResourceKind = Exclude<ResourceKind, "iron">;
+export const materialBalanceKey = (matchId: bigint, slot: number, kind: AdvancedResourceKind): string =>
+  `${matchId.toString()}:${slot}:${kind}`;
 export const ADVANCED_RESOURCE_KINDS = ["oil", "alloy", "isotope"] as const;
 
 export type ResourceWallet = Readonly<Record<ResourceKind, number>>;
