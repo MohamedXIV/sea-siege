@@ -32,7 +32,7 @@ export function BuildingInspector({
   const baseHp = buildingMaxHp(building.kind);
   const maxHp = baseHp === null ? null :
     building.kind === "workshop" && ownedRow
-      ? baseHp + WORKSHOP_RULES.tiers[ownedRow.level as 1 | 2 | 3]?.extraMaxHp
+      ? baseHp + (WORKSHOP_RULES.tiers[ownedRow.level as 1 | 2 | 3]?.extraMaxHp ?? 0)
       : baseHp;
 
   const jobs = own && building.kind === "shipyard"
