@@ -82,6 +82,21 @@ export const ship = table(
 );
 
 
+/**
+ * Additive upgrade state; the original ship schema is unchanged so already
+ * persisted matches do not require a destructive SpacetimeDB migration.
+ * Refits are private to the owning human seat; effects remain authoritative.
+ */
+export const shipRefit = table(
+  { name: "ship_refit" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    reinforcedHull: t.bool(),
+    highOutputEngine: t.bool(),
+  },
+);
+
 /** Secret generation parameters: public match rows must NEVER expose the world seed. */
 const worldConfig = table(
   { name: "world_config" },
@@ -344,7 +359,7 @@ export const botSchedule = table(
 );
 
 const spacetimedb = schema({
-  match, matchMember, factionState, botController, ship, shipRoute, motionSchedule,
+  match, matchMember, factionState, botController, ship, shipRefit, shipRoute, motionSchedule,
   worldConfig, worldSpawn, worldChunk, salvageNode,
   materialNode, materialBalance, materialHarvestOrder,
   structure, constructionSchedule,
