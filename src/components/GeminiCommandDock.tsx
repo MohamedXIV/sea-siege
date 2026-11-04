@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Hammer, Anchor, Crosshair, CircleStop, Pickaxe } from "lucide-react";
+import { Hammer, Crosshair, CircleStop, Pickaxe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   GEMINI_BUILD_MODE_EVENT, GEMINI_SELECTION_EVENT, GEMINI_FEEDBACK_EVENT,
@@ -10,6 +10,7 @@ import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import { RESOURCE_TYPES, type ResourceKind } from "../../spacetimedb/src/sim/materials";
 import { ShipRefitPanel } from "@/components/ShipRefitPanel";
+import { BuildingInspector } from "@/components/BuildingInspector";
 
 type Selection =
   | { type: "ship"; id: bigint; shipIds?: bigint[] }
@@ -23,7 +24,6 @@ const BUILD_TYPES: { kind: BuildKind; label: string }[] = [
   { kind: "cannon", label: "Defense Cannon" },
   { kind: "salvage_rig", label: "Salvage Rig" },
 ];
-const SHIP_TYPES = ["scout", "gunboat", "siege"] as const;
 
 /**
  * Minimal functional version of Gemini's Construction Dock + Selection Panel.
@@ -109,10 +109,8 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
   const selectedShips = state.myShips.filter(ship => selectedShipIds.includes(ship.id));
   const selectedShip = selectedShips.length === 1 ? selectedShips[0] : undefined;
   const selectedBuilding = selected?.type === "structure"
-    ? state.myStructures.find(st => st.id === selected.id)
+    ? state.battleStructures.find(st => st.id === selected.id)
     : undefined;
-  const yard = selectedBuilding?.kind === "shipyard" && selectedBuilding.complete &&
-    selectedBuilding.connected ? selectedBuilding : undefined;
   const salvage = state.myFaction?.salvage ?? 0;
 
   const harvestNearest = (kind: ResourceKind) => {
@@ -183,7 +181,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
         )}
       </section>
 
-      <section className="min-w-0">
+      <section className="min-w-0 max-h-[42svh] overflow-y-auto pr-1">
         <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-sky-300">
           <Crosshair className="size-3.5" /> TACTICAL COMMAND
         </div>
@@ -231,29 +229,14 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
             <p className="text-[10px] text-slate-400">Pick a material to approach or gather. At harvesting range, click again to start extraction; combat stays available.</p>
             <ShipRefitPanel state={state} ship={selectedShip} />
           </div>
-        ) : yard ? (
-          <div className="space-y-1.5">
-            <div className="text-xs font-semibold text-white">SHIPYARD · HP {yard.hp}</div>
-            <div className="flex flex-wrap gap-1.5">
-              {SHIP_TYPES.map(kind => (
-                <Button key={kind} size="sm" variant="outline"
-                  disabled={pending || salvage < ECONOMY_RULES.ships[kind].cost}
-                  onClick={() => void perform(() => spacetimeClient.enqueueShip(yard.id, kind))}
-                  className="border-slate-700 text-xs">
-                  <Anchor className="size-3" />
-                  {kind} · {ECONOMY_RULES.ships[kind].cost}
-                </Button>
-              ))}
-            </div>
-          </div>
         ) : selectedBuilding ? (
-          <div className="text-xs text-slate-300">
-            <div className="font-semibold text-white">{selectedBuilding.kind.toUpperCase()}</div>
-            HP {selectedBuilding.hp} · {selectedBuilding.complete ? "Complete" : "Building"}
-          </div>
+          <BuildingInspector
+            state={state} building={selectedBuilding}
+            pending={pending} perform={perform}
+          />
         ) : (
           <p className="text-[11px] leading-5 text-slate-400">
-            Select a friendly ship to move/harvest, or a Shipyard to queue a Scout, Gunboat or Siege vessel.
+            Click any building to inspect its purpose and status. Click an owned Shipyard to queue Scouts, Gunboats or Siege ships.
           </p>
         )}
         {error && <p role="alert" className="mt-2 text-[11px] text-rose-300">{error}</p>}
