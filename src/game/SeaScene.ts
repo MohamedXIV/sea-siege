@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { spacetimeClient, type SpacetimeClientState } from "../network/spacetime-client";
-import { SnapshotBuffer } from "./motion/SnapshotBuffer";
+import { SnapshotBuffer, type MotionSnapshot } from "./motion/SnapshotBuffer";
 import {
   GEMINI_TILE_SIZE as TILE,
   geminiFactionColor,
@@ -27,7 +27,7 @@ interface VesselArt {
   highlight: Phaser.GameObjects.Graphics;
   wake: Phaser.GameObjects.Graphics;
   motion: SnapshotBuffer;
-  revision: bigint;
+  lastSnapshot: MotionSnapshot | null;
   kind: string;
   slot: number;
 }
@@ -470,8 +470,8 @@ export class SeaScene extends Phaser.Scene {
         container.add([wake, highlight, hull, turret]);
         art = {
           container, hull, turret, highlight, wake,
-          motion: new SnapshotBuffer({ capacity: 16, maxExtrapolationMs: 250 }),
-          revision: -1n, kind: "", slot: -1,
+          motion: new SnapshotBuffer({ capacity: 16, maxExtrapolationMs: 120 }),
+          lastSnapshot: null, kind: "", slot: -1,
         };
         this.vessels.set(ship.id, art);
       }
@@ -480,15 +480,27 @@ export class SeaScene extends Phaser.Scene {
         art.slot = ship.ownerSlot;
         this.drawVessel(art, ship);
       }
-      if (art.revision !== ship.revision || ship.velocityX || ship.velocityY) {
-        art.revision = ship.revision;
-        art.motion.push({
-          timeMs: now, revision: Number(ship.revision),
-          x: ship.x, y: ship.y,
-          vx: ship.velocityX, vy: ship.velocityY,
-          hullAngle: ship.hullAngleDeg * Math.PI / 180,
-          turretAngle: ship.turretAngleDeg * Math.PI / 180,
-        });
+      // Motion schedule updates position/velocity WITHOUT incrementing the
+      // command revision. The previous condition ignored a final zero-speed
+      // arrival, then snapped to the real endpoint when the next order bumped
+      // revision. Compare authoritative KINEMATICS, not just order revision.
+      // Also avoid appending fake duplicate samples during unrelated table updates.
+      const previous = art.lastSnapshot;
+      const sample: MotionSnapshot = {
+        timeMs: Math.max(now, (previous?.timeMs ?? 0) + 1),
+        revision: Number(ship.revision),
+        x: ship.x, y: ship.y, vx: ship.velocityX, vy: ship.velocityY,
+        hullAngle: ship.hullAngleDeg * Math.PI / 180,
+        turretAngle: ship.turretAngleDeg * Math.PI / 180,
+      };
+      if (!previous ||
+          sample.revision !== previous.revision ||
+          sample.x !== previous.x || sample.y !== previous.y ||
+          sample.vx !== previous.vx || sample.vy !== previous.vy ||
+          sample.hullAngle !== previous.hullAngle ||
+          sample.turretAngle !== previous.turretAngle) {
+        art.motion.push(sample);
+        art.lastSnapshot = sample;
       }
     }
   }
