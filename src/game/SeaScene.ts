@@ -439,7 +439,8 @@ export class SeaScene extends Phaser.Scene {
           success: true,
         },
       }));
-      this.drawBuildPreview();
+      if (kind !== "platform" && this.buildKind === kind) this.cancelBuilding();
+      else this.drawBuildPreview();
     }).catch(err => this.reportOrderError(err));
   }
 
@@ -513,7 +514,11 @@ export class SeaScene extends Phaser.Scene {
         window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
           detail: { message: kind + " construction queued", success: true },
         }));
-        this.drawBuildPreview();
+        // A placed Shipyard/Workshop/Rig/Cannon is ready to be inspected.
+        // Keep rapid repeated Platform placement, but release single-building
+        // tools automatically so the next click selects the finished building.
+        if (kind !== "platform" && this.buildKind === kind) this.cancelBuilding();
+        else this.drawBuildPreview();
       }).catch(err => this.reportOrderError(err));
       return;
     }
