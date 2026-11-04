@@ -97,9 +97,9 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
             <div className="space-y-1">
               <span className="flex items-center gap-1">
-                <Compass className="size-3 text-cyan-300" /> Click your ship, then water to move
+                <Compass className="size-3 text-cyan-300" /> LMB select / drag to box-select · RMB move
               </span>
-              <div>Gemini 40px battlefield: no Fog of War. E: rival base · H: home</div>
+              <div>Drag empty sea to deselect · Esc/RMB cancel build · E enemy · H home</div>
             </div>
             <div className="flex items-center gap-1">
               <Button
