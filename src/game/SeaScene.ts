@@ -7,6 +7,10 @@ import {
   geminiStructureTexture,
 } from "./art/GeminiPixelArt";
 import type { GeminiBattleShip, GeminiBattleStructure } from "../module_bindings/types";
+import {
+  validateStructurePlacement, type StructureKind,
+} from "../../spacetimedb/src/sim/construction";
+import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 
 const INTERPOLATION_DELAY_MS = 100;
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
@@ -49,6 +53,8 @@ export class SeaScene extends Phaser.Scene {
   private buildKind: string | null = null;
   private buildPreview!: Phaser.GameObjects.Graphics;
   private cursorCell: { x: number; y: number } | null = null;
+  private validatedTerrain: Uint8Array | null = null;
+  private validatedMapCells = 0;
   private unsubscribeClient: (() => void) | null = null;
   private currentMatch: bigint | null = null;
   private centeredMatchId: bigint | null = null;
@@ -71,6 +77,7 @@ export class SeaScene extends Phaser.Scene {
 
     this.input.mouse?.disableContextMenu();
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!this.isWorldPointer(pointer)) return;
       if (!pointer.middleButtonDown() && !pointer.rightButtonDown()) return;
       this.drag = {
         x: pointer.x, y: pointer.y,
@@ -79,10 +86,13 @@ export class SeaScene extends Phaser.Scene {
       };
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-      if (this.buildKind) {
+      if (this.buildKind && this.isWorldPointer(pointer)) {
         const p = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        this.cursorCell = { x: Math.floor(p.x / TILE), y: Math.floor(p.y / TILE) };
-        this.drawBuildPreview();
+        const x = Math.floor(p.x / TILE), y = Math.floor(p.y / TILE);
+        if (this.cursorCell?.x !== x || this.cursorCell.y !== y) {
+          this.cursorCell = { x, y };
+          this.drawBuildPreview();
+        }
       }
       if (!this.drag) return;
       const dx = pointer.x - this.drag.x;
@@ -98,7 +108,8 @@ export class SeaScene extends Phaser.Scene {
       this.drag = null;
       if (!moved) this.pointerCommand(pointer);
     });
-    this.input.on("wheel", (_p: unknown, _over: unknown, _dx: number, dy: number) => {
+    this.input.on("wheel", (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
+      if (!this.isWorldPointer(pointer)) return;
       this.cameras.main.setZoom(Phaser.Math.Clamp(
         this.cameras.main.zoom * (dy > 0 ? 0.91 : 1.09), 0.45, 2.4
       ));
@@ -180,10 +191,13 @@ export class SeaScene extends Phaser.Scene {
     const sizes: Record<string, number> = { platform: 1, cannon: 1, shipyard: 2, workshop: 2, salvage_rig: 2 };
     const size = sizes[this.buildKind] ?? 1;
     const x = this.cursorCell.x * TILE, y = this.cursorCell.y * TILE;
-    // Yellow preview is deliberately neutral. Server alone decides validity.
-    this.buildPreview.fillStyle(0xeab308, 0.23);
+    // Preview reuses the exact pure server validator, but is advisory:
+    // SpacetimeDB always validates again with current authoritative state.
+    const reason = this.placementError(this.buildKind, this.cursorCell.x, this.cursorCell.y);
+    const color = reason ? 0xef4444 : 0x22c55e;
+    this.buildPreview.fillStyle(color, 0.23);
     this.buildPreview.fillRect(x, y, size * TILE, size * TILE);
-    this.buildPreview.lineStyle(2, 0xfef08a, 0.85);
+    this.buildPreview.lineStyle(2, color, 0.85);
     this.buildPreview.strokeRect(x, y, size * TILE, size * TILE);
   }
 
@@ -199,18 +213,67 @@ export class SeaScene extends Phaser.Scene {
     console.warn("Server rejected gameplay command:", message);
   }
 
+  /**
+   * Phaser can receive global pointer-up events even when React overlays are
+   * visible. Only input whose native target AND hit-tested topmost element are
+   * the actual game canvas is a valid world command.
+   */
+  private isWorldPointer(pointer: Phaser.Input.Pointer): boolean {
+    const event = pointer.event as MouseEvent | undefined;
+    if (!event || event.target !== this.game.canvas) return false;
+    return document.elementFromPoint(event.clientX, event.clientY) === this.game.canvas;
+  }
+
+  private placementError(kind: string, x: number, y: number): string | null {
+    const state = spacetimeClient.getState();
+    const slot = state.myMembership?.slot;
+    if (!this.validatedTerrain || slot === undefined || !state.activeMatchId)
+      return "World is not ready for construction";
+    return validateStructurePlacement({
+      kind: kind as StructureKind,
+      ownerSlot: slot,
+      gridX: x,
+      gridY: y,
+      salvage: state.myFaction?.salvage ?? 0,
+      mapCells: this.validatedMapCells,
+      terrain: this.validatedTerrain,
+      structures: state.battleStructures.map(st => ({
+        id: st.id, ownerSlot: st.ownerSlot, kind: st.kind as StructureKind,
+        gridX: st.gridX, gridY: st.gridY, width: st.width, height: st.height,
+        complete: st.complete,
+      })),
+      deposits: state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
+      hulls: state.battleShips.map(s => ({ x: s.x, y: s.y, radius: s.radiusCells })),
+    });
+  }
+
   private pointerCommand(pointer: Phaser.Input.Pointer): void {
+    if (!this.isWorldPointer(pointer)) return;
     const state = spacetimeClient.getState();
     if (state.activeMatch?.phase !== "active") return;
     const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     const x = world.x / TILE, y = world.y / TILE;
-    if (this.buildKind && pointer.leftButtonReleased()) {
+    // Use the native released mouse button. Phaser's "leftButtonReleased"
+    // reflects aggregate button state and can misinterpret pointer-up input.
+    const button = (pointer.event as MouseEvent).button;
+    if (this.buildKind) {
+      if (button !== 0) return;
       const gridX = Math.floor(x), gridY = Math.floor(y);
-      spacetimeClient.placeStructure(this.buildKind, gridX, gridY)
-        .catch(err => this.reportOrderError(err));
+      const reason = this.placementError(this.buildKind, gridX, gridY);
+      if (reason) {
+        this.reportOrderError(reason);
+        return;
+      }
+      const kind = this.buildKind;
+      spacetimeClient.placeStructure(kind, gridX, gridY).then(() => {
+        window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
+          detail: { message: kind + " construction queued" },
+        }));
+        this.drawBuildPreview();
+      }).catch(err => this.reportOrderError(err));
       return;
     }
-    if (pointer.leftButtonReleased()) {
+    if (button === 0) {
       const hit = state.myShips.find(ship => {
         const art = this.vessels.get(ship.id);
         const px = art ? art.container.x / TILE : ship.x;
@@ -236,7 +299,7 @@ export class SeaScene extends Phaser.Scene {
       }
     }
 
-    if (this.selectedShipId !== null) {
+    if (this.selectedShipId !== null && button === 2) {
       const node = state.salvageNodes.find(n =>
         n.remaining > 0 && Math.abs(x - n.gridX - 0.5) < 0.8 &&
         Math.abs(y - n.gridY - 0.5) < 0.8
@@ -253,8 +316,9 @@ export class SeaScene extends Phaser.Scene {
         return;
       }
     }
-    if (this.selectedShipId !== null &&
-        (pointer.leftButtonReleased() || pointer.rightButtonReleased())) {
+    // Left click selects; right click orders movement (Gemini RTS control).
+    // A click on the HUD must never issue a move beneath it.
+    if (this.selectedShipId !== null && button === 2) {
       const shipId = this.selectedShipId;
       const targetX = Math.round(x * 10) / 10;
       const targetY = Math.round(y * 10) / 10;
@@ -281,6 +345,8 @@ export class SeaScene extends Phaser.Scene {
       this.currentMatch = matchId;
       this.centeredMatchId = null;
       this.worldRevision = "";
+      this.validatedTerrain = null;
+      this.validatedMapCells = 0;
       this.clearEntities();
       this.terrain.clear();
       this.deposits.clear();
@@ -305,6 +371,11 @@ export class SeaScene extends Phaser.Scene {
     if (this.worldRevision === signature) return;
     this.worldRevision = signature;
     const cells = chunks[0]!.mapCells;
+    this.validatedMapCells = cells;
+    this.validatedTerrain = decodeTerrainChunks(cells, chunks.map(chunk => ({
+      chunkX: chunk.chunkX, chunkY: chunk.chunkY,
+      terrain: Array.from(chunk.terrain),
+    })));
     this.cameras.main.setBounds(0, 0, cells * TILE, cells * TILE);
     this.terrain.clear();
     for (const chunk of chunks) {
@@ -480,16 +551,17 @@ export class SeaScene extends Phaser.Scene {
 
   private redrawOcean(): void {
     if (!this.ocean) return;
-    const state = spacetimeClient.getState();
-    const cells = state.worldChunks[0]?.mapCells ?? 56;
+    // Infinite *visual* ocean. The server map remains finite for commands;
+    // water extends beyond its edges wherever the camera can see.
     const camera = this.cameras.main;
-    const startX = Math.max(0, Math.floor(camera.scrollX / TILE) - 1);
-    const startY = Math.max(0, Math.floor(camera.scrollY / TILE) - 1);
-    const endX = Math.min(cells, Math.ceil((camera.scrollX + this.scale.width / camera.zoom) / TILE) + 2);
-    const endY = Math.min(cells, Math.ceil((camera.scrollY + this.scale.height / camera.zoom) / TILE) + 2);
+    const startX = Math.floor(camera.scrollX / TILE) - 2;
+    const startY = Math.floor(camera.scrollY / TILE) - 2;
+    const endX = Math.ceil((camera.scrollX + this.scale.width / camera.zoom) / TILE) + 3;
+    const endY = Math.ceil((camera.scrollY + this.scale.height / camera.zoom) / TILE) + 3;
     this.ocean.clear();
     this.ocean.fillStyle(0x06131f, 1);
-    this.ocean.fillRect(0, 0, cells * TILE, cells * TILE);
+    this.ocean.fillRect(startX * TILE, startY * TILE,
+      (endX - startX) * TILE, (endY - startY) * TILE);
     const t = this.elapsed * 0.0012;
     for (let gy = startY; gy < endY; gy++) for (let gx = startX; gx < endX; gx++) {
       const v = Math.sin(gx * 0.35 + t) * 0.5 +
