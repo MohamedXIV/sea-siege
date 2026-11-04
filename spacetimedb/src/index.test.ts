@@ -1675,3 +1675,69 @@ it("a workshop refit uses actual Oil/Alloys, rejects outsiders and supports upgr
   expect(test.db.ship.id.find(ship.id)?.hp).toBe(330);
   expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 150);
 });
+
+it("real Shipyard makes a ship, exposes queue only to owner and supports authorized cancellation", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("yard-alice", 1301n);
+  const bob = auth("yard-bob", 1302n);
+  const outsider = auth("yard-outsider", 1303n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(st => st.ownerSlot === 0 && st.kind === "command_core")!;
+
+  // Initial Gemini 3×2 completed deck supports a Shipyard at this location.
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "shipyard", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const yard = [...test.db.structure.matchId.filter(matchId)]
+    .find(st => st.ownerSlot === 0 && st.kind === "shipyard")!;
+  test.clock.advance(TimeDuration.fromMillis(6000));
+  const completion = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: completion })
+  );
+  const operational = test.db.structure.id.find(yard.id)!;
+  expect(operational.complete).toBe(true);
+  expect(operational.connected).toBe(true);
+
+  const faction = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.slot === 0)!;
+  const ironBefore = faction.salvage;
+  test.withReducerTx(alice, ctx => moduleExports.enqueueShip(ctx, {
+    shipyardId: yard.id, kind: "scout",
+  }));
+  expect(moduleExports.myProductionJobs(test.viewContext(alice))).toHaveLength(1);
+  expect(moduleExports.myProductionJobs(test.viewContext(bob))).toHaveLength(0);
+  expect(moduleExports.myProductionJobs(test.viewContext(outsider))).toHaveLength(0);
+  expect(test.db.factionState.id.find(faction.id)!.salvage).toBe(ironBefore - 70);
+  const paidJob = moduleExports.myProductionJobs(test.viewContext(alice))[0]!;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.cancelShipProduction(ctx, { orderId: paidJob.id })
+  )).toThrow("Not your production order");
+  test.withReducerTx(alice, ctx =>
+    moduleExports.cancelShipProduction(ctx, { orderId: paidJob.id })
+  );
+  expect(moduleExports.myProductionJobs(test.viewContext(alice))).toHaveLength(0);
+  expect(test.db.factionState.id.find(faction.id)!.salvage).toBe(ironBefore);
+
+  // A new paid job progresses on the real 1Hz authoritative schedule and
+  // launches into navigable sea; no browser-side fake ship spawning.
+  const fleetBefore = [...test.db.ship.matchId.filter(matchId)]
+    .filter(ship => ship.ownerSlot === 0).length;
+  test.withReducerTx(alice, ctx => moduleExports.enqueueShip(ctx, {
+    shipyardId: yard.id, kind: "scout",
+  }));
+  for (let i = 0; i < 7; i++) {
+    test.clock.advance(TimeDuration.fromMillis(1000));
+    const timer = [...test.db.economySchedule.iter()][0]!;
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceEconomy(ctx, { arg: timer })
+    );
+  }
+  expect(moduleExports.myProductionJobs(test.viewContext(alice))).toHaveLength(0);
+  expect([...test.db.ship.matchId.filter(matchId)]
+    .filter(ship => ship.ownerSlot === 0)).toHaveLength(fleetBefore + 1);
+});
