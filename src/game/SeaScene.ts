@@ -70,6 +70,7 @@ export class SeaScene extends Phaser.Scene {
   private selectionGraphics!: Phaser.GameObjects.Graphics;
   private leftDrag: LeftDrag | null = null;
   private suppressRightUp = false;
+  private suppressLeftUp = false;
   private buildKind: string | null = null;
   private buildPreview!: Phaser.GameObjects.Graphics;
   private cursorCell: { x: number; y: number } | null = null;
@@ -179,6 +180,14 @@ export class SeaScene extends Phaser.Scene {
         this.suppressRightUp = false;
         return;
       }
+      if (button === 0 && this.suppressLeftUp) {
+        this.suppressLeftUp = false;
+        return;
+      }
+      // A gesture starting over React UI and ending over the canvas must
+      // never become a click / move order.
+      if (button === 0 && !left) return;
+      if (button === 2 && !pan) return;
       if (!isWorld) return;
       if (button === 0 && left?.moved) {
         if (this.buildKind) this.finishBoxBuild(left);
@@ -279,6 +288,7 @@ export class SeaScene extends Phaser.Scene {
 
   private cancelBuilding = (): void => {
     if (!this.buildKind) return;
+    if (this.leftDrag) this.suppressLeftUp = true;
     // The same event updates both Phaser and the React Construction Dock.
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, {
       detail: { kind: null },
