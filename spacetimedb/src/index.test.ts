@@ -1426,3 +1426,56 @@ it("Gemini world projection matches authoritative map, salvage, ships and struct
     expect("lastFiredAtUs" in row).toBe(false);
   }
 });
+
+it("atomic box building creates an entire connected deck and schedules its completion", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("box-builder", 1001n);
+  const outsider = auth("box-outsider", 1002n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "normal" }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(st => st.ownerSlot === 0 && st.kind === "command_core")!;
+  const faction = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.slot === 0)!;
+  const batch = {
+    matchId, kind: "platform",
+    startX: core.gridX + 3, startY: core.gridY + 1,
+    endX: core.gridX + 5, endY: core.gridY + 1,
+  };
+  const beforeCount = test.db.structure.count();
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.placeStructuresBox(ctx, batch)
+  )).toThrow("another player's match");
+  expect(test.db.structure.count()).toBe(beforeCount);
+
+  test.withReducerTx(alice, ctx => moduleExports.placeStructuresBox(ctx, batch));
+  const newDeck = [...test.db.structure.matchId.filter(matchId)]
+    .filter(row => row.ownerSlot === 0 && row.kind === "platform" &&
+      row.gridY === batch.startY && row.gridX >= batch.startX &&
+      row.gridX <= batch.endX);
+  expect(newDeck).toHaveLength(3);
+  expect(newDeck.every(row => !row.complete)).toBe(true);
+  expect(test.db.constructionSchedule.count()).toBe(3n);
+  expect(test.db.factionState.id.find(faction.id)?.salvage).toBe(faction.salvage - 75);
+
+  // A second attempt collides with the very first cell. It must leave
+  // resources, schedules and structures completely untouched.
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.placeStructuresBox(ctx, batch)
+  )).toThrow("Surface cell occupied");
+  expect(test.db.structure.count()).toBe(beforeCount + 3n);
+  expect(test.db.constructionSchedule.count()).toBe(3n);
+  expect(test.db.factionState.id.find(faction.id)?.salvage).toBe(faction.salvage - 75);
+
+  test.clock.advance(TimeDuration.fromMillis(1500));
+  const schedules = [...test.db.constructionSchedule.iter()];
+  for (const schedule of schedules) {
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.completeConstruction(ctx, { arg: schedule }));
+  }
+  const completed = [...test.db.structure.matchId.filter(matchId)]
+    .filter(row => newDeck.some(st => st.id === row.id));
+  expect(completed.every(row => row.complete && row.connected)).toBe(true);
+});
