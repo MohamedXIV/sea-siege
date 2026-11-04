@@ -13,6 +13,8 @@ import {
 import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
 import { shipsInSelectionBox } from "./input/selection-box";
+import { selectStructureAt } from "./input/structure-selection";
+import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import {
   RESOURCE_TYPES, type AdvancedResourceKind,
 } from "../../spacetimedb/src/sim/materials";
@@ -72,6 +74,8 @@ export class SeaScene extends Phaser.Scene {
   private selectedShipId: bigint | null = null;
   private selectedShipIds = new Set<bigint>();
   private selectionGraphics!: Phaser.GameObjects.Graphics;
+  private buildingSelectionGraphics!: Phaser.GameObjects.Graphics;
+  private selectedBuildingId: bigint | null = null;
   private leftDrag: LeftDrag | null = null;
   private suppressRightUp = false;
   private suppressLeftUp = false;
@@ -102,6 +106,7 @@ export class SeaScene extends Phaser.Scene {
     this.markers = this.add.graphics().setDepth(31);
     this.buildPreview = this.add.graphics().setDepth(34);
     this.selectionGraphics = this.add.graphics().setDepth(35);
+    this.buildingSelectionGraphics = this.add.graphics().setDepth(33);
     this.cameras.main.setZoom(1);
 
     this.input.mouse?.disableContextMenu();
@@ -256,6 +261,8 @@ export class SeaScene extends Phaser.Scene {
     this.selectedShipId = null;
     this.selectedShipIds.clear();
     this.selectionGraphics?.clear();
+    this.buildingSelectionGraphics?.clear();
+    this.selectedBuildingId = null;
     this.leftDrag = null;
     this.selectEntity(null);
     this.cursorCell = null;
@@ -437,6 +444,8 @@ export class SeaScene extends Phaser.Scene {
   }
 
   private selectShips(ids: readonly bigint[]): void {
+    this.selectedBuildingId = null;
+    this.buildingSelectionGraphics?.clear();
     this.selectedShipIds = new Set(ids);
     this.selectedShipId = ids[0] ?? null;
     window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
@@ -452,6 +461,8 @@ export class SeaScene extends Phaser.Scene {
     } else if (type === "structure" && id !== undefined) {
       this.selectedShipIds.clear();
       this.selectedShipId = null;
+      this.selectedBuildingId = id;
+      this.drawBuildingHighlight();
       window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
         detail: { type: "structure", id },
       }));
@@ -519,12 +530,10 @@ export class SeaScene extends Phaser.Scene {
         return;
       }
 
-      const ownSlot = state.myMembership?.slot;
-      const chosen = state.battleStructures.find(st =>
-        st.ownerSlot === ownSlot &&
-        x >= st.gridX && x < st.gridX + st.width &&
-        y >= st.gridY && y < st.gridY + st.height
-      );
+      // Mounted structures *overlap* their supporting Platforms. Never
+      // choose a submerged deck before its Shipyard/Workshop/Rig/Cannon.
+      // Enemy structures are inspectable, but their private queues are not.
+      const chosen = selectStructureAt(x, y, state.battleStructures);
       if (chosen) {
         this.selectEntity("structure", chosen.id);
         return;
@@ -695,6 +704,9 @@ export class SeaScene extends Phaser.Scene {
     for (const [id, art] of this.buildings) {
       if (!alive.has(id)) { art.image.destroy(); this.buildings.delete(id); }
     }
+    if (this.selectedBuildingId !== null && !alive.has(this.selectedBuildingId)) {
+      this.selectEntity(null);
+    }
     for (const st of buildings) {
       const key = geminiStructureTexture(this, st.kind, st.ownerSlot, st.connected, st.complete);
       let art = this.buildings.get(st.id);
@@ -707,6 +719,33 @@ export class SeaScene extends Phaser.Scene {
         if (art.key !== key) { art.image.setTexture(key); art.key = key; }
         art.image.setPosition(st.gridX * TILE, st.gridY * TILE);
       }
+    }
+    this.drawBuildingHighlight();
+  }
+
+  private drawBuildingHighlight(): void {
+    const gfx = this.buildingSelectionGraphics;
+    if (!gfx) return;
+    gfx.clear();
+    if (this.selectedBuildingId === null) return;
+    const building = spacetimeClient.getState().battleStructures.find(
+      st => st.id === this.selectedBuildingId,
+    );
+    if (!building) return;
+    const own = building.ownerSlot === spacetimeClient.getState().myMembership?.slot;
+    const color = own ? 0x67e8f9 : 0xf87171;
+    gfx.lineStyle(3, color, 0.95);
+    gfx.strokeRect(
+      building.gridX * TILE - 2, building.gridY * TILE - 2,
+      building.width * TILE + 4, building.height * TILE + 4,
+    );
+    if (building.kind === "salvage_rig") {
+      gfx.lineStyle(2, 0x34d399, 0.65);
+      gfx.strokeCircle(
+        (building.gridX + building.width / 2) * TILE,
+        (building.gridY + building.height / 2) * TILE,
+        ECONOMY_RULES.rigRangeCells * TILE,
+      );
     }
   }
 
