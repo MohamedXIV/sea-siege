@@ -16,6 +16,7 @@ import type {
   KnownMaterialDeposit,
   OwnedMaterialBalance,
   OwnedShipRefit,
+  OwnedProductionJob,
 } from "../module_bindings/types";
 
 export type ConnectionStatus =
@@ -51,6 +52,7 @@ export interface SpacetimeClientState {
   materialDeposits: KnownMaterialDeposit[];
   materialBalances: OwnedMaterialBalance[];
   shipRefits: OwnedShipRefit[];
+  productionJobs: OwnedProductionJob[];
 }
 
 export type StateListener = (state: SpacetimeClientState) => void;
@@ -184,6 +186,7 @@ export class SpacetimeClient {
     let materialDeposits: KnownMaterialDeposit[] = [];
     let materialBalances: OwnedMaterialBalance[] = [];
     let shipRefits: OwnedShipRefit[] = [];
+    let productionJobs: OwnedProductionJob[] = [];
 
     if (conn && this.status === "connected") {
       try {
@@ -200,6 +203,7 @@ export class SpacetimeClient {
         materialDeposits = Array.from(conn.db.myMaterialDeposits.iter());
         materialBalances = Array.from(conn.db.myMaterialBalances.iter());
         shipRefits = Array.from(conn.db.myShipRefits.iter());
+        productionJobs = Array.from(conn.db.myProductionJobs.iter());
       } catch {
         // Cache during transition
       }
@@ -268,6 +272,7 @@ export class SpacetimeClient {
       materialDeposits: activeMatchId === null ? [] : materialDeposits.filter(row => row.matchId === activeMatchId),
       materialBalances: activeMatchId === null ? [] : materialBalances.filter(row => row.matchId === activeMatchId),
       shipRefits: activeMatchId === null ? [] : shipRefits.filter(row => row.matchId === activeMatchId),
+      productionJobs: activeMatchId === null ? [] : productionJobs.filter(row => row.matchId === activeMatchId),
     };
   }
 
@@ -450,7 +455,7 @@ export class SpacetimeClient {
     for (const table of [conn.db.myGeminiWorldChunks, conn.db.myGeminiSalvage,
       conn.db.myGeminiShips, conn.db.myGeminiStructures,
       conn.db.myMaterialDeposits, conn.db.myMaterialBalances,
-      conn.db.myShipRefits]) {
+      conn.db.myShipRefits, conn.db.myProductionJobs]) {
       table.onInsert(notifyChange);
       table.onUpdate(notifyChange);
       table.onDelete(notifyChange);
@@ -498,6 +503,7 @@ export class SpacetimeClient {
         "SELECT * FROM my_material_deposits",
         "SELECT * FROM my_material_balances",
         "SELECT * FROM my_ship_refits",
+        "SELECT * FROM my_production_jobs",
       ]);
   }
 
@@ -702,6 +708,12 @@ export class SpacetimeClient {
     if (!this.conn || this.status !== "connected")
       throw new Error("Not connected for ship production");
     await this.conn.reducers.enqueueShip({ shipyardId, kind });
+  }
+
+  async cancelShipProduction(orderId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for shipyard production");
+    await this.conn.reducers.cancelShipProduction({ orderId });
   }
 
   async stopShip(shipId: bigint): Promise<void> {
