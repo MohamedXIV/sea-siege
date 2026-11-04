@@ -11,6 +11,7 @@ import {
   validateStructurePlacement, type StructureKind,
 } from "../../spacetimedb/src/sim/construction";
 import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
+import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
 
 const INTERPOLATION_DELAY_MS = 100;
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
@@ -38,6 +39,20 @@ interface BuildingArt {
   key: string;
 }
 
+interface LeftDrag {
+  screenX: number;
+  screenY: number;
+  startWorldX: number;
+  startWorldY: number;
+  endWorldX: number;
+  endWorldY: number;
+  startCellX: number;
+  startCellY: number;
+  endCellX: number;
+  endCellY: number;
+  moved: boolean;
+}
+
 /**
  * Gemini's original 40px pixel-art/water/ship silhouettes ported into a REAL
  * Phaser 4 scene. This scene never simulates combat, economy, terrain or AI:
@@ -51,6 +66,9 @@ export class SeaScene extends Phaser.Scene {
   private vessels = new Map<bigint, VesselArt>();
   private buildings = new Map<bigint, BuildingArt>();
   private selectedShipId: bigint | null = null;
+  private selectedShipIds = new Set<bigint>();
+  private selectionGraphics!: Phaser.GameObjects.Graphics;
+  private leftDrag: LeftDrag | null = null;
   private buildKind: string | null = null;
   private buildPreview!: Phaser.GameObjects.Graphics;
   private cursorCell: { x: number; y: number } | null = null;
@@ -77,6 +95,7 @@ export class SeaScene extends Phaser.Scene {
     this.deposits = this.add.graphics().setDepth(4);
     this.markers = this.add.graphics().setDepth(31);
     this.buildPreview = this.add.graphics().setDepth(34);
+    this.selectionGraphics = this.add.graphics().setDepth(35);
     this.cameras.main.setZoom(1);
 
     this.input.mouse?.disableContextMenu();
@@ -125,6 +144,8 @@ export class SeaScene extends Phaser.Scene {
     window.addEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.on("keydown-E", this.focusEnemy);
     this.input.keyboard?.on("keydown-H", this.focusHome);
+    window.addEventListener("keydown", this.onEscape);
+    window.addEventListener("contextmenu", this.onContextMenu, { capture: true });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.cleanup());
 
@@ -141,6 +162,8 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.off("keydown-E", this.focusEnemy);
     this.input.keyboard?.off("keydown-H", this.focusHome);
+    window.removeEventListener("keydown", this.onEscape);
+    window.removeEventListener("contextmenu", this.onContextMenu, { capture: true });
     this.clearEntities();
   }
 
@@ -153,6 +176,10 @@ export class SeaScene extends Phaser.Scene {
     for (const art of this.buildings.values()) art.image.destroy();
     this.buildings.clear();
     this.selectedShipId = null;
+    this.selectedShipIds.clear();
+    this.selectionGraphics?.clear();
+    this.leftDrag = null;
+    this.selectEntity(null);
     this.cursorCell = null;
     this.buildKind = null;
     this.buildPreview?.clear();
@@ -185,8 +212,35 @@ export class SeaScene extends Phaser.Scene {
   private onBuildMode = (event: Event): void => {
     const kind = (event as CustomEvent<{ kind: string | null }>).detail?.kind ?? null;
     this.buildKind = kind;
+    this.leftDrag = null;
     this.cursorCell = null;
+    this.selectionGraphics.clear();
     this.buildPreview.clear();
+  };
+
+  private cancelBuilding = (): void => {
+    if (!this.buildKind) return;
+    // The same event updates both Phaser and the React Construction Dock.
+    window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, {
+      detail: { kind: null },
+    }));
+  };
+
+  private onEscape = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape") return;
+    if (this.buildKind) {
+      event.preventDefault();
+      this.cancelBuilding();
+    } else {
+      this.selectShips([]);
+    }
+  };
+
+  private onContextMenu = (event: MouseEvent): void => {
+    if (this.buildKind) {
+      event.preventDefault();
+      this.cancelBuilding();
+    }
   };
 
   private drawBuildPreview(): void {
