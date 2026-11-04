@@ -780,7 +780,7 @@ export const completeConstruction = spacetimedb.reducer(
 
 /** Reducers are exported by the module entrypoint for generated bindings and tests. */
 export {
-  orderHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
+  orderHarvest, orderMaterialHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
 } from "./economy-reducers.ts";
 
 export {
