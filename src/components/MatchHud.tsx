@@ -23,7 +23,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
     state.status === "connected" && state.subscriptionStatus === "applied";
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between text-slate-100">
+    <div data-game-ui="true" className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between text-slate-100">
       <header className="flex flex-wrap items-start justify-between gap-3 p-3 sm:p-4">
         <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-cyan-800/60 bg-slate-950/85 px-3 py-2 shadow-lg backdrop-blur-md">
           <Anchor className="size-5 text-cyan-300" />
@@ -61,12 +61,12 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
 
       <div className="flex flex-col items-start justify-end gap-2 p-3 sm:p-4">
         {state.error && (
-          <p role="alert" className="max-w-sm rounded-md border border-rose-700/60 bg-slate-950/90 px-3 py-2 text-xs text-rose-200">
+          <p role="alert" className="pointer-events-auto max-w-sm rounded-md border border-rose-700/60 bg-slate-950/90 px-3 py-2 text-xs text-rose-200">
             {state.error}
           </p>
         )}
 
-        <div className="w-full max-w-2xl rounded-lg border border-slate-700/70 bg-slate-950/85 p-3 shadow-xl backdrop-blur-md">
+        <div className="pointer-events-auto w-full max-w-2xl rounded-lg border border-slate-700/70 bg-slate-950/85 p-3 shadow-xl backdrop-blur-md">
           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div>
               <div className="text-[10px] uppercase tracking-wider text-slate-400">Salvage</div>

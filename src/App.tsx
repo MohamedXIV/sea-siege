@@ -29,7 +29,7 @@ export default function App() {
       ) : (
         <>
           <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(90deg,rgba(4,13,23,.97),rgba(4,13,23,.87)_64%,rgba(4,13,23,.72))]" />
-          <div className="pointer-events-none relative z-10 flex min-h-svh flex-col justify-between p-4 md:p-8">
+          <div data-game-ui="true" className="pointer-events-none relative z-10 flex min-h-svh flex-col justify-between p-4 md:p-8">
             <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 border-b border-sky-500/20 pb-3">
               <div className="flex items-center gap-3 font-mono text-xs uppercase tracking-wider text-sky-300">
                 <span className={`size-3 rounded-full ${ready ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />

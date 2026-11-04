@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { Hammer, Anchor, Crosshair, CircleStop, Pickaxe } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { GEMINI_BUILD_MODE_EVENT, GEMINI_SELECTION_EVENT, GEMINI_FEEDBACK_EVENT } from "@/game/SeaScene";
+import {
+  GEMINI_BUILD_MODE_EVENT, GEMINI_SELECTION_EVENT, GEMINI_FEEDBACK_EVENT,
+  GEMINI_BUILD_PREVIEW_EVENT,
+} from "@/game/SeaScene";
 import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-client";
 import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
@@ -26,6 +29,8 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
   const [buildKind, setBuildKind] = useState<BuildKind | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ reason: string | null; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -33,19 +38,32 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
       setSelected(detail);
       setError(null);
     };
-    const feedback = (event: Event) =>
-      setError((event as CustomEvent<{ message: string }>).detail?.message || "Command rejected");
+    const feedback = (event: Event) => {
+      const detail = (event as CustomEvent<{ message: string; success?: boolean }>).detail;
+      if (detail?.success) {
+        setConfirmation(detail.message);
+        setError(null);
+      } else {
+        setError(detail?.message || "Command rejected");
+        setConfirmation(null);
+      }
+    };
+    const placementPreview = (event: Event) =>
+      setPreview((event as CustomEvent<{ reason: string | null; x: number; y: number }>).detail);
     window.addEventListener(GEMINI_SELECTION_EVENT, listener);
     window.addEventListener(GEMINI_FEEDBACK_EVENT, feedback);
+    window.addEventListener(GEMINI_BUILD_PREVIEW_EVENT, placementPreview);
     return () => {
       window.removeEventListener(GEMINI_SELECTION_EVENT, listener);
       window.removeEventListener(GEMINI_FEEDBACK_EVENT, feedback);
+      window.removeEventListener(GEMINI_BUILD_PREVIEW_EVENT, placementPreview);
     };
   }, []);
 
   useEffect(() => {
     setSelected(null);
     setBuildKind(null);
+    setPreview(null);
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, { detail: { kind: null } }));
   }, [state.activeMatchId]);
 
@@ -53,6 +71,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
     if (pending) return;
     setPending(true);
     setError(null);
+    setConfirmation(null);
     try { await job(); }
     catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "Command rejected by server");
@@ -61,7 +80,9 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
 
   const beginBuild = (kind: BuildKind | null) => {
     setBuildKind(kind);
+    setPreview(null);
     setError(null);
+    setConfirmation(null);
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, { detail: { kind } }));
   };
 
@@ -118,9 +139,16 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
             );
           })}
         </div>
-        <div className="mt-1 text-[10px] text-slate-400">
-          {buildKind ? "Click the map to place; SpacetimeDB checks legality." : "Pick a structure, then place it on the map."}
+        <div className="mt-1 text-[10px] leading-relaxed text-slate-400">
+          {buildKind
+            ? "Green outline = valid. Red = blocked. Platforms must touch the connected base; buildings require completed supporting platforms."
+            : "Build in the map, starting with connected floating platforms. Right-click issues ship movement."}
         </div>
+        {buildKind && preview && (
+          <p role="status" className={`mt-1 text-[10px] ${preview.reason ? "text-rose-300" : "text-emerald-300"}`}>
+            {preview.reason ?? "Valid placement"} · ({preview.x}, {preview.y})
+          </p>
+        )}
       </section>
 
       <section className="min-w-0">
@@ -169,6 +197,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
           </p>
         )}
         {error && <p role="alert" className="mt-2 text-[11px] text-rose-300">{error}</p>}
+        {confirmation && <p role="status" className="mt-2 text-[11px] text-emerald-300">{confirmation}</p>}
       </section>
     </div>
   );
