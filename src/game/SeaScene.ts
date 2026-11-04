@@ -12,6 +12,7 @@ import {
 } from "../../spacetimedb/src/sim/construction";
 import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
+import { shipsInSelectionBox } from "./input/selection-box";
 
 const INTERPOLATION_DELAY_MS = 100;
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
@@ -385,22 +386,20 @@ export class SeaScene extends Phaser.Scene {
   }
 
   private finishBoxSelection(drag: LeftDrag): void {
-    const left = Math.min(drag.startWorldX, drag.endWorldX);
-    const top = Math.min(drag.startWorldY, drag.endWorldY);
-    const right = Math.max(drag.startWorldX, drag.endWorldX);
-    const bottom = Math.max(drag.startWorldY, drag.endWorldY);
-    const ids = spacetimeClient.getState().myShips
-      .filter(ship => {
-        const art = this.vessels.get(ship.id);
-        const x = art?.container.x ?? ship.x * TILE;
-        const y = art?.container.y ?? ship.y * TILE;
-        const radius = ship.radiusCells * TILE;
-        return x + radius >= left && x - radius <= right &&
-          y + radius >= top && y - radius <= bottom;
-      })
-      .map(ship => ship.id)
-      .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-    // Dragging across an empty region replaces the selection with nothing.
+    const ships = spacetimeClient.getState().myShips.map(ship => {
+      const art = this.vessels.get(ship.id);
+      return {
+        id: ship.id,
+        x: art?.container.x ?? ship.x * TILE,
+        y: art?.container.y ?? ship.y * TILE,
+        radius: ship.radiusCells * TILE,
+      };
+    });
+    const ids = shipsInSelectionBox({
+      fromX: drag.startWorldX, fromY: drag.startWorldY,
+      toX: drag.endWorldX, toY: drag.endWorldY,
+    }, ships);
+    // Dragging across empty sea intentionally clears the selection.
     this.selectShips(ids);
   }
 
