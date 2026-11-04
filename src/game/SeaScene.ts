@@ -141,6 +141,8 @@ export class SeaScene extends Phaser.Scene {
       const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       if (this.leftDrag) {
         const drag = this.leftDrag;
+        const oldCellX = drag.endCellX;
+        const oldCellY = drag.endCellY;
         drag.endWorldX = world.x;
         drag.endWorldY = world.y;
         drag.endCellX = Math.floor(world.x / TILE);
@@ -148,8 +150,12 @@ export class SeaScene extends Phaser.Scene {
         if (Math.hypot(pointer.x - drag.screenX, pointer.y - drag.screenY) > 6)
           drag.moved = true;
         if (this.buildKind) {
-          this.cursorCell = { x: drag.endCellX, y: drag.endCellY };
-          this.drawBuildPreview();
+          if (drag.endCellX !== oldCellX || drag.endCellY !== oldCellY) {
+            this.cursorCell = { x: drag.endCellX, y: drag.endCellY };
+            // O(n) occupancy checks only when the destination CELL changes,
+            // not 60 times/sec during a continuous pointer drag.
+            this.drawBuildPreview();
+          }
         } else if (drag.moved) {
           this.drawSelectionBox(drag);
         }
