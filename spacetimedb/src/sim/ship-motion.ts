@@ -65,10 +65,12 @@ export function advanceShipOnRoute(
   cursor: number,
   mapCells: number,
   seconds: number,
+  speedMultiplier = 1,
 ): RouteMotionResult {
   if (!Number.isInteger(mapCells) || mapCells < 2 ||
       !Number.isInteger(cursor) || cursor < 0 || cursor > cellPath.length ||
       !Number.isFinite(seconds) || seconds < 0 ||
+      !Number.isFinite(speedMultiplier) || speedMultiplier < 1 || speedMultiplier > 2 ||
       !Object.values(ship).every(Number.isFinite)) {
     throw new RangeError('invalid ship motion input');
   }
@@ -86,6 +88,7 @@ export function advanceShipOnRoute(
   let turned = false;
   const traversedSegments: TravelSegment[] = [];
   const epsilon = SHIP_MOTION_RULES.arrivalEpsilonCells;
+  const vesselSpeed = SHIP_MOTION_RULES.speedCellsPerSecond * speedMultiplier;
 
   // The step may consume multiple short segments, never jump across a corner.
   // The hard limit protects against malformed large paths or zero-length loops.
@@ -119,7 +122,7 @@ export function advanceShipOnRoute(
     const ramp = (SHIP_MOTION_RULES.stopMovementAngleDeg - residual) /
       (SHIP_MOTION_RULES.stopMovementAngleDeg - SHIP_MOTION_RULES.fullSpeedAngleDeg);
     const speedFactor = Math.max(0, Math.min(1, ramp));
-    const move = Math.min(distance, SHIP_MOTION_RULES.speedCellsPerSecond * remaining * speedFactor);
+    const move = Math.min(distance, vesselSpeed * remaining * speedFactor);
     if (move <= epsilon) break;
     const previous = { x, y };
     const moveX = (dx / distance) * move;
@@ -135,7 +138,7 @@ export function advanceShipOnRoute(
       traversed++;
       // Remaining time is only reused after full-speed travel; turn cost is
       // accounted for by the speed factor (conservative under curved turns).
-      remaining -= move / (SHIP_MOTION_RULES.speedCellsPerSecond * speedFactor);
+      remaining -= move / (vesselSpeed * speedFactor);
     } else {
       remaining = 0;
     }
