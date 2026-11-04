@@ -1545,7 +1545,7 @@ it("a real Scout gathers Oil but a foreign identity cannot issue the order", () 
   expect(oilBalance.amount).toBe(7); // Scout's advanced-material rate, 14 / 2
   expect(oilBalance.totalGathered).toBe(7n);
   expect(test.db.materialNode.id.find(oil.id)!.remaining)
-    .toBe(oil.capacity - 7 + oil.regenPerSec);
+    .toBe(oil.capacity - 7); // regeneration is capped at full capacity before extraction
 
   // Stopping a hybrid collection order cannot leave a background extractor.
   test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: ship.id }));
