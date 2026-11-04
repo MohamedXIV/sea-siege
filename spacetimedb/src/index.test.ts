@@ -1636,7 +1636,7 @@ it("a workshop refit uses actual Oil/Alloys, rejects outsiders and supports upgr
   expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage);
 
   test.withReducerTx(TestAuth.internal(), ctx => {
-    for (const row of ctx.db.materialBalance.matchId.filter(match.id)) {
+    for (const row of Array.from(ctx.db.materialBalance.matchId.filter(match.id))) {
       if (row.ownerSlot !== 0) continue;
       if (row.kind === "oil" || row.kind === "alloy")
         ctx.db.materialBalance.id.update({ ...row, amount: 80 });
