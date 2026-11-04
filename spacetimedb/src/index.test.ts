@@ -1591,3 +1591,87 @@ it("connected extractor splits finite throughput across two nearby advanced node
   const credited = balances.reduce((sum, row) => sum + row.amount, 0);
   expect(credited).toBe(8); // hard total budget despite two deposits
 });
+
+it("a workshop refit uses actual Oil/Alloys, rejects outsiders and supports upgraded repairs", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("refit-alice", 1201n);
+  const outsider = auth("refit-outsider", 1202n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId: match.id, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: match.id, kind: "workshop",
+    gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const workshop = [...test.db.structure.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "workshop")!;
+  const ship = [...test.db.ship.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "scout")!;
+  test.clock.advance(TimeDuration.fromMillis(5000));
+  const schedule = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: schedule })
+  );
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const live = ctx.db.ship.id.find(ship.id)!;
+    ctx.db.ship.id.update({
+      ...live, x: workshop.gridX + 2.5, y: workshop.gridY + 2.5,
+    });
+  });
+  const command = { workshopId: workshop.id, shipId: ship.id };
+  const before = [...test.db.factionState.matchId.filter(match.id)]
+    .find(row => row.slot === 0)!;
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  )).toThrow("your own");
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  )).toThrow("Insufficient refit resources");
+  expect(test.db.shipRefit.shipId.find(ship.id)).toBeUndefined();
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage);
+
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    for (const row of ctx.db.materialBalance.matchId.filter(match.id)) {
+      if (row.ownerSlot !== 0) continue;
+      if (row.kind === "oil" || row.kind === "alloy")
+        ctx.db.materialBalance.id.update({ ...row, amount: 80 });
+    }
+  });
+  test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  );
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 75);
+  expect([...test.db.materialBalance.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "oil")!.amount).toBe(35);
+  expect(test.db.shipRefit.shipId.find(ship.id)?.highOutputEngine).toBe(true);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  )).toThrow("already has");
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 75);
+
+  test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "reinforced_hull" })
+  );
+  expect(test.db.ship.id.find(ship.id)?.hp).toBe(330);
+  expect(test.db.shipRefit.shipId.find(ship.id)?.reinforcedHull).toBe(true);
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 135);
+  expect([...test.db.materialBalance.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "alloy")!.amount).toBe(45);
+  expect(moduleExports.myShipRefits(test.viewContext(alice))).toHaveLength(1);
+  expect(moduleExports.myShipRefits(test.viewContext(outsider))).toHaveLength(0);
+
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const live = ctx.db.ship.id.find(ship.id)!;
+    ctx.db.ship.id.update({ ...live, hp: 300 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.repairShip(ctx, {
+    workshopId: workshop.id, shipId: ship.id, requestedHp: 60,
+  }));
+  expect(test.db.ship.id.find(ship.id)?.hp).toBe(330);
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 150);
+});
