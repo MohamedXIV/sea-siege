@@ -1632,7 +1632,7 @@ it("a workshop refit uses actual Oil/Alloys, rejects outsiders and supports upgr
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
   )).toThrow("Insufficient refit resources");
-  expect(test.db.shipRefit.shipId.find(ship.id)).toBeUndefined();
+  expect(test.db.shipRefit.shipId.find(ship.id)).toBeNull();
   expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage);
 
   test.withReducerTx(TestAuth.internal(), ctx => {
