@@ -274,7 +274,10 @@ export const issueShipOrder = spacetimedb.reducer(
       ship: current, destination: { x: targetX, y: targetY },
       environment: env, destinationVisible: true,
     }, {
-      cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+      cancelHarvest: id => {
+        ctx.db.harvestOrder.shipId.delete(id);
+        ctx.db.materialHarvestOrder.shipId.delete(id);
+      },
       setRoute: order => {
         const existing = ctx.db.shipRoute.shipId.find(shipId);
         if (!order) {
@@ -355,6 +358,7 @@ export const stopShip = spacetimedb.reducer(
     if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
     ctx.db.harvestOrder.shipId.delete(shipId);
+    ctx.db.materialHarvestOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
       ...current,
       velocityX: 0, velocityY: 0,
