@@ -8,7 +8,7 @@ import {
 } from "./art/GeminiPixelArt";
 import type { GeminiBattleShip, GeminiBattleStructure } from "../module_bindings/types";
 import {
-  validateStructurePlacement, type StructureKind,
+  structureDefinition, type BuildRequest, type StructureKind,
 } from "../../spacetimedb/src/sim/construction";
 import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
@@ -300,29 +300,141 @@ export class SeaScene extends Phaser.Scene {
     }
   };
 
+  private buildRequest(kind: string, gridX: number, gridY: number): BuildRequest | null {
+    const state = spacetimeClient.getState();
+    const slot = state.myMembership?.slot;
+    if (!this.validatedTerrain || slot === undefined ||
+        state.activeMatch?.phase !== "active") return null;
+    return {
+      kind: kind as StructureKind, ownerSlot: slot, gridX, gridY,
+      salvage: state.myFaction?.salvage ?? 0,
+      mapCells: this.validatedMapCells,
+      terrain: this.validatedTerrain,
+      structures: state.battleStructures.map(st => ({
+        id: st.id, ownerSlot: st.ownerSlot, kind: st.kind as StructureKind,
+        gridX: st.gridX, gridY: st.gridY,
+        width: st.width, height: st.height, complete: st.complete,
+      })),
+      deposits: state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
+      hulls: state.battleShips.map(s => ({ x: s.x, y: s.y, radius: s.radiusCells })),
+    };
+  }
+
   private drawBuildPreview(): void {
     this.buildPreview.clear();
     if (!this.buildKind || !this.cursorCell) return;
-    const sizes: Record<string, number> = { platform: 1, cannon: 1, shipyard: 2, workshop: 2, salvage_rig: 2 };
-    const size = sizes[this.buildKind] ?? 1;
-    const x = this.cursorCell.x * TILE, y = this.cursorCell.y * TILE;
-    // Preview reuses the exact pure server validator, but is advisory:
-    // SpacetimeDB always validates again with current authoritative state.
-    const reason = this.placementError(this.buildKind, this.cursorCell.x, this.cursorCell.y);
-    const color = reason ? 0xef4444 : 0x22c55e;
+    const kind = this.buildKind;
+    const def = structureDefinition(kind);
+    if (!def) return;
+    const drag = this.leftDrag;
+    const sx = drag?.startCellX ?? this.cursorCell.x;
+    const sy = drag?.startCellY ?? this.cursorCell.y;
+    const ex = this.cursorCell.x;
+    const ey = this.cursorCell.y;
+    const request = this.buildRequest(kind, sx, sy);
+    const plan = request
+      ? planBoxConstruction(request, ex, ey)
+      : { reason: "World is not ready for construction", cells: [] };
+    const color = plan.reason ? 0xef4444 : 0x22c55e;
     this.buildPreview.fillStyle(color, 0.23);
-    this.buildPreview.fillRect(x, y, size * TILE, size * TILE);
-    this.buildPreview.lineStyle(2, color, 0.85);
-    this.buildPreview.strokeRect(x, y, size * TILE, size * TILE);
+    this.buildPreview.lineStyle(2, color, 0.9);
+    if (plan.reason) {
+      const x = Math.min(sx, ex) * TILE;
+      const y = Math.min(sy, ey) * TILE;
+      const width = (Math.abs(ex - sx) + def.width) * TILE;
+      const height = (Math.abs(ey - sy) + def.height) * TILE;
+      this.buildPreview.fillRect(x, y, width, height);
+      this.buildPreview.strokeRect(x, y, width, height);
+    } else {
+      for (const cell of plan.cells) {
+        const x = cell.gridX * TILE, y = cell.gridY * TILE;
+        this.buildPreview.fillRect(x, y, def.width * TILE, def.height * TILE);
+        this.buildPreview.strokeRect(x, y, def.width * TILE, def.height * TILE);
+      }
+    }
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_PREVIEW_EVENT, {
-      detail: { reason, x: this.cursorCell.x, y: this.cursorCell.y },
+      detail: {
+        reason: plan.reason, count: plan.cells.length,
+        x: sx, y: sy, endX: ex, endY: ey,
+      },
     }));
   }
 
-  private selectEntity(type: "ship" | "structure", id: bigint): void {
+  private drawSelectionBox(drag: LeftDrag): void {
+    const x = Math.min(drag.startWorldX, drag.endWorldX);
+    const y = Math.min(drag.startWorldY, drag.endWorldY);
+    const w = Math.abs(drag.endWorldX - drag.startWorldX);
+    const h = Math.abs(drag.endWorldY - drag.startWorldY);
+    this.selectionGraphics.clear();
+    this.selectionGraphics.fillStyle(0x38bdf8, 0.14);
+    this.selectionGraphics.fillRect(x, y, w, h);
+    this.selectionGraphics.lineStyle(2, 0x67e8f9, 0.9);
+    this.selectionGraphics.strokeRect(x, y, w, h);
+  }
+
+  private finishBoxSelection(drag: LeftDrag): void {
+    const left = Math.min(drag.startWorldX, drag.endWorldX);
+    const top = Math.min(drag.startWorldY, drag.endWorldY);
+    const right = Math.max(drag.startWorldX, drag.endWorldX);
+    const bottom = Math.max(drag.startWorldY, drag.endWorldY);
+    const ids = spacetimeClient.getState().myShips
+      .filter(ship => {
+        const art = this.vessels.get(ship.id);
+        const x = art?.container.x ?? ship.x * TILE;
+        const y = art?.container.y ?? ship.y * TILE;
+        const radius = ship.radiusCells * TILE;
+        return x + radius >= left && x - radius <= right &&
+          y + radius >= top && y - radius <= bottom;
+      })
+      .map(ship => ship.id)
+      .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    // Dragging across an empty region replaces the selection with nothing.
+    this.selectShips(ids);
+  }
+
+  private finishBoxBuild(drag: LeftDrag): void {
+    if (!this.buildKind) return;
+    const request = this.buildRequest(this.buildKind, drag.startCellX, drag.startCellY);
+    const plan = request
+      ? planBoxConstruction(request, drag.endCellX, drag.endCellY)
+      : { reason: "World is not ready for construction", cells: [] };
+    if (plan.reason) { this.reportOrderError(plan.reason); return; }
+    const kind = this.buildKind;
+    spacetimeClient.placeStructuresBox(
+      kind, drag.startCellX, drag.startCellY, drag.endCellX, drag.endCellY,
+    ).then(() => {
+      window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
+        detail: {
+          message: `${plan.cells.length} × ${kind} structures queued`,
+          success: true,
+        },
+      }));
+      this.drawBuildPreview();
+    }).catch(err => this.reportOrderError(err));
+  }
+
+  private selectShips(ids: readonly bigint[]): void {
+    this.selectedShipIds = new Set(ids);
+    this.selectedShipId = ids[0] ?? null;
     window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
-      detail: { type, id },
+      detail: ids.length
+        ? { type: "ship", id: ids[0], shipIds: [...ids] }
+        : null,
     }));
+  }
+
+  private selectEntity(type: "ship" | "structure" | null, id?: bigint): void {
+    if (type === "ship" && id !== undefined) {
+      this.selectShips([id]);
+    } else if (type === "structure" && id !== undefined) {
+      this.selectedShipIds.clear();
+      this.selectedShipId = null;
+      window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
+        detail: { type: "structure", id },
+      }));
+    } else {
+      this.selectShips([]);
+    }
   }
 
   private reportOrderError(error: unknown): void {
@@ -342,29 +454,6 @@ export class SeaScene extends Phaser.Scene {
     return document.elementFromPoint(event.clientX, event.clientY) === this.game.canvas;
   }
 
-  private placementError(kind: string, x: number, y: number): string | null {
-    const state = spacetimeClient.getState();
-    const slot = state.myMembership?.slot;
-    if (!this.validatedTerrain || slot === undefined || !state.activeMatchId)
-      return "World is not ready for construction";
-    return validateStructurePlacement({
-      kind: kind as StructureKind,
-      ownerSlot: slot,
-      gridX: x,
-      gridY: y,
-      salvage: state.myFaction?.salvage ?? 0,
-      mapCells: this.validatedMapCells,
-      terrain: this.validatedTerrain,
-      structures: state.battleStructures.map(st => ({
-        id: st.id, ownerSlot: st.ownerSlot, kind: st.kind as StructureKind,
-        gridX: st.gridX, gridY: st.gridY, width: st.width, height: st.height,
-        complete: st.complete,
-      })),
-      deposits: state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
-      hulls: state.battleShips.map(s => ({ x: s.x, y: s.y, radius: s.radiusCells })),
-    });
-  }
-
   private pointerCommand(pointer: Phaser.Input.Pointer): void {
     if (!this.isWorldPointer(pointer)) return;
     const state = spacetimeClient.getState();
@@ -377,9 +466,12 @@ export class SeaScene extends Phaser.Scene {
     if (this.buildKind) {
       if (button !== 0) return;
       const gridX = Math.floor(x), gridY = Math.floor(y);
-      const reason = this.placementError(this.buildKind, gridX, gridY);
-      if (reason) {
-        this.reportOrderError(reason);
+      const request = this.buildRequest(this.buildKind, gridX, gridY);
+      const plan = request
+        ? planBoxConstruction(request, gridX, gridY)
+        : { reason: "World is not ready for construction", cells: [] };
+      if (plan.reason) {
+        this.reportOrderError(plan.reason);
         return;
       }
       const kind = this.buildKind;
@@ -411,10 +503,12 @@ export class SeaScene extends Phaser.Scene {
         y >= st.gridY && y < st.gridY + st.height
       );
       if (chosen) {
-        this.selectedShipId = null;
         this.selectEntity("structure", chosen.id);
         return;
       }
+      // Left-click empty sea or drag an empty box: clear the prior selection.
+      this.selectShips([]);
+      return;
     }
 
     if (this.selectedShipId !== null && button === 2) {
@@ -434,15 +528,28 @@ export class SeaScene extends Phaser.Scene {
         return;
       }
     }
-    // Left click selects; right click orders movement (Gemini RTS control).
-    // A click on the HUD must never issue a move beneath it.
-    if (this.selectedShipId !== null && button === 2) {
-      const shipId = this.selectedShipId;
-      const targetX = Math.round(x * 10) / 10;
-      const targetY = Math.round(y * 10) / 10;
-      this.drawOrderMarker(targetX, targetY);
-      spacetimeClient.issueShipOrder(shipId, targetX, targetY).catch(err =>
-        this.reportOrderError(err));
+    // Box-selected fleets receive independent authoritative move orders.
+    // Give each vessel a small formation offset, rather than stacking every
+    // collision hull onto precisely the same endpoint.
+    if (this.selectedShipIds.size && button === 2) {
+      const ids = [...this.selectedShipIds];
+      this.drawOrderMarker(x, y);
+      const columns = Math.ceil(Math.sqrt(ids.length));
+      const spacing = 1.5;
+      void Promise.allSettled(ids.map((shipId, i) => {
+        const dx = (i % columns - (columns - 1) / 2) * spacing;
+        const dy = (Math.floor(i / columns) -
+          (Math.ceil(ids.length / columns) - 1) / 2) * spacing;
+        return spacetimeClient.issueShipOrder(
+          shipId, Math.round((x + dx) * 10) / 10,
+          Math.round((y + dy) * 10) / 10,
+        );
+      })).then(results => {
+        const failures = results.filter(r => r.status === "rejected");
+        if (failures.length) this.reportOrderError(
+          `${failures.length} of ${ids.length} move orders were rejected`
+        );
+      });
     }
   }
 
@@ -674,7 +781,7 @@ export class SeaScene extends Phaser.Scene {
         art.turret.setRotation(sample.turretAngle);
       }
       art.highlight.clear();
-      if (ship.ownerSlot === ownSlot && ship.id === this.selectedShipId) {
+      if (ship.ownerSlot === ownSlot && this.selectedShipIds.has(ship.id)) {
         art.highlight.lineStyle(2, 0x38bdf8, 1);
         art.highlight.strokeCircle(0, 0, 19);
       }
