@@ -13,6 +13,8 @@ import type {
   GeminiKnownSalvage,
   GeminiBattleShip,
   GeminiBattleStructure,
+  KnownMaterialDeposit,
+  OwnedMaterialBalance,
 } from "../module_bindings/types";
 
 export type ConnectionStatus =
@@ -45,6 +47,8 @@ export interface SpacetimeClientState {
   salvageNodes: GeminiKnownSalvage[];
   battleShips: GeminiBattleShip[];
   battleStructures: GeminiBattleStructure[];
+  materialDeposits: KnownMaterialDeposit[];
+  materialBalances: OwnedMaterialBalance[];
 }
 
 export type StateListener = (state: SpacetimeClientState) => void;
@@ -175,6 +179,8 @@ export class SpacetimeClient {
     let salvageNodes: GeminiKnownSalvage[] = [];
     let battleShips: GeminiBattleShip[] = [];
     let battleStructures: GeminiBattleStructure[] = [];
+    let materialDeposits: KnownMaterialDeposit[] = [];
+    let materialBalances: OwnedMaterialBalance[] = [];
 
     if (conn && this.status === "connected") {
       try {
@@ -188,6 +194,8 @@ export class SpacetimeClient {
         salvageNodes = Array.from(conn.db.myGeminiSalvage.iter());
         battleShips = Array.from(conn.db.myGeminiShips.iter());
         battleStructures = Array.from(conn.db.myGeminiStructures.iter());
+        materialDeposits = Array.from(conn.db.myMaterialDeposits.iter());
+        materialBalances = Array.from(conn.db.myMaterialBalances.iter());
       } catch {
         // Cache during transition
       }
@@ -253,6 +261,8 @@ export class SpacetimeClient {
       salvageNodes: activeMatchId === null ? [] : salvageNodes.filter(row => row.matchId === activeMatchId),
       battleShips: activeMatchId === null ? [] : battleShips.filter(row => row.matchId === activeMatchId),
       battleStructures: activeMatchId === null ? [] : battleStructures.filter(row => row.matchId === activeMatchId),
+      materialDeposits: activeMatchId === null ? [] : materialDeposits.filter(row => row.matchId === activeMatchId),
+      materialBalances: activeMatchId === null ? [] : materialBalances.filter(row => row.matchId === activeMatchId),
     };
   }
 
@@ -433,7 +443,8 @@ export class SpacetimeClient {
     conn.db.myVisibleEnemies.onDelete(notifyChange);
 
     for (const table of [conn.db.myGeminiWorldChunks, conn.db.myGeminiSalvage,
-      conn.db.myGeminiShips, conn.db.myGeminiStructures]) {
+      conn.db.myGeminiShips, conn.db.myGeminiStructures,
+      conn.db.myMaterialDeposits, conn.db.myMaterialBalances]) {
       table.onInsert(notifyChange);
       table.onUpdate(notifyChange);
       table.onDelete(notifyChange);
@@ -478,6 +489,8 @@ export class SpacetimeClient {
         "SELECT * FROM my_gemini_salvage",
         "SELECT * FROM my_gemini_ships",
         "SELECT * FROM my_gemini_structures",
+        "SELECT * FROM my_material_deposits",
+        "SELECT * FROM my_material_balances",
       ]);
   }
 
@@ -660,6 +673,12 @@ export class SpacetimeClient {
     if (!this.conn || this.status !== "connected")
       throw new Error("Not connected for salvage harvesting");
     await this.conn.reducers.orderHarvest({ shipId, nodeId });
+  }
+
+  async orderMaterialHarvest(shipId: bigint, nodeId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for material collection");
+    await this.conn.reducers.orderMaterialHarvest({ shipId, nodeId });
   }
 
   async enqueueShip(shipyardId: bigint, kind: string): Promise<void> {

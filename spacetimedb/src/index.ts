@@ -8,7 +8,10 @@ import { deadlineMicroseconds } from "./sim/match-outcome.ts";
 import { factionKey, mayControlFaction } from "./sim/faction-ownership.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
+export { myMaterialDeposits, myMaterialBalances } from "./material-views.ts";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
+import { generateMaterialNodes } from "./sim/material-world.ts";
+import { ADVANCED_RESOURCE_KINDS, materialBalanceKey } from "./sim/materials.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { BOT_RULES } from "./sim/bot-policy.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
@@ -76,6 +79,16 @@ export const createMatch = spacetimedb.reducer(
         regenPerSec: node.regenPerSec, contested: node.contested,
       });
     }
+    // Advanced materials live alongside the legacy Salvage/Iron nodes. This
+    // is additive: old persisted matches and currencies remain valid.
+    for (const node of generateMaterialNodes(world)) {
+      ctx.db.materialNode.insert({
+        id: 0n, matchId: created.id, kind: node.kind,
+        gridX: node.gridX, gridY: node.gridY,
+        capacity: node.capacity, remaining: node.capacity,
+        regenPerSec: node.regenPerSec, contested: node.contested,
+      });
+    }
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       factionKey: factionKey(created.id, 0),
@@ -86,6 +99,13 @@ export const createMatch = spacetimedb.reducer(
       salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId: created.id, ownerSlot: 0,
+        materialKey: materialBalanceKey(created.id, 0, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
     const initial = world.spawns[0]!;
     for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
       const definition = CONSTRUCTION_RULES.definitions[base.kind];
@@ -145,6 +165,13 @@ export const joinMatch = spacetimedb.reducer(
       controller: "human", salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId, ownerSlot: slot,
+        materialKey: materialBalanceKey(matchId, slot, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
     if (!spawn) throw new SenderError("Missing server-owned spawn assignment");
     for (const base of initialStructures(slot, spawn.gridX, spawn.gridY)) {
@@ -247,7 +274,10 @@ export const issueShipOrder = spacetimedb.reducer(
       ship: current, destination: { x: targetX, y: targetY },
       environment: env, destinationVisible: true,
     }, {
-      cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+      cancelHarvest: id => {
+        ctx.db.harvestOrder.shipId.delete(id);
+        ctx.db.materialHarvestOrder.shipId.delete(id);
+      },
       setRoute: order => {
         const existing = ctx.db.shipRoute.shipId.find(shipId);
         if (!order) {
@@ -328,6 +358,7 @@ export const stopShip = spacetimedb.reducer(
     if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
     ctx.db.harvestOrder.shipId.delete(shipId);
+    ctx.db.materialHarvestOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
       ...current,
       velocityX: 0, velocityY: 0,
@@ -499,8 +530,12 @@ export const placeStructure = spacetimedb.reducer(
         salvage: faction.salvage, mapCells: world.mapCells, terrain,
         structures: Array.from(ctx.db.structure.matchId.filter(matchId))
           .map(row => ({ ...row, kind: row.kind as StructureKind })),
-        deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
-          .map(row => ({ x: row.gridX, y: row.gridY })),
+        deposits: [
+          ...Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+          ...Array.from(ctx.db.materialNode.matchId.filter(matchId))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+        ],
         hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
           .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
       },
@@ -567,8 +602,12 @@ export const placeStructuresBox = spacetimedb.reducer(
       salvage: faction.salvage,
       mapCells: world.mapCells,
       terrain, structures: originalStructures,
-      deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
-        .map(row => ({ x: row.gridX, y: row.gridY })),
+      deposits: [
+        ...Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+        ...Array.from(ctx.db.materialNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+      ],
       hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
         .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
     };
@@ -741,7 +780,7 @@ export const completeConstruction = spacetimedb.reducer(
 
 /** Reducers are exported by the module entrypoint for generated bindings and tests. */
 export {
-  orderHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
+  orderHarvest, orderMaterialHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
 } from "./economy-reducers.ts";
 
 export {

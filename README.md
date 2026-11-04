@@ -18,6 +18,8 @@
 
 > **Art/gameplay source-of-truth decision (3 Nov 2026):** discard the new project's independent ocean, ship, structure, map and RTS interaction visuals. Rebuild these **from the preserved Gemini prototype** in actual Phaser 4 and SpacetimeDB. Current progress, exact mapping and missing parity items are tracked in [Gemini Source of Truth](./docs/GEMINI_SOURCE_OF_TRUTH.md). This supersedes the earlier idea that Gemini was only loose inspiration. Existing real server authority, networking and tested validation remain.
 
+> **New economy direction (4 Nov 2026):** Keep combat-harvest hybrid ships and stationary Extractors, but add distinct Iron, Oil, Alloys and Radioisotopes, with richer location and recipe choices. [Resource Economy design and phased implementation](./docs/RESOURCE_ECONOMY.md). The additive first slice can collect advanced materials, but advanced upgrades are **not yet active**, and older matches retain their legacy Salvage balances.
+
 ## Primary gameplay reference
 
 The original Gemini prototype and its 18-file source archive are **preserved byte-for-byte** in [`references/gemini/`](./references/gemini/README.md). The HTML file is a playable, local **Canvas 2D prototype using simulated in-browser authority**, despite the architecture-themed filename. It is a reference for enjoyment, feel, visual language, loop and balance, **not** real Phaser or SpacetimeDB code to include in production.

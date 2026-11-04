@@ -3,6 +3,7 @@ import { FOCUS_MAP_CELL_EVENT } from "@/game/SeaScene";
 import { geminiFactionColor } from "@/game/art/GeminiPixelArt";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 import { cellsForSlots } from "../../spacetimedb/src/sim/worldgen";
+import { RESOURCE_TYPES, type AdvancedResourceKind } from "../../spacetimedb/src/sim/materials";
 
 interface TacticalOverviewProps { state: SpacetimeClientState }
 
@@ -51,6 +52,17 @@ export function TacticalOverview({ state }: TacticalOverviewProps) {
           {state.salvageNodes.filter(node => node.remaining > 0).map(node => (
             <rect key={`node-${node.id}`} x={node.gridX - 0.55} y={node.gridY - 0.55}
               width="1.1" height="1.1" fill={node.contested ? "#f97316" : "#eab308"} />
+          ))}
+          {state.materialDeposits.map(node => (
+            <g key={`material-${node.id}`}>
+              <circle cx={node.gridX + 0.5} cy={node.gridY + 0.5}
+                r="1.1"
+                stroke={RESOURCE_TYPES[node.kind as AdvancedResourceKind]?.color ?? "#f8fafc"}
+                strokeWidth="0.35"
+                fill={node.remaining > 0
+                  ? RESOURCE_TYPES[node.kind as AdvancedResourceKind]?.color ?? "#f8fafc"
+                  : "#334155"} />
+            </g>
           ))}
           {state.battleStructures.map(st => (
             <rect key={`structure-${st.id}`} x={st.gridX} y={st.gridY}

@@ -83,8 +83,12 @@ export const advanceBots = spacetimedb.reducer(
         kind, ownerSlot: slot, gridX, gridY, salvage,
         mapCells: world.mapCells, terrain,
         structures: currentShapes().map(row => ({ ...row, kind: row.kind as StructureKind })),
-        deposits: Array.from(ctx.db.salvageNode.matchId.filter(match.id))
-          .map(row => ({ x: row.gridX, y: row.gridY })),
+        deposits: [
+          ...Array.from(ctx.db.salvageNode.matchId.filter(match.id))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+          ...Array.from(ctx.db.materialNode.matchId.filter(match.id))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+        ],
         hulls: currentHulls(),
       }) === null;
 
@@ -392,8 +396,12 @@ export const advanceBots = spacetimedb.reducer(
               structures: currentShapes().map(row => ({
                 ...row, kind: row.kind as StructureKind,
               })),
-              deposits: Array.from(ctx.db.salvageNode.matchId.filter(match.id))
-                .map(row => ({ x: row.gridX, y: row.gridY })),
+              deposits: [
+                ...Array.from(ctx.db.salvageNode.matchId.filter(match.id))
+                  .map(row => ({ x: row.gridX, y: row.gridY })),
+                ...Array.from(ctx.db.materialNode.matchId.filter(match.id))
+                  .map(row => ({ x: row.gridX, y: row.gridY })),
+              ],
               hulls: currentHulls(),
             },
             nowUs, locationAllowed: allowed,
