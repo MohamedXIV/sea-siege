@@ -19,6 +19,7 @@ import { planBoxConstruction } from "./sim/box-construction.ts";
 import { nextWorkshopUpgrade } from "./sim/workshop.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
+import { shipSpeedMultiplier, NO_SHIP_REFITS } from "./sim/ship-refits.ts";
 import {
   CONSTRUCTION_RULES, initialStructures, structureDefinition, structureOnline,
   type StructureKind, type StructureShape,
@@ -427,6 +428,7 @@ export const advanceMatchSimulation = spacetimedb.reducer(
           hullAngleDeg: vessel.hullAngleDeg,
         },
         route.cellPath, route.cursor, world.mapCells, seconds,
+        shipSpeedMultiplier(ctx.db.shipRefit.shipId.find(vessel.id) ?? NO_SHIP_REFITS),
       );
 
       // Validate EACH actual travelled leg. A single start/end chord is not
@@ -790,6 +792,8 @@ export {
 export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
+export { refitShip } from "./ship-refit-reducers.ts";
+export { myShipRefits } from "./ship-refit-views.ts";
 
 export { addBot, removeBot } from "./bot-reducers.ts";
 

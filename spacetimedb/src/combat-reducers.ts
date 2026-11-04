@@ -199,6 +199,8 @@ export const advanceCombat = spacetimedb.reducer(
     function destroyShip(id: bigint): void {
       clearAim("ship", id);
       ctx.db.harvestOrder.shipId.delete(id);
+      ctx.db.materialHarvestOrder.shipId.delete(id);
+      ctx.db.shipRefit.shipId.delete(id);
       ctx.db.shipRoute.shipId.delete(id);
       ctx.db.ship.id.delete(id);
     }

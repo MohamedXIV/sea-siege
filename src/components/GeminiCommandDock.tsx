@@ -9,6 +9,7 @@ import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-
 import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import { RESOURCE_TYPES, type ResourceKind } from "../../spacetimedb/src/sim/materials";
+import { ShipRefitPanel } from "@/components/ShipRefitPanel";
 
 type Selection =
   | { type: "ship"; id: bigint; shipIds?: bigint[] }
@@ -228,6 +229,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
               </Button>
             </div>
             <p className="text-[10px] text-slate-400">Pick a material to approach or gather. At harvesting range, click again to start extraction; combat stays available.</p>
+            <ShipRefitPanel state={state} ship={selectedShip} />
           </div>
         ) : yard ? (
           <div className="space-y-1.5">
