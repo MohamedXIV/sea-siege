@@ -69,6 +69,7 @@ export class SeaScene extends Phaser.Scene {
   private selectedShipIds = new Set<bigint>();
   private selectionGraphics!: Phaser.GameObjects.Graphics;
   private leftDrag: LeftDrag | null = null;
+  private suppressRightUp = false;
   private buildKind: string | null = null;
   private buildPreview!: Phaser.GameObjects.Graphics;
   private cursorCell: { x: number; y: number } | null = null;
@@ -101,17 +102,57 @@ export class SeaScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (!this.isWorldPointer(pointer)) return;
-      if (!pointer.middleButtonDown() && !pointer.rightButtonDown()) return;
-      this.drag = {
-        x: pointer.x, y: pointer.y,
-        scrollX: this.cameras.main.scrollX, scrollY: this.cameras.main.scrollY,
+      const button = (pointer.event as MouseEvent).button;
+      if (button === 2 && this.buildKind) {
+        this.suppressRightUp = true;
+        this.cancelBuilding();
+        return;
+      }
+      if (button === 2 || button === 1) {
+        this.drag = {
+          x: pointer.x, y: pointer.y,
+          scrollX: this.cameras.main.scrollX,
+          scrollY: this.cameras.main.scrollY, moved: false,
+        };
+      }
+      if (button !== 0) return;
+      const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      this.leftDrag = {
+        screenX: pointer.x, screenY: pointer.y,
+        startWorldX: world.x, startWorldY: world.y,
+        endWorldX: world.x, endWorldY: world.y,
+        startCellX: Math.floor(world.x / TILE),
+        startCellY: Math.floor(world.y / TILE),
+        endCellX: Math.floor(world.x / TILE),
+        endCellY: Math.floor(world.y / TILE),
         moved: false,
       };
+      if (this.buildKind) {
+        this.cursorCell = {
+          x: this.leftDrag.startCellX, y: this.leftDrag.startCellY,
+        };
+        this.drawBuildPreview();
+      }
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-      if (this.buildKind && this.isWorldPointer(pointer)) {
-        const p = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        const x = Math.floor(p.x / TILE), y = Math.floor(p.y / TILE);
+      if (!this.isWorldPointer(pointer)) return;
+      const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      if (this.leftDrag) {
+        const drag = this.leftDrag;
+        drag.endWorldX = world.x;
+        drag.endWorldY = world.y;
+        drag.endCellX = Math.floor(world.x / TILE);
+        drag.endCellY = Math.floor(world.y / TILE);
+        if (Math.hypot(pointer.x - drag.screenX, pointer.y - drag.screenY) > 6)
+          drag.moved = true;
+        if (this.buildKind) {
+          this.cursorCell = { x: drag.endCellX, y: drag.endCellY };
+          this.drawBuildPreview();
+        } else if (drag.moved) {
+          this.drawSelectionBox(drag);
+        }
+      } else if (this.buildKind) {
+        const x = Math.floor(world.x / TILE), y = Math.floor(world.y / TILE);
         if (this.cursorCell?.x !== x || this.cursorCell.y !== y) {
           this.cursorCell = { x, y };
           this.drawBuildPreview();
@@ -127,9 +168,25 @@ export class SeaScene extends Phaser.Scene {
       );
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      const moved = this.drag?.moved;
+      const button = (pointer.event as MouseEvent).button;
+      const isWorld = this.isWorldPointer(pointer);
+      const pan = this.drag;
+      const left = this.leftDrag;
       this.drag = null;
-      if (!moved) this.pointerCommand(pointer);
+      this.leftDrag = null;
+      this.selectionGraphics.clear();
+      if (button === 2 && this.suppressRightUp) {
+        this.suppressRightUp = false;
+        return;
+      }
+      if (!isWorld) return;
+      if (button === 0 && left?.moved) {
+        if (this.buildKind) this.finishBoxBuild(left);
+        else this.finishBoxSelection(left);
+        return;
+      }
+      if (button !== 0 && pan?.moved) return;
+      this.pointerCommand(pointer);
     });
     this.input.on("wheel", (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
       if (!this.isWorldPointer(pointer)) return;
