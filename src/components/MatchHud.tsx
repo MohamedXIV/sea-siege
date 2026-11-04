@@ -61,7 +61,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
 
       <div className="flex flex-col items-start justify-end gap-2 p-3 sm:p-4">
         {state.error && (
-          <p role="alert" className="max-w-sm rounded-md border border-rose-700/60 bg-slate-950/90 px-3 py-2 text-xs text-rose-200">
+          <p role="alert" className="pointer-events-auto max-w-sm rounded-md border border-rose-700/60 bg-slate-950/90 px-3 py-2 text-xs text-rose-200">
             {state.error}
           </p>
         )}
