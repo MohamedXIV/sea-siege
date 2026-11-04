@@ -838,18 +838,19 @@ export class SeaScene extends Phaser.Scene {
         Math.cos(gy * 0.28 - t * 0.8) * 0.5 +
         Math.sin((gx + gy) * 0.2 + t * 0.6) * 0.3;
       const x = gx * TILE, y = gy * TILE;
-      if (v > 0.55) {
-        this.ocean.fillStyle(0x0c273c, 1);
-        this.ocean.fillRect(x, y, TILE, TILE);
-        if (v > 0.85) {
-          this.ocean.fillStyle(0x94d2e8, 0.16);
-          this.ocean.fillRect(x + 6, y + 14, 14, 3);
-        }
-      } else if (v > -0.15) {
-        this.ocean.fillStyle(0x081c2c, 1);
-        this.ocean.fillRect(x, y, TILE, TILE);
+      // Every visible cell receives water, including cells that have no
+      // authoritative terrain tile beyond the finite playable map. Otherwise
+      // the unshaded dark background reads as a hard rectangular ocean edge.
+      this.ocean.fillStyle(
+        v > 0.55 ? 0x10334b : v > -0.15 ? 0x0b263b : 0x081e30,
+        1,
+      );
+      this.ocean.fillRect(x, y, TILE, TILE);
+      if (v > 0.78) {
+        this.ocean.fillStyle(0x94d2e8, 0.18);
+        this.ocean.fillRect(x + 6, y + 14, 14, 3);
       }
-      this.ocean.lineStyle(1, 0x38bdf8, 0.04);
+      this.ocean.lineStyle(1, 0x38bdf8, 0.045);
       this.ocean.strokeRect(x, y, TILE, TILE);
     }
   }
