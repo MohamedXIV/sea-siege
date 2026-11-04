@@ -66,7 +66,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
           </p>
         )}
 
-        <div className="w-full max-w-2xl rounded-lg border border-slate-700/70 bg-slate-950/85 p-3 shadow-xl backdrop-blur-md">
+        <div className="pointer-events-auto w-full max-w-2xl rounded-lg border border-slate-700/70 bg-slate-950/85 p-3 shadow-xl backdrop-blur-md">
           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div>
               <div className="text-[10px] uppercase tracking-wider text-slate-400">Salvage</div>
