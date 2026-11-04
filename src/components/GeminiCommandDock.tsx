@@ -158,7 +158,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
         </div>
         <div className="mt-1 text-[10px] leading-relaxed text-slate-400">
           {buildKind
-            ? "Drag across cells to build a whole rectangle (maximum 64), or click to build one. Esc / right-click cancels. Green = valid, red = blocked."
+            ? "Drag to build a rectangular group (up to 64). Start/end must be legal; 2×2 buildings need aligned endpoints. Esc / right-click cancels. Green = valid, red = blocked."
             : "Build in the map, starting with connected floating platforms. Right-click issues ship movement."}
         </div>
         {buildKind && preview && (
@@ -205,7 +205,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
                 <CircleStop className="size-3" /> Stop
               </Button>
             </div>
-            <p className="text-[10px] text-slate-400">Click ocean to move; click a salvage node to approach/harvest.</p>
+            <p className="text-[10px] text-slate-400">Right-click ocean to move; right-click salvage to approach/harvest.</p>
           </div>
         ) : yard ? (
           <div className="space-y-1.5">
