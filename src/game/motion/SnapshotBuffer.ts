@@ -10,6 +10,24 @@ export type MotionSnapshot = Readonly<{
   turretAngle: number;
 }>;
 
+/**
+ * A command revision identifies a new order, NOT every simulation position.
+ * The authoritative 10 Hz motion tick keeps the same revision while x/y,
+ * bearing and velocity change. In particular, arrival sets velocity to zero
+ * without bumping revision, and that final sample must reach the renderer.
+ */
+export function shouldRecordMotionSample(
+  previous: MotionSnapshot | null,
+  next: MotionSnapshot,
+): boolean {
+  return !previous ||
+    next.revision !== previous.revision ||
+    next.x !== previous.x || next.y !== previous.y ||
+    next.vx !== previous.vx || next.vy !== previous.vy ||
+    next.hullAngle !== previous.hullAngle ||
+    next.turretAngle !== previous.turretAngle;
+}
+
 export type SampleKind = "hold" | "interpolated" | "extrapolated";
 export type MotionPresentation = Readonly<Omit<MotionSnapshot, "timeMs" | "revision"> & {
   kind: SampleKind;
