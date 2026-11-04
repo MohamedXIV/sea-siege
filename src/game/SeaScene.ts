@@ -203,6 +203,7 @@ export class SeaScene extends Phaser.Scene {
     this.input.keyboard?.on("keydown-H", this.focusHome);
     window.addEventListener("keydown", this.onEscape);
     window.addEventListener("contextmenu", this.onContextMenu, { capture: true });
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.cleanup());
 
@@ -219,6 +220,7 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.off("keydown-E", this.focusEnemy);
     this.input.keyboard?.off("keydown-H", this.focusHome);
+    this.scale.off(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
     window.removeEventListener("keydown", this.onEscape);
     window.removeEventListener("contextmenu", this.onContextMenu, { capture: true });
     this.clearEntities();
@@ -601,7 +603,9 @@ export class SeaScene extends Phaser.Scene {
       chunkX: chunk.chunkX, chunkY: chunk.chunkY,
       terrain: Array.from(chunk.terrain),
     })));
-    this.cameras.main.setBounds(0, 0, cells * TILE, cells * TILE);
+    // The sea is visually endless even though the authoritative playable
+    // world (terrain, bases and legal command targets) is finite.
+    // Camera bounds would create an apparent sea "edge" on wide screens.
     this.terrain.clear();
     for (const chunk of chunks) {
       for (let ly = 0; ly < 16; ly++) for (let lx = 0; lx < 16; lx++) {
@@ -798,10 +802,22 @@ export class SeaScene extends Phaser.Scene {
     // Infinite *visual* ocean. The server map remains finite for commands;
     // water extends beyond its edges wherever the camera can see.
     const camera = this.cameras.main;
-    const startX = Math.floor(camera.scrollX / TILE) - 2;
-    const startY = Math.floor(camera.scrollY / TILE) - 2;
-    const endX = Math.ceil((camera.scrollX + this.scale.width / camera.zoom) / TILE) + 3;
-    const endY = Math.ceil((camera.scrollY + this.scale.height / camera.zoom) / TILE) + 3;
+    // Phaser camera scrollX/scrollY alone are NOT the actual top-left world
+    // corner when zoom is != 1 (or when zooming around the center). Earlier
+    // calculations created a visible rectangular gap on wide viewports.
+    // Unproject all viewport corners using the live camera matrix instead.
+    const a = camera.getWorldPoint(0, 0);
+    const b = camera.getWorldPoint(camera.width, 0);
+    const d = camera.getWorldPoint(0, camera.height);
+    const e = camera.getWorldPoint(camera.width, camera.height);
+    const minX = Math.min(a.x, b.x, d.x, e.x);
+    const maxX = Math.max(a.x, b.x, d.x, e.x);
+    const minY = Math.min(a.y, b.y, d.y, e.y);
+    const maxY = Math.max(a.y, b.y, d.y, e.y);
+    const startX = Math.floor(minX / TILE) - 4;
+    const startY = Math.floor(minY / TILE) - 4;
+    const endX = Math.ceil(maxX / TILE) + 4;
+    const endY = Math.ceil(maxY / TILE) + 4;
     this.ocean.clear();
     this.ocean.fillStyle(0x06131f, 1);
     this.ocean.fillRect(startX * TILE, startY * TILE,
