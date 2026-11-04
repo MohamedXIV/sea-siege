@@ -8,6 +8,7 @@ import { deadlineMicroseconds } from "./sim/match-outcome.ts";
 import { factionKey, mayControlFaction } from "./sim/faction-ownership.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
+export { myMaterialDeposits, myMaterialBalances } from "./material-views.ts";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { generateMaterialNodes } from "./sim/material-world.ts";
 import { ADVANCED_RESOURCE_KINDS, materialBalanceKey } from "./sim/materials.ts";
