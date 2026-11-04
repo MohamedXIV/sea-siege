@@ -530,8 +530,12 @@ export const placeStructure = spacetimedb.reducer(
         salvage: faction.salvage, mapCells: world.mapCells, terrain,
         structures: Array.from(ctx.db.structure.matchId.filter(matchId))
           .map(row => ({ ...row, kind: row.kind as StructureKind })),
-        deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
-          .map(row => ({ x: row.gridX, y: row.gridY })),
+        deposits: [
+          ...Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+          ...Array.from(ctx.db.materialNode.matchId.filter(matchId))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+        ],
         hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
           .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
       },
@@ -598,8 +602,12 @@ export const placeStructuresBox = spacetimedb.reducer(
       salvage: faction.salvage,
       mapCells: world.mapCells,
       terrain, structures: originalStructures,
-      deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
-        .map(row => ({ x: row.gridX, y: row.gridY })),
+      deposits: [
+        ...Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+        ...Array.from(ctx.db.materialNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+      ],
       hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
         .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
     };
