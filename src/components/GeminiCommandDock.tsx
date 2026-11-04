@@ -8,6 +8,7 @@ import {
 import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-client";
 import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
+import { RESOURCE_TYPES, type ResourceKind } from "../../spacetimedb/src/sim/materials";
 
 type Selection =
   | { type: "ship"; id: bigint; shipIds?: bigint[] }
@@ -113,17 +114,30 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
     selectedBuilding.connected ? selectedBuilding : undefined;
   const salvage = state.myFaction?.salvage ?? 0;
 
-  const harvestNearest = () => {
+  const harvestNearest = (kind: ResourceKind) => {
     if (!selectedShip) return;
-    const node = state.salvageNodes.filter(n => n.remaining > 0)
-      .sort((a,b) =>
-        Math.hypot(selectedShip.x - a.gridX - 0.5, selectedShip.y - a.gridY - 0.5) -
-        Math.hypot(selectedShip.x - b.gridX - 0.5, selectedShip.y - b.gridY - 0.5))[0];
-    if (!node) { setError("No salvage deposit available"); return; }
-    const distance = Math.hypot(selectedShip.x - node.gridX - 0.5, selectedShip.y - node.gridY - 0.5);
-    void perform(() => distance <= 3.5
-      ? spacetimeClient.orderHarvest(selectedShip.id, node.id)
-      : spacetimeClient.issueShipOrder(selectedShip.id, node.gridX + 0.5, node.gridY + 0.5));
+    const choices = kind === "iron"
+      ? state.salvageNodes.filter(n => n.remaining > 0).map(n => ({
+          id: n.id, gridX: n.gridX, gridY: n.gridY,
+        }))
+      : state.materialDeposits
+          .filter(n => n.kind === kind && n.remaining > 0)
+          .map(n => ({ id: n.id, gridX: n.gridX, gridY: n.gridY }));
+    const node = choices.sort((a, b) =>
+      Math.hypot(selectedShip.x - a.gridX - 0.5, selectedShip.y - a.gridY - 0.5) -
+      Math.hypot(selectedShip.x - b.gridX - 0.5, selectedShip.y - b.gridY - 0.5))[0];
+    if (!node) {
+      setError(`No ${RESOURCE_TYPES[kind].name} deposit available`);
+      return;
+    }
+    const distance = Math.hypot(
+      selectedShip.x - node.gridX - 0.5, selectedShip.y - node.gridY - 0.5);
+    void perform(() => distance <= ECONOMY_RULES.harvestRangeCells
+      ? kind === "iron"
+        ? spacetimeClient.orderHarvest(selectedShip.id, node.id)
+        : spacetimeClient.orderMaterialHarvest(selectedShip.id, node.id)
+      : spacetimeClient.issueShipOrder(
+        selectedShip.id, node.gridX + 0.5, node.gridY + 0.5));
   };
 
   return (
@@ -151,7 +165,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
                 className="h-auto min-h-9 flex-col items-start gap-0.5 border-slate-700 p-1.5 text-left text-[10px]"
               >
                 <span className="max-w-full truncate font-semibold">{label}</span>
-                <span className="font-mono text-amber-300">{cost} Salvage</span>
+                <span className="font-mono text-amber-300">{cost} Iron</span>
               </Button>
             );
           })}
@@ -195,17 +209,25 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
           <div className="space-y-1.5 text-xs">
             <div className="font-semibold text-white">{selectedShip.kind.toUpperCase()} · HP {selectedShip.hp}</div>
             <div className="flex flex-wrap gap-1.5">
-              <Button size="sm" variant="outline" disabled={pending}
-                onClick={harvestNearest} className="border-slate-700 text-xs">
-                <Pickaxe className="size-3" /> Harvest Nearest
-              </Button>
+              {(["iron", "oil", "alloy", "isotope"] as const).map(kind => (
+                <Button key={kind} size="sm" variant="outline"
+                  disabled={pending || ECONOMY_RULES.ships[selectedShip.kind as keyof typeof ECONOMY_RULES.ships]?.harvestPerSecond === 0}
+                  onClick={() => harvestNearest(kind)}
+                  className="h-7 border-slate-700 px-2 text-[11px]"
+                >
+                  <Pickaxe className="size-3" />
+                  <span style={{ color: RESOURCE_TYPES[kind].color }}>
+                    {RESOURCE_TYPES[kind].name}
+                  </span>
+                </Button>
+              ))}
               <Button size="sm" variant="outline" disabled={pending}
                 onClick={() => void perform(() => spacetimeClient.stopShip(selectedShip.id))}
                 className="border-slate-700 text-xs text-rose-300">
                 <CircleStop className="size-3" /> Stop
               </Button>
             </div>
-            <p className="text-[10px] text-slate-400">Right-click ocean to move; right-click salvage to approach/harvest.</p>
+            <p className="text-[10px] text-slate-400">Pick a material to approach or gather. At harvesting range, click again to start extraction; combat stays available.</p>
           </div>
         ) : yard ? (
           <div className="space-y-1.5">
