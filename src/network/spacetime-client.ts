@@ -710,6 +710,12 @@ export class SpacetimeClient {
     await this.conn.reducers.enqueueShip({ shipyardId, kind });
   }
 
+  async upgradeWorkshop(workshopId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop upgrade");
+    await this.conn.reducers.upgradeWorkshop({ workshopId });
+  }
+
   async cancelShipProduction(orderId: bigint): Promise<void> {
     if (!this.conn || this.status !== "connected")
       throw new Error("Not connected for shipyard production");
