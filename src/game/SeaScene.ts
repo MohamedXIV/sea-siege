@@ -19,6 +19,7 @@ export const FOCUS_MAP_CELL_EVENT = "sea-siege:focus-map-cell";
 export const GEMINI_BUILD_MODE_EVENT = "sea-siege:gemini-build-mode";
 export const GEMINI_SELECTION_EVENT = "sea-siege:gemini-selection";
 export const GEMINI_FEEDBACK_EVENT = "sea-siege:gemini-feedback";
+export const GEMINI_BUILD_PREVIEW_EVENT = "sea-siege:gemini-build-preview";
 
 interface VesselArt {
   container: Phaser.GameObjects.Container;
@@ -199,6 +200,9 @@ export class SeaScene extends Phaser.Scene {
     this.buildPreview.fillRect(x, y, size * TILE, size * TILE);
     this.buildPreview.lineStyle(2, color, 0.85);
     this.buildPreview.strokeRect(x, y, size * TILE, size * TILE);
+    window.dispatchEvent(new CustomEvent(GEMINI_BUILD_PREVIEW_EVENT, {
+      detail: { reason, x: this.cursorCell.x, y: this.cursorCell.y },
+    }));
   }
 
   private selectEntity(type: "ship" | "structure", id: bigint): void {
@@ -267,7 +271,7 @@ export class SeaScene extends Phaser.Scene {
       const kind = this.buildKind;
       spacetimeClient.placeStructure(kind, gridX, gridY).then(() => {
         window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
-          detail: { message: kind + " construction queued" },
+          detail: { message: kind + " construction queued", success: true },
         }));
         this.drawBuildPreview();
       }).catch(err => this.reportOrderError(err));
