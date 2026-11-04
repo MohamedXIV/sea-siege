@@ -13,6 +13,9 @@ import {
 import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
 import { shipsInSelectionBox } from "./input/selection-box";
+import {
+  RESOURCE_TYPES, type AdvancedResourceKind,
+} from "../../spacetimedb/src/sim/materials";
 
 const INTERPOLATION_DELAY_MS = 100;
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
@@ -334,7 +337,10 @@ export class SeaScene extends Phaser.Scene {
         gridX: st.gridX, gridY: st.gridY,
         width: st.width, height: st.height, complete: st.complete,
       })),
-      deposits: state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
+      deposits: [
+        ...state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
+        ...state.materialDeposits.map(n => ({ x: n.gridX, y: n.gridY })),
+      ],
       hulls: state.battleShips.map(s => ({ x: s.x, y: s.y, radius: s.radiusCells })),
     };
   }
@@ -669,6 +675,18 @@ export class SeaScene extends Phaser.Scene {
       gfx.fillStyle(node.contested ? 0xf97316 : 0xeab308, 1);
       gfx.fillRect(px + 11, py + 11, 8, 8);
       gfx.fillRect(px + 21, py + 19, 7, 7);
+    }
+    for (const node of spacetimeClient.getState().materialDeposits) {
+      const px = node.gridX * TILE, py = node.gridY * TILE;
+      const palette = RESOURCE_TYPES[node.kind as AdvancedResourceKind];
+      const tint = Number.parseInt((palette?.color ?? "#f8fafc").slice(1), 16);
+      const hasMaterial = node.remaining > 0;
+      gfx.lineStyle(2, tint, hasMaterial ? 0.85 : 0.25);
+      gfx.strokeCircle(px + TILE / 2, py + TILE / 2, 12);
+      gfx.fillStyle(hasMaterial ? tint : 0x334155, hasMaterial ? 0.8 : 0.5);
+      gfx.fillRect(px + 14, py + 14, 12, 12);
+      gfx.lineStyle(1, 0x020617, 0.65);
+      gfx.strokeRect(px + 14, py + 14, 12, 12);
     }
   }
 
