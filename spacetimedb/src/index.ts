@@ -12,6 +12,7 @@ import { generateDeterministicWorld } from "./sim/worldgen.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { BOT_RULES } from "./sim/bot-policy.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
+import { planBoxConstruction } from "./sim/box-construction.ts";
 import { nextWorkshopUpgrade } from "./sim/workshop.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
@@ -520,6 +521,104 @@ export const placeStructure = spacetimedb.reducer(
       },
     });
     if (!result.ok) throw new SenderError(result.reason);
+  },
+);
+
+/**
+ * Atomic box construction for the Gemini drag-to-build workflow.
+ * The ENTIRE rectangle is validated before the first debit/insert. Normal
+ * construction validators and schedules still apply to every individual
+ * structure, with temporary connected virtual platform footprints enabling
+ * construction beyond one cell from the originally completed base.
+ *
+ * Throwing SenderError aborts the whole SpacetimeDB transaction; there is
+ * never a partially paid / partially built rectangle.
+ */
+export const placeStructuresBox = spacetimedb.reducer(
+  {
+    matchId: t.u64(), kind: t.string(),
+    startX: t.u32(), startY: t.u32(), endX: t.u32(), endY: t.u32(),
+  },
+  (ctx, { matchId, kind, startX, startY, endX, endY }) => {
+    const match = ctx.db.match.id.find(matchId);
+    if (!match || !matchStillActive(match.phase, match.startedAtUs,
+      ctx.timestamp.microsSinceUnixEpoch))
+      throw new SenderError("Match is not active");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated)
+      throw new SenderError("Cannot construct in another player's match");
+    const definition = structureDefinition(kind);
+    if (!definition || kind === "command_core")
+      throw new SenderError("Unknown or protected structure kind");
+    const world = ctx.db.worldConfig.matchId.find(matchId);
+    if (!world) throw new SenderError("Missing authoritative world");
+    const terrain = decodeTerrainChunks(
+      world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
+    );
+    const originalStructures = Array.from(ctx.db.structure.matchId.filter(matchId))
+      .map(row => ({ ...row, kind: row.kind as StructureKind }));
+    const base = {
+      kind: kind as StructureKind,
+      ownerSlot: faction.slot,
+      gridX: startX, gridY: startY,
+      salvage: faction.salvage,
+      mapCells: world.mapCells,
+      terrain, structures: originalStructures,
+      deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+        .map(row => ({ x: row.gridX, y: row.gridY })),
+      hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
+        .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
+    };
+    const plan = planBoxConstruction(base, endX, endY);
+    if (plan.reason) throw new SenderError(plan.reason);
+
+    // Reuse dispatchConstruction (debit, validation, timers) for each member
+    // of the plan; prior batch-only footprints are virtually connected but
+    // actual DB platforms remain incomplete until their completion events.
+    const virtual: StructureShape[] = [];
+    let remainingSalvage = faction.salvage;
+    for (const [index, cell] of plan.cells.entries()) {
+      const result = dispatchConstruction({
+        faction: {
+          matchId, slot: faction.slot, controller: "human",
+          eliminated: faction.eliminated,
+        },
+        request: {
+          ...base, gridX: cell.gridX, gridY: cell.gridY,
+          salvage: remainingSalvage,
+          structures: [...originalStructures, ...virtual],
+        },
+        nowUs: ctx.timestamp.microsSinceUnixEpoch,
+        locationAllowed: true,
+      }, {
+        setBalance: salvage => {
+          remainingSalvage = salvage;
+          ctx.db.factionState.id.update({ ...faction, salvage });
+        },
+        insertStructure: row => ctx.db.structure.insert({
+          id: 0n, ...row, lastFiredAtUs: -1n, turretAngleDeg: 0,
+          level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
+          complete: false,
+        }).id,
+        scheduleCompletion: (structureId, dueAtUs) => {
+          ctx.db.constructionSchedule.insert({
+            scheduledId: 0n, structureId,
+            scheduledAt: ScheduleAt.time(dueAtUs),
+          });
+        },
+      });
+      if (!result.ok) throw new SenderError(result.reason);
+      virtual.push({
+        id: -BigInt(index + 1), kind: kind as StructureKind,
+        ownerSlot: faction.slot,
+        gridX: cell.gridX, gridY: cell.gridY,
+        width: definition.width, height: definition.height,
+        complete: true,
+      });
+    }
   },
 );
 

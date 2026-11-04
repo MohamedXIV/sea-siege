@@ -9,7 +9,10 @@ import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-
 import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 
-type Selection = { type: "ship" | "structure"; id: bigint } | null;
+type Selection =
+  | { type: "ship"; id: bigint; shipIds?: bigint[] }
+  | { type: "structure"; id: bigint }
+  | null;
 type BuildKind = "platform" | "shipyard" | "workshop" | "cannon" | "salvage_rig";
 const BUILD_TYPES: { kind: BuildKind; label: string }[] = [
   { kind: "platform", label: "Floating Platform" },
@@ -30,7 +33,10 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ reason: string | null; x: number; y: number } | null>(null);
+  const [preview, setPreview] = useState<{
+    reason: string | null; count: number;
+    x: number; y: number; endX: number; endY: number;
+  } | null>(null);
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -49,12 +55,22 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
       }
     };
     const placementPreview = (event: Event) =>
-      setPreview((event as CustomEvent<{ reason: string | null; x: number; y: number }>).detail);
+      setPreview((event as CustomEvent<{
+        reason: string | null; count: number;
+        x: number; y: number; endX: number; endY: number;
+      }>).detail);
+    const buildModeUpdate = (event: Event) => {
+      const kind = (event as CustomEvent<{ kind: BuildKind | null }>).detail?.kind ?? null;
+      setBuildKind(kind);
+      if (kind === null) setPreview(null);
+    };
+    window.addEventListener(GEMINI_BUILD_MODE_EVENT, buildModeUpdate);
     window.addEventListener(GEMINI_SELECTION_EVENT, listener);
     window.addEventListener(GEMINI_FEEDBACK_EVENT, feedback);
     window.addEventListener(GEMINI_BUILD_PREVIEW_EVENT, placementPreview);
     return () => {
       window.removeEventListener(GEMINI_SELECTION_EVENT, listener);
+      window.removeEventListener(GEMINI_BUILD_MODE_EVENT, buildModeUpdate);
       window.removeEventListener(GEMINI_FEEDBACK_EVENT, feedback);
       window.removeEventListener(GEMINI_BUILD_PREVIEW_EVENT, placementPreview);
     };
@@ -86,9 +102,10 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, { detail: { kind } }));
   };
 
-  const selectedShip = selected?.type === "ship"
-    ? state.myShips.find(ship => ship.id === selected.id)
-    : undefined;
+  const selectedShipIds = selected?.type === "ship"
+    ? selected.shipIds ?? [selected.id] : [];
+  const selectedShips = state.myShips.filter(ship => selectedShipIds.includes(ship.id));
+  const selectedShip = selectedShips.length === 1 ? selectedShips[0] : undefined;
   const selectedBuilding = selected?.type === "structure"
     ? state.myStructures.find(st => st.id === selected.id)
     : undefined;
@@ -141,12 +158,12 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
         </div>
         <div className="mt-1 text-[10px] leading-relaxed text-slate-400">
           {buildKind
-            ? "Green outline = valid. Red = blocked. Platforms must touch the connected base; buildings require completed supporting platforms."
+            ? "Drag to build a rectangular group (up to 64). Start/end must be legal; 2×2 buildings need aligned endpoints. Esc / right-click cancels. Green = valid, red = blocked."
             : "Build in the map, starting with connected floating platforms. Right-click issues ship movement."}
         </div>
         {buildKind && preview && (
           <p role="status" className={`mt-1 text-[10px] ${preview.reason ? "text-rose-300" : "text-emerald-300"}`}>
-            {preview.reason ?? "Valid placement"} · ({preview.x}, {preview.y})
+            {preview.reason ?? `${preview.count} valid structures`} · ({preview.x}, {preview.y}) → ({preview.endX}, {preview.endY})
           </p>
         )}
       </section>
@@ -155,7 +172,26 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
         <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-sky-300">
           <Crosshair className="size-3.5" /> TACTICAL COMMAND
         </div>
-        {selectedShip ? (
+        {selectedShips.length > 1 ? (
+          <div className="space-y-1.5 text-xs">
+            <div className="font-semibold text-sky-300">{selectedShips.length} SHIPS SELECTED</div>
+            <Button size="sm" variant="outline" disabled={pending}
+              onClick={() => void perform(async () => {
+                const results = await Promise.allSettled(
+                  selectedShips.map(ship => spacetimeClient.stopShip(ship.id))
+                );
+                const failures = results.filter(result => result.status === "rejected");
+                if (failures.length) throw new Error(`${failures.length} stop orders were rejected`);
+              })}
+              className="border-slate-700 text-xs text-rose-300">
+              <CircleStop className="size-3" /> Stop selected fleet
+            </Button>
+            <p className="text-[10px] text-slate-400">
+              Right-click water to move selected ships in a loose formation.
+              Drag on empty water to deselect.
+            </p>
+          </div>
+        ) : selectedShip ? (
           <div className="space-y-1.5 text-xs">
             <div className="font-semibold text-white">{selectedShip.kind.toUpperCase()} · HP {selectedShip.hp}</div>
             <div className="flex flex-wrap gap-1.5">
@@ -169,7 +205,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
                 <CircleStop className="size-3" /> Stop
               </Button>
             </div>
-            <p className="text-[10px] text-slate-400">Click ocean to move; click a salvage node to approach/harvest.</p>
+            <p className="text-[10px] text-slate-400">Right-click ocean to move; right-click salvage to approach/harvest.</p>
           </div>
         ) : yard ? (
           <div className="space-y-1.5">

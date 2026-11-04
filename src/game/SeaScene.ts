@@ -8,9 +8,11 @@ import {
 } from "./art/GeminiPixelArt";
 import type { GeminiBattleShip, GeminiBattleStructure } from "../module_bindings/types";
 import {
-  validateStructurePlacement, type StructureKind,
+  structureDefinition, type BuildRequest, type StructureKind,
 } from "../../spacetimedb/src/sim/construction";
 import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
+import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
+import { shipsInSelectionBox } from "./input/selection-box";
 
 const INTERPOLATION_DELAY_MS = 100;
 export const FOCUS_ENEMY_EVENT = "sea-siege:focus-enemy";
@@ -38,6 +40,20 @@ interface BuildingArt {
   key: string;
 }
 
+interface LeftDrag {
+  screenX: number;
+  screenY: number;
+  startWorldX: number;
+  startWorldY: number;
+  endWorldX: number;
+  endWorldY: number;
+  startCellX: number;
+  startCellY: number;
+  endCellX: number;
+  endCellY: number;
+  moved: boolean;
+}
+
 /**
  * Gemini's original 40px pixel-art/water/ship silhouettes ported into a REAL
  * Phaser 4 scene. This scene never simulates combat, economy, terrain or AI:
@@ -51,6 +67,11 @@ export class SeaScene extends Phaser.Scene {
   private vessels = new Map<bigint, VesselArt>();
   private buildings = new Map<bigint, BuildingArt>();
   private selectedShipId: bigint | null = null;
+  private selectedShipIds = new Set<bigint>();
+  private selectionGraphics!: Phaser.GameObjects.Graphics;
+  private leftDrag: LeftDrag | null = null;
+  private suppressRightUp = false;
+  private suppressLeftUp = false;
   private buildKind: string | null = null;
   private buildPreview!: Phaser.GameObjects.Graphics;
   private cursorCell: { x: number; y: number } | null = null;
@@ -77,22 +98,69 @@ export class SeaScene extends Phaser.Scene {
     this.deposits = this.add.graphics().setDepth(4);
     this.markers = this.add.graphics().setDepth(31);
     this.buildPreview = this.add.graphics().setDepth(34);
+    this.selectionGraphics = this.add.graphics().setDepth(35);
     this.cameras.main.setZoom(1);
 
     this.input.mouse?.disableContextMenu();
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (!this.isWorldPointer(pointer)) return;
-      if (!pointer.middleButtonDown() && !pointer.rightButtonDown()) return;
-      this.drag = {
-        x: pointer.x, y: pointer.y,
-        scrollX: this.cameras.main.scrollX, scrollY: this.cameras.main.scrollY,
+      const button = (pointer.event as MouseEvent).button;
+      if (button === 2 && this.buildKind) {
+        this.suppressRightUp = true;
+        this.cancelBuilding();
+        return;
+      }
+      if (button === 2 || button === 1) {
+        this.drag = {
+          x: pointer.x, y: pointer.y,
+          scrollX: this.cameras.main.scrollX,
+          scrollY: this.cameras.main.scrollY, moved: false,
+        };
+      }
+      if (button !== 0) return;
+      const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      this.leftDrag = {
+        screenX: pointer.x, screenY: pointer.y,
+        startWorldX: world.x, startWorldY: world.y,
+        endWorldX: world.x, endWorldY: world.y,
+        startCellX: Math.floor(world.x / TILE),
+        startCellY: Math.floor(world.y / TILE),
+        endCellX: Math.floor(world.x / TILE),
+        endCellY: Math.floor(world.y / TILE),
         moved: false,
       };
+      if (this.buildKind) {
+        this.cursorCell = {
+          x: this.leftDrag.startCellX, y: this.leftDrag.startCellY,
+        };
+        this.drawBuildPreview();
+      }
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-      if (this.buildKind && this.isWorldPointer(pointer)) {
-        const p = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        const x = Math.floor(p.x / TILE), y = Math.floor(p.y / TILE);
+      if (!this.isWorldPointer(pointer)) return;
+      const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      if (this.leftDrag) {
+        const drag = this.leftDrag;
+        const oldCellX = drag.endCellX;
+        const oldCellY = drag.endCellY;
+        drag.endWorldX = world.x;
+        drag.endWorldY = world.y;
+        drag.endCellX = Math.floor(world.x / TILE);
+        drag.endCellY = Math.floor(world.y / TILE);
+        if (Math.hypot(pointer.x - drag.screenX, pointer.y - drag.screenY) > 6)
+          drag.moved = true;
+        if (this.buildKind) {
+          if (drag.endCellX !== oldCellX || drag.endCellY !== oldCellY) {
+            this.cursorCell = { x: drag.endCellX, y: drag.endCellY };
+            // O(n) occupancy checks only when the destination CELL changes,
+            // not 60 times/sec during a continuous pointer drag.
+            this.drawBuildPreview();
+          }
+        } else if (drag.moved) {
+          this.drawSelectionBox(drag);
+        }
+      } else if (this.buildKind) {
+        const x = Math.floor(world.x / TILE), y = Math.floor(world.y / TILE);
         if (this.cursorCell?.x !== x || this.cursorCell.y !== y) {
           this.cursorCell = { x, y };
           this.drawBuildPreview();
@@ -108,9 +176,33 @@ export class SeaScene extends Phaser.Scene {
       );
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      const moved = this.drag?.moved;
+      const button = (pointer.event as MouseEvent).button;
+      const isWorld = this.isWorldPointer(pointer);
+      const pan = this.drag;
+      const left = this.leftDrag;
       this.drag = null;
-      if (!moved) this.pointerCommand(pointer);
+      this.leftDrag = null;
+      this.selectionGraphics.clear();
+      if (button === 2 && this.suppressRightUp) {
+        this.suppressRightUp = false;
+        return;
+      }
+      if (button === 0 && this.suppressLeftUp) {
+        this.suppressLeftUp = false;
+        return;
+      }
+      // A gesture starting over React UI and ending over the canvas must
+      // never become a click / move order.
+      if (button === 0 && !left) return;
+      if (button === 2 && !pan) return;
+      if (!isWorld) return;
+      if (button === 0 && left?.moved) {
+        if (this.buildKind) this.finishBoxBuild(left);
+        else this.finishBoxSelection(left);
+        return;
+      }
+      if (button !== 0 && pan?.moved) return;
+      this.pointerCommand(pointer);
     });
     this.input.on("wheel", (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
       if (!this.isWorldPointer(pointer)) return;
@@ -125,6 +217,9 @@ export class SeaScene extends Phaser.Scene {
     window.addEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.on("keydown-E", this.focusEnemy);
     this.input.keyboard?.on("keydown-H", this.focusHome);
+    window.addEventListener("keydown", this.onEscape);
+    window.addEventListener("contextmenu", this.onContextMenu, { capture: true });
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.cleanup());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => this.cleanup());
 
@@ -141,6 +236,9 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     this.input.keyboard?.off("keydown-E", this.focusEnemy);
     this.input.keyboard?.off("keydown-H", this.focusHome);
+    this.scale.off(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
+    window.removeEventListener("keydown", this.onEscape);
+    window.removeEventListener("contextmenu", this.onContextMenu, { capture: true });
     this.clearEntities();
   }
 
@@ -153,6 +251,10 @@ export class SeaScene extends Phaser.Scene {
     for (const art of this.buildings.values()) art.image.destroy();
     this.buildings.clear();
     this.selectedShipId = null;
+    this.selectedShipIds.clear();
+    this.selectionGraphics?.clear();
+    this.leftDrag = null;
+    this.selectEntity(null);
     this.cursorCell = null;
     this.buildKind = null;
     this.buildPreview?.clear();
@@ -185,33 +287,171 @@ export class SeaScene extends Phaser.Scene {
   private onBuildMode = (event: Event): void => {
     const kind = (event as CustomEvent<{ kind: string | null }>).detail?.kind ?? null;
     this.buildKind = kind;
+    this.leftDrag = null;
     this.cursorCell = null;
+    this.selectionGraphics.clear();
     this.buildPreview.clear();
   };
+
+  private cancelBuilding = (): void => {
+    if (!this.buildKind) return;
+    if (this.leftDrag) this.suppressLeftUp = true;
+    // The same event updates both Phaser and the React Construction Dock.
+    window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, {
+      detail: { kind: null },
+    }));
+  };
+
+  private onEscape = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape") return;
+    if (this.buildKind) {
+      event.preventDefault();
+      this.cancelBuilding();
+    } else {
+      this.selectShips([]);
+    }
+  };
+
+  private onContextMenu = (event: MouseEvent): void => {
+    if (this.buildKind) {
+      event.preventDefault();
+      this.cancelBuilding();
+    }
+  };
+
+  private buildRequest(kind: string, gridX: number, gridY: number): BuildRequest | null {
+    const state = spacetimeClient.getState();
+    const slot = state.myMembership?.slot;
+    if (!this.validatedTerrain || slot === undefined ||
+        state.activeMatch?.phase !== "active") return null;
+    return {
+      kind: kind as StructureKind, ownerSlot: slot, gridX, gridY,
+      salvage: state.myFaction?.salvage ?? 0,
+      mapCells: this.validatedMapCells,
+      terrain: this.validatedTerrain,
+      structures: state.battleStructures.map(st => ({
+        id: st.id, ownerSlot: st.ownerSlot, kind: st.kind as StructureKind,
+        gridX: st.gridX, gridY: st.gridY,
+        width: st.width, height: st.height, complete: st.complete,
+      })),
+      deposits: state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
+      hulls: state.battleShips.map(s => ({ x: s.x, y: s.y, radius: s.radiusCells })),
+    };
+  }
 
   private drawBuildPreview(): void {
     this.buildPreview.clear();
     if (!this.buildKind || !this.cursorCell) return;
-    const sizes: Record<string, number> = { platform: 1, cannon: 1, shipyard: 2, workshop: 2, salvage_rig: 2 };
-    const size = sizes[this.buildKind] ?? 1;
-    const x = this.cursorCell.x * TILE, y = this.cursorCell.y * TILE;
-    // Preview reuses the exact pure server validator, but is advisory:
-    // SpacetimeDB always validates again with current authoritative state.
-    const reason = this.placementError(this.buildKind, this.cursorCell.x, this.cursorCell.y);
-    const color = reason ? 0xef4444 : 0x22c55e;
+    const kind = this.buildKind;
+    const def = structureDefinition(kind);
+    if (!def) return;
+    const drag = this.leftDrag;
+    const sx = drag?.startCellX ?? this.cursorCell.x;
+    const sy = drag?.startCellY ?? this.cursorCell.y;
+    const ex = this.cursorCell.x;
+    const ey = this.cursorCell.y;
+    const request = this.buildRequest(kind, sx, sy);
+    const plan = request
+      ? planBoxConstruction(request, ex, ey)
+      : { reason: "World is not ready for construction", cells: [] };
+    const color = plan.reason ? 0xef4444 : 0x22c55e;
     this.buildPreview.fillStyle(color, 0.23);
-    this.buildPreview.fillRect(x, y, size * TILE, size * TILE);
-    this.buildPreview.lineStyle(2, color, 0.85);
-    this.buildPreview.strokeRect(x, y, size * TILE, size * TILE);
+    this.buildPreview.lineStyle(2, color, 0.9);
+    if (plan.reason) {
+      const x = Math.min(sx, ex) * TILE;
+      const y = Math.min(sy, ey) * TILE;
+      const width = (Math.abs(ex - sx) + def.width) * TILE;
+      const height = (Math.abs(ey - sy) + def.height) * TILE;
+      this.buildPreview.fillRect(x, y, width, height);
+      this.buildPreview.strokeRect(x, y, width, height);
+    } else {
+      for (const cell of plan.cells) {
+        const x = cell.gridX * TILE, y = cell.gridY * TILE;
+        this.buildPreview.fillRect(x, y, def.width * TILE, def.height * TILE);
+        this.buildPreview.strokeRect(x, y, def.width * TILE, def.height * TILE);
+      }
+    }
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_PREVIEW_EVENT, {
-      detail: { reason, x: this.cursorCell.x, y: this.cursorCell.y },
+      detail: {
+        reason: plan.reason, count: plan.cells.length,
+        x: sx, y: sy, endX: ex, endY: ey,
+      },
     }));
   }
 
-  private selectEntity(type: "ship" | "structure", id: bigint): void {
+  private drawSelectionBox(drag: LeftDrag): void {
+    const x = Math.min(drag.startWorldX, drag.endWorldX);
+    const y = Math.min(drag.startWorldY, drag.endWorldY);
+    const w = Math.abs(drag.endWorldX - drag.startWorldX);
+    const h = Math.abs(drag.endWorldY - drag.startWorldY);
+    this.selectionGraphics.clear();
+    this.selectionGraphics.fillStyle(0x38bdf8, 0.14);
+    this.selectionGraphics.fillRect(x, y, w, h);
+    this.selectionGraphics.lineStyle(2, 0x67e8f9, 0.9);
+    this.selectionGraphics.strokeRect(x, y, w, h);
+  }
+
+  private finishBoxSelection(drag: LeftDrag): void {
+    const ships = spacetimeClient.getState().myShips.map(ship => {
+      const art = this.vessels.get(ship.id);
+      return {
+        id: ship.id,
+        x: art?.container.x ?? ship.x * TILE,
+        y: art?.container.y ?? ship.y * TILE,
+        radius: ship.radiusCells * TILE,
+      };
+    });
+    const ids = shipsInSelectionBox({
+      fromX: drag.startWorldX, fromY: drag.startWorldY,
+      toX: drag.endWorldX, toY: drag.endWorldY,
+    }, ships);
+    // Dragging across empty sea intentionally clears the selection.
+    this.selectShips(ids);
+  }
+
+  private finishBoxBuild(drag: LeftDrag): void {
+    if (!this.buildKind) return;
+    const request = this.buildRequest(this.buildKind, drag.startCellX, drag.startCellY);
+    const plan = request
+      ? planBoxConstruction(request, drag.endCellX, drag.endCellY)
+      : { reason: "World is not ready for construction", cells: [] };
+    if (plan.reason) { this.reportOrderError(plan.reason); return; }
+    const kind = this.buildKind;
+    spacetimeClient.placeStructuresBox(
+      kind, drag.startCellX, drag.startCellY, drag.endCellX, drag.endCellY,
+    ).then(() => {
+      window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
+        detail: {
+          message: `${plan.cells.length} × ${kind} structures queued`,
+          success: true,
+        },
+      }));
+      this.drawBuildPreview();
+    }).catch(err => this.reportOrderError(err));
+  }
+
+  private selectShips(ids: readonly bigint[]): void {
+    this.selectedShipIds = new Set(ids);
+    this.selectedShipId = ids[0] ?? null;
     window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
-      detail: { type, id },
+      detail: ids.length
+        ? { type: "ship", id: ids[0], shipIds: [...ids] }
+        : null,
     }));
+  }
+
+  private selectEntity(type: "ship" | "structure" | null, id?: bigint): void {
+    if (type === "ship" && id !== undefined) {
+      this.selectShips([id]);
+    } else if (type === "structure" && id !== undefined) {
+      this.selectedShipIds.clear();
+      this.selectedShipId = null;
+      window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
+        detail: { type: "structure", id },
+      }));
+    } else {
+      this.selectShips([]);
+    }
   }
 
   private reportOrderError(error: unknown): void {
@@ -231,29 +471,6 @@ export class SeaScene extends Phaser.Scene {
     return document.elementFromPoint(event.clientX, event.clientY) === this.game.canvas;
   }
 
-  private placementError(kind: string, x: number, y: number): string | null {
-    const state = spacetimeClient.getState();
-    const slot = state.myMembership?.slot;
-    if (!this.validatedTerrain || slot === undefined || !state.activeMatchId)
-      return "World is not ready for construction";
-    return validateStructurePlacement({
-      kind: kind as StructureKind,
-      ownerSlot: slot,
-      gridX: x,
-      gridY: y,
-      salvage: state.myFaction?.salvage ?? 0,
-      mapCells: this.validatedMapCells,
-      terrain: this.validatedTerrain,
-      structures: state.battleStructures.map(st => ({
-        id: st.id, ownerSlot: st.ownerSlot, kind: st.kind as StructureKind,
-        gridX: st.gridX, gridY: st.gridY, width: st.width, height: st.height,
-        complete: st.complete,
-      })),
-      deposits: state.salvageNodes.map(n => ({ x: n.gridX, y: n.gridY })),
-      hulls: state.battleShips.map(s => ({ x: s.x, y: s.y, radius: s.radiusCells })),
-    });
-  }
-
   private pointerCommand(pointer: Phaser.Input.Pointer): void {
     if (!this.isWorldPointer(pointer)) return;
     const state = spacetimeClient.getState();
@@ -266,9 +483,12 @@ export class SeaScene extends Phaser.Scene {
     if (this.buildKind) {
       if (button !== 0) return;
       const gridX = Math.floor(x), gridY = Math.floor(y);
-      const reason = this.placementError(this.buildKind, gridX, gridY);
-      if (reason) {
-        this.reportOrderError(reason);
+      const request = this.buildRequest(this.buildKind, gridX, gridY);
+      const plan = request
+        ? planBoxConstruction(request, gridX, gridY)
+        : { reason: "World is not ready for construction", cells: [] };
+      if (plan.reason) {
+        this.reportOrderError(plan.reason);
         return;
       }
       const kind = this.buildKind;
@@ -300,10 +520,12 @@ export class SeaScene extends Phaser.Scene {
         y >= st.gridY && y < st.gridY + st.height
       );
       if (chosen) {
-        this.selectedShipId = null;
         this.selectEntity("structure", chosen.id);
         return;
       }
+      // Left-click empty sea or drag an empty box: clear the prior selection.
+      this.selectShips([]);
+      return;
     }
 
     if (this.selectedShipId !== null && button === 2) {
@@ -323,15 +545,28 @@ export class SeaScene extends Phaser.Scene {
         return;
       }
     }
-    // Left click selects; right click orders movement (Gemini RTS control).
-    // A click on the HUD must never issue a move beneath it.
-    if (this.selectedShipId !== null && button === 2) {
-      const shipId = this.selectedShipId;
-      const targetX = Math.round(x * 10) / 10;
-      const targetY = Math.round(y * 10) / 10;
-      this.drawOrderMarker(targetX, targetY);
-      spacetimeClient.issueShipOrder(shipId, targetX, targetY).catch(err =>
-        this.reportOrderError(err));
+    // Box-selected fleets receive independent authoritative move orders.
+    // Give each vessel a small formation offset, rather than stacking every
+    // collision hull onto precisely the same endpoint.
+    if (this.selectedShipIds.size && button === 2) {
+      const ids = [...this.selectedShipIds];
+      this.drawOrderMarker(x, y);
+      const columns = Math.ceil(Math.sqrt(ids.length));
+      const spacing = 1.5;
+      void Promise.allSettled(ids.map((shipId, i) => {
+        const dx = (i % columns - (columns - 1) / 2) * spacing;
+        const dy = (Math.floor(i / columns) -
+          (Math.ceil(ids.length / columns) - 1) / 2) * spacing;
+        return spacetimeClient.issueShipOrder(
+          shipId, Math.round((x + dx) * 10) / 10,
+          Math.round((y + dy) * 10) / 10,
+        );
+      })).then(results => {
+        const failures = results.filter(r => r.status === "rejected");
+        if (failures.length) this.reportOrderError(
+          `${failures.length} of ${ids.length} move orders were rejected`
+        );
+      });
     }
   }
 
@@ -383,7 +618,9 @@ export class SeaScene extends Phaser.Scene {
       chunkX: chunk.chunkX, chunkY: chunk.chunkY,
       terrain: Array.from(chunk.terrain),
     })));
-    this.cameras.main.setBounds(0, 0, cells * TILE, cells * TILE);
+    // The sea is visually endless even though the authoritative playable
+    // world (terrain, bases and legal command targets) is finite.
+    // Camera bounds would create an apparent sea "edge" on wide screens.
     this.terrain.clear();
     for (const chunk of chunks) {
       for (let ly = 0; ly < 16; ly++) for (let lx = 0; lx < 16; lx++) {
@@ -457,14 +694,16 @@ export class SeaScene extends Phaser.Scene {
 
   private syncShips(ships: readonly GeminiBattleShip[]): void {
     const alive = new Set(ships.map(ship => ship.id));
+    let selectionChanged = false;
     for (const [id, art] of this.vessels) {
       if (!alive.has(id)) {
         art.motion.clear();
         art.container.destroy();
         this.vessels.delete(id);
-        if (this.selectedShipId === id) this.selectedShipId = null;
+        if (this.selectedShipIds.delete(id)) selectionChanged = true;
       }
     }
+    if (selectionChanged) this.selectShips([...this.selectedShipIds]);
     const now = Date.now();
     for (const ship of ships) {
       let art = this.vessels.get(ship.id);
@@ -563,7 +802,7 @@ export class SeaScene extends Phaser.Scene {
         art.turret.setRotation(sample.turretAngle);
       }
       art.highlight.clear();
-      if (ship.ownerSlot === ownSlot && ship.id === this.selectedShipId) {
+      if (ship.ownerSlot === ownSlot && this.selectedShipIds.has(ship.id)) {
         art.highlight.lineStyle(2, 0x38bdf8, 1);
         art.highlight.strokeCircle(0, 0, 19);
       }
@@ -580,10 +819,22 @@ export class SeaScene extends Phaser.Scene {
     // Infinite *visual* ocean. The server map remains finite for commands;
     // water extends beyond its edges wherever the camera can see.
     const camera = this.cameras.main;
-    const startX = Math.floor(camera.scrollX / TILE) - 2;
-    const startY = Math.floor(camera.scrollY / TILE) - 2;
-    const endX = Math.ceil((camera.scrollX + this.scale.width / camera.zoom) / TILE) + 3;
-    const endY = Math.ceil((camera.scrollY + this.scale.height / camera.zoom) / TILE) + 3;
+    // Phaser camera scrollX/scrollY alone are NOT the actual top-left world
+    // corner when zoom is != 1 (or when zooming around the center). Earlier
+    // calculations created a visible rectangular gap on wide viewports.
+    // Unproject all viewport corners using the live camera matrix instead.
+    const a = camera.getWorldPoint(0, 0);
+    const b = camera.getWorldPoint(camera.width, 0);
+    const d = camera.getWorldPoint(0, camera.height);
+    const e = camera.getWorldPoint(camera.width, camera.height);
+    const minX = Math.min(a.x, b.x, d.x, e.x);
+    const maxX = Math.max(a.x, b.x, d.x, e.x);
+    const minY = Math.min(a.y, b.y, d.y, e.y);
+    const maxY = Math.max(a.y, b.y, d.y, e.y);
+    const startX = Math.floor(minX / TILE) - 4;
+    const startY = Math.floor(minY / TILE) - 4;
+    const endX = Math.ceil(maxX / TILE) + 4;
+    const endY = Math.ceil(maxY / TILE) + 4;
     this.ocean.clear();
     this.ocean.fillStyle(0x06131f, 1);
     this.ocean.fillRect(startX * TILE, startY * TILE,
@@ -594,18 +845,19 @@ export class SeaScene extends Phaser.Scene {
         Math.cos(gy * 0.28 - t * 0.8) * 0.5 +
         Math.sin((gx + gy) * 0.2 + t * 0.6) * 0.3;
       const x = gx * TILE, y = gy * TILE;
-      if (v > 0.55) {
-        this.ocean.fillStyle(0x0c273c, 1);
-        this.ocean.fillRect(x, y, TILE, TILE);
-        if (v > 0.85) {
-          this.ocean.fillStyle(0x94d2e8, 0.16);
-          this.ocean.fillRect(x + 6, y + 14, 14, 3);
-        }
-      } else if (v > -0.15) {
-        this.ocean.fillStyle(0x081c2c, 1);
-        this.ocean.fillRect(x, y, TILE, TILE);
+      // Every visible cell receives water, including cells that have no
+      // authoritative terrain tile beyond the finite playable map. Otherwise
+      // the unshaded dark background reads as a hard rectangular ocean edge.
+      this.ocean.fillStyle(
+        v > 0.55 ? 0x10334b : v > -0.15 ? 0x0b263b : 0x081e30,
+        1,
+      );
+      this.ocean.fillRect(x, y, TILE, TILE);
+      if (v > 0.78) {
+        this.ocean.fillStyle(0x94d2e8, 0.18);
+        this.ocean.fillRect(x + 6, y + 14, 14, 3);
       }
-      this.ocean.lineStyle(1, 0x38bdf8, 0.04);
+      this.ocean.lineStyle(1, 0x38bdf8, 0.045);
       this.ocean.strokeRect(x, y, TILE, TILE);
     }
   }
