@@ -688,14 +688,16 @@ export class SeaScene extends Phaser.Scene {
 
   private syncShips(ships: readonly GeminiBattleShip[]): void {
     const alive = new Set(ships.map(ship => ship.id));
+    let selectionChanged = false;
     for (const [id, art] of this.vessels) {
       if (!alive.has(id)) {
         art.motion.clear();
         art.container.destroy();
         this.vessels.delete(id);
-        if (this.selectedShipId === id) this.selectedShipId = null;
+        if (this.selectedShipIds.delete(id)) selectionChanged = true;
       }
     }
+    if (selectionChanged) this.selectShips([...this.selectedShipIds]);
     const now = Date.now();
     for (const ship of ships) {
       let art = this.vessels.get(ship.id);
