@@ -62,6 +62,9 @@ export class SeaScene extends Phaser.Scene {
   private worldRevision = "";
   private depositAccum = 0;
   private waveAccum = 0;
+  private oceanScrollX = Number.NaN;
+  private oceanScrollY = Number.NaN;
+  private oceanZoom = Number.NaN;
   private elapsed = 0;
   private drag: { x: number; y: number; scrollX: number; scrollY: number; moved: boolean } | null = null;
 
@@ -532,7 +535,19 @@ export class SeaScene extends Phaser.Scene {
     this.elapsed += delta;
     this.waveAccum += delta;
     this.depositAccum += delta;
-    if (this.waveAccum >= 110) { this.waveAccum = 0; this.redrawOcean(); }
+    const camera = this.cameras.main;
+    // Don't let quick camera drags or zoom expose an unpainted world edge.
+    // Waves still animate at their low-cost cadence while the camera is idle.
+    if (this.waveAccum >= 110 ||
+        Math.abs(camera.scrollX - this.oceanScrollX) > TILE ||
+        Math.abs(camera.scrollY - this.oceanScrollY) > TILE ||
+        camera.zoom !== this.oceanZoom) {
+      this.waveAccum = 0;
+      this.redrawOcean();
+      this.oceanScrollX = camera.scrollX;
+      this.oceanScrollY = camera.scrollY;
+      this.oceanZoom = camera.zoom;
+    }
     if (this.depositAccum >= 240) { this.depositAccum = 0; this.redrawDeposits(); }
 
     const state = spacetimeClient.getState();
