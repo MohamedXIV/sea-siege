@@ -242,6 +242,27 @@ export const advanceEconomy = spacetimedb.reducer(
       node.id, seconds > 0 ? replenishSalvage(node, seconds) : node.remaining,
     ]));
 
+    const materialNodes = Array.from(ctx.db.materialNode.matchId.filter(timer.matchId))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const materialRemaining = new Map(materialNodes.map(node => [
+      node.id, seconds > 0 ? replenishSalvage(node, seconds) : node.remaining,
+    ]));
+    const materialBalances = Array.from(ctx.db.materialBalance.matchId.filter(timer.matchId));
+    const materialAmount = new Map(materialBalances.map(row => [row.materialKey, row.amount]));
+    const materialLifetime = new Map(materialBalances.map(row => [row.materialKey, row.totalGathered]));
+    const creditMaterial = (slot: number, kind: AdvancedResourceKind, amount: number) => {
+      if (!amount) return;
+      const key = materialBalanceKey(timer.matchId, slot, kind);
+      const before = materialAmount.get(key);
+      const gathered = materialLifetime.get(key);
+      if (before === undefined || gathered === undefined)
+        throw new Error("Missing initialized material balance");
+      const next = Math.min(MAX_MATERIAL_BALANCE, before + amount);
+      const actual = next - before;
+      materialAmount.set(key, next);
+      materialLifetime.set(key, gathered + BigInt(actual));
+    };
+
     if (seconds > 0) {
       for (const structureRow of structures) {
         if (structureRow.kind === "command_core" &&
@@ -295,9 +316,83 @@ export const advanceEconomy = spacetimedb.reducer(
       }
     }
 
+    // Advanced resource extraction uses *real finite deposits*, shared by
+    // hybrids and connected stationary extractors. No flat advanced income.
+    // A single 1Hz server transaction prevents duplicate node withdrawal.
+    if (seconds > 0) {
+      const materialOrders = Array.from(
+        ctx.db.materialHarvestOrder.matchId.filter(timer.matchId)
+      ).sort((a, b) => a.shipId < b.shipId ? -1 : a.shipId > b.shipId ? 1 : 0);
+      for (const order of materialOrders) {
+        const ship = ctx.db.ship.id.find(order.shipId);
+        const node = ctx.db.materialNode.id.find(order.nodeId);
+        const spec = ship ? shipDefinition(ship.kind) : null;
+        const faction = ship ? factions.find(row => row.slot === ship.ownerSlot) : null;
+        if (!ship || !node || node.matchId !== timer.matchId ||
+            !ADVANCED_RESOURCE_KINDS.includes(node.kind as AdvancedResourceKind) ||
+            !faction || faction.eliminated || ship.hp === 0 ||
+            !spec || spec.harvestPerSecond <= 0 ||
+            !inRange({ x: ship.x, y: ship.y },
+              { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+              ECONOMY_RULES.harvestRangeCells)) {
+          ctx.db.materialHarvestOrder.shipId.delete(order.shipId);
+          continue;
+        }
+        const activeSince = order.assignedAtUs > timer.lastTickAt.microsSinceUnixEpoch
+          ? order.assignedAtUs : timer.lastTickAt.microsSinceUnixEpoch;
+        const eligibleSeconds = Math.min(seconds, Number((nowUs - activeSince) / 1_000_000n));
+        // Specialized salvage is slower than common scrap; fast hybrid Scouts
+        // gather more quickly, but expose themselves in contested waters.
+        const maxDraw = Math.floor(spec.harvestPerSecond / 2) * eligibleSeconds;
+        const taken = Math.min(materialRemaining.get(node.id) ?? 0, maxDraw);
+        if (taken > 0) {
+          materialRemaining.set(node.id, (materialRemaining.get(node.id) ?? 0) - taken);
+          creditMaterial(faction.slot, node.kind as AdvancedResourceKind, taken);
+        }
+      }
+
+      for (const rig of structures) {
+        if (rig.kind !== "salvage_rig" || !rig.complete || !rig.connected || rig.hp === 0)
+          continue;
+        const faction = factions.find(row => row.slot === rig.ownerSlot);
+        if (!faction || faction.eliminated) continue;
+        const position = { x: rig.gridX + rig.width / 2, y: rig.gridY + rig.height / 2 };
+        const activeSince = rig.completeAtUs > timer.lastTickAt.microsSinceUnixEpoch
+          ? rig.completeAtUs : timer.lastTickAt.microsSinceUnixEpoch;
+        const eligibleSeconds = Math.min(seconds, Number((nowUs - activeSince) / 1_000_000n));
+        if (eligibleSeconds <= 0) continue;
+        const inRadius = materialNodes.filter(node =>
+          (materialRemaining.get(node.id) ?? 0) > 0 &&
+          inRange(position, { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+            ECONOMY_RULES.rigRangeCells));
+        // A rig can tap *multiple* deposits in one tick, with a strict total
+        // throughput cap and a smaller per-node limit. No exponential growth.
+        const drawn = allocateResourceDraws(inRadius.map(node => ({
+          id: node.id, kind: node.kind as AdvancedResourceKind,
+          remaining: materialRemaining.get(node.id) ?? 0,
+        })), 8 * eligibleSeconds, 4 * eligibleSeconds);
+        for (const extracted of drawn) {
+          materialRemaining.set(extracted.id,
+            (materialRemaining.get(extracted.id) ?? 0) - extracted.taken);
+          creditMaterial(rig.ownerSlot, extracted.kind, extracted.taken);
+        }
+      }
+    }
+
     for (const node of nodes) {
       const after = remaining.get(node.id)!;
       if (after !== node.remaining) ctx.db.salvageNode.id.update({ ...node, remaining: after });
+    }
+    for (const node of materialNodes) {
+      const after = materialRemaining.get(node.id)!;
+      if (after !== node.remaining)
+        ctx.db.materialNode.id.update({ ...node, remaining: after });
+    }
+    for (const row of materialBalances) {
+      const amount = materialAmount.get(row.materialKey)!;
+      const totalGathered = materialLifetime.get(row.materialKey)!;
+      if (amount !== row.amount || totalGathered !== row.totalGathered)
+        ctx.db.materialBalance.id.update({ ...row, amount, totalGathered });
     }
 
     const jobs = Array.from(ctx.db.productionOrder.matchId.filter(timer.matchId))
