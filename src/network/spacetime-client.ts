@@ -19,6 +19,7 @@ import type {
   OwnedProductionJob,
   OwnedAttackOrder,
   BattleProjectile,
+  AuthoritativeCombatImpact,
 } from "../module_bindings/types";
 
 export type ConnectionStatus =
@@ -57,6 +58,7 @@ export interface SpacetimeClientState {
   productionJobs: OwnedProductionJob[];
   attackOrders: OwnedAttackOrder[];
   battleProjectiles: BattleProjectile[];
+  battleImpacts: AuthoritativeCombatImpact[];
 }
 
 export type StateListener = (state: SpacetimeClientState) => void;
@@ -193,6 +195,7 @@ export class SpacetimeClient {
     let productionJobs: OwnedProductionJob[] = [];
     let attackOrders: OwnedAttackOrder[] = [];
     let battleProjectiles: BattleProjectile[] = [];
+    let battleImpacts: AuthoritativeCombatImpact[] = [];
 
     if (conn && this.status === "connected") {
       try {
@@ -212,6 +215,7 @@ export class SpacetimeClient {
         productionJobs = Array.from(conn.db.myProductionJobs.iter());
         attackOrders = Array.from(conn.db.myAttackOrders.iter());
         battleProjectiles = Array.from(conn.db.myBattleProjectiles.iter());
+        battleImpacts = Array.from(conn.db.myBattleImpacts.iter());
       } catch {
         // Cache during transition
       }
@@ -283,6 +287,7 @@ export class SpacetimeClient {
       productionJobs: activeMatchId === null ? [] : productionJobs.filter(row => row.matchId === activeMatchId),
       attackOrders: activeMatchId === null ? [] : attackOrders.filter(row => row.matchId === activeMatchId),
       battleProjectiles: activeMatchId === null ? [] : battleProjectiles.filter(row => row.matchId === activeMatchId),
+      battleImpacts: activeMatchId === null ? [] : battleImpacts.filter(row => row.matchId === activeMatchId),
     };
   }
 
@@ -466,7 +471,7 @@ export class SpacetimeClient {
       conn.db.myGeminiShips, conn.db.myGeminiStructures,
       conn.db.myMaterialDeposits, conn.db.myMaterialBalances,
       conn.db.myShipRefits, conn.db.myProductionJobs,
-      conn.db.myAttackOrders, conn.db.myBattleProjectiles]) {
+      conn.db.myAttackOrders, conn.db.myBattleProjectiles, conn.db.myBattleImpacts]) {
       table.onInsert(notifyChange);
       table.onUpdate(notifyChange);
       table.onDelete(notifyChange);
@@ -517,6 +522,7 @@ export class SpacetimeClient {
         "SELECT * FROM my_production_jobs",
         "SELECT * FROM my_attack_orders",
         "SELECT * FROM my_battle_projectiles",
+        "SELECT * FROM my_battle_impacts",
       ]);
   }
 
