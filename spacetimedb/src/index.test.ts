@@ -838,6 +838,12 @@ it("destroying the last hostile Command Core eliminates its faction and ends the
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
   expect(test.db.match.id.find(matchId)?.winnerSlot).toBe(0);
   expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
+  const resultRows = [...test.db.matchFinalStanding.matchId.filter(matchId)];
+  expect(resultRows).toHaveLength(2);
+  expect(resultRows.find(row => row.slot === 1)?.eliminated).toBe(true);
+  expect(resultRows.find(row => row.slot === 0)?.coreHp).toBeGreaterThan(0);
+  expect(moduleExports.myCompletedStandings(test.viewContext(alice))).toHaveLength(2);
+  expect(moduleExports.myCompletedStandings(test.viewContext(bob))).toHaveLength(2);
 });
 
 it("turrets slew gradually under internal authority; premature fire and foreign aim fail", () => {
@@ -954,6 +960,14 @@ it("match deadline rejects external/early calls and resolves the reference tiebr
   expect(finished.winnerSlot).toBe(1);
   expect(finished.victoryReason).toBe("time_limit");
   expect(finished.winningScore5).toBeGreaterThan(0n);
+  const finalRows = [...test.db.matchFinalStanding.matchId.filter(matchId)];
+  expect(finalRows).toHaveLength(2);
+  expect(finalRows.find(row => row.slot === 1)?.score5).toBe(finished.winningScore5);
+  expect(moduleExports.myCompletedStandings(test.viewContext(alice))).toHaveLength(2);
+  expect(moduleExports.myCompletedStandings(test.viewContext(bob))).toHaveLength(2);
+  expect(moduleExports.myCompletedStandings(test.viewContext(
+    auth("scoreboard-outsider", 909n)
+  ))).toHaveLength(0);
   expect(test.db.economySchedule.count()).toBe(0n);
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.startMatch(ctx, { matchId })
@@ -2103,4 +2117,37 @@ it("a completed Cannon autonomously defends using real aim/fire and exact impact
   expect(moduleExports.myBattleImpacts(test.viewContext(bob))
     .some(row => row.id === impact.id)).toBe(true);
   expect(test.db.combatSchedule.count()).toBe(1n);
+});
+
+it("finished bot match has a durable member-only scoreboard and cannot be finalized twice", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("final-bot-host", 1441n);
+  const stranger = auth("final-outside", 1442n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const bot = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.controller === "bot")!;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const balance = [...ctx.db.materialBalance.matchId.filter(matchId)]
+      .find(row => row.ownerSlot === bot.slot && row.kind === "oil")!;
+    ctx.db.materialBalance.id.update({ ...balance, totalGathered: 13n });
+  });
+  expect(moduleExports.myCompletedStandings(test.viewContext(alice))).toHaveLength(0);
+  const deadline = [...test.db.matchDeadline.matchId.filter(matchId)][0]!;
+  test.clock.advance(TimeDuration.fromMillis(720_000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  );
+  const completed = moduleExports.myCompletedStandings(test.viewContext(alice));
+  expect(completed).toHaveLength(2);
+  expect(completed.find(row => row.controller === "bot")?.advancedGathered).toBe(13n);
+  expect(moduleExports.myCompletedStandings(test.viewContext(stranger))).toHaveLength(0);
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  );
+  expect([...test.db.matchFinalStanding.matchId.filter(matchId)]).toHaveLength(2);
 });

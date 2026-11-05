@@ -374,6 +374,28 @@ const turretAim = table(
 );
 
 
+/**
+ * Final match-only scoreboard snapshot. Private raw rows are projected to
+ * authenticated participants, not publicly dumped with match metadata.
+ * Additive storage retains compatibility with already completed matches.
+ */
+export const matchFinalStanding = table(
+  { name: "match_final_standing" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    slot: t.u32(),
+    controller: t.string(),
+    eliminated: t.bool(),
+    coreHp: t.u32(),
+    structures: t.u32(),
+    ships: t.u32(),
+    ironGathered: t.u64(),
+    advancedGathered: t.u64(),
+    score5: t.u64(),
+  },
+);
+
 /** Single one-shot, 12-minute match deadline; never one timer per player. */
 export const matchDeadline = table(
   { name: "match_deadline" },
@@ -401,6 +423,6 @@ const spacetimedb = schema({
   materialNode, materialBalance, materialHarvestOrder,
   structure, constructionSchedule,
   harvestOrder, productionOrder, economySchedule, projectile, combatImpact, combatSchedule, turretAim,
-  attackOrder, matchDeadline, botSchedule,
+  attackOrder, matchFinalStanding, matchDeadline, botSchedule,
 });
 export default spacetimedb;

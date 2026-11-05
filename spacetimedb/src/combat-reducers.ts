@@ -19,6 +19,7 @@ import {
 import { dispatchMovement } from "./sim/world-command-dispatch.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { chooseDefenseTarget } from "./sim/defense-targeting.ts";
+import { calculateFinalStandings } from "./sim/final-standings.ts";
 
 
 /**
@@ -366,6 +367,16 @@ export const advanceCombat = spacetimedb.reducer(
         winningScore5: 0n,
         endedAtUs: ctx.timestamp.microsSinceUnixEpoch,
       });
+      // Report what survived at the moment the final Core fell. Keep a
+      // durable server snapshot even though live world views now close.
+      if (!Array.from(ctx.db.matchFinalStanding.matchId.filter(matchId)).length) {
+        for (const row of calculateFinalStandings(
+          Array.from(ctx.db.factionState.matchId.filter(matchId)),
+          Array.from(ctx.db.structure.matchId.filter(matchId)),
+          Array.from(ctx.db.ship.matchId.filter(matchId)),
+          Array.from(ctx.db.materialBalance.matchId.filter(matchId)),
+        )) ctx.db.matchFinalStanding.insert({ id: 0n, matchId, ...row });
+      }
       // Cancel the one-shot deadline when combat has already decided the match.
       for (const pending of Array.from(ctx.db.matchDeadline.matchId.filter(matchId)))
         ctx.db.matchDeadline.scheduledId.delete(pending.scheduledId);
