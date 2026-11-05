@@ -1,5 +1,6 @@
 import spacetimedb, { matchDeadline } from "./schema.ts";
 import { resolveMatchOutcome } from "./sim/match-outcome.ts";
+import { calculateFinalStandings } from "./sim/final-standings.ts";
 
 /**
  * Deadline is a one-shot schedule row, created exactly once by startMatch.
@@ -42,6 +43,16 @@ export const finishMatchAtDeadline = spacetimedb.reducer(
       winningScore5: result.winningScore5 ?? 0n,
       endedAtUs: nowUs,
     });
+    // Persist a final snapshot before active-match member views disappear.
+    // No repeated writes if an old or duplicate deadline ever executes.
+    if (!Array.from(ctx.db.matchFinalStanding.matchId.filter(match.id)).length) {
+      for (const row of calculateFinalStandings(
+        factions, structures, ships,
+        Array.from(ctx.db.materialBalance.matchId.filter(match.id)),
+      )) {
+        ctx.db.matchFinalStanding.insert({ id: 0n, matchId: match.id, ...row });
+      }
+    }
 
     // All gameplay schedules stop; no stale periodic transaction should modify
     // the finished match. A one-shot reducer schedule auto-removes on success.
@@ -64,5 +75,7 @@ export const finishMatchAtDeadline = spacetimedb.reducer(
       ctx.db.turretAim.id.delete(aim.id);
     for (const order of Array.from(ctx.db.attackOrder.matchId.filter(match.id)))
       ctx.db.attackOrder.shipId.delete(order.shipId);
+    for (const impact of Array.from(ctx.db.combatImpact.matchId.filter(match.id)))
+      ctx.db.combatImpact.id.delete(impact.id);
   },
 );
