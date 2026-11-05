@@ -16,7 +16,7 @@ import { shipsInSelectionBox } from "./input/selection-box";
 import { selectStructureAt } from "./input/structure-selection";
 import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
-import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
+import { shipWakeSegments } from "./vfx/ship-wake";
 import {
   RESOURCE_TYPES, type AdvancedResourceKind,
 } from "../../spacetimedb/src/sim/materials";
@@ -45,6 +45,7 @@ interface VesselArt {
 
 interface BuildingArt {
   image: Phaser.GameObjects.Image;
+  turret?: Phaser.GameObjects.Graphics;
   key: string;
   hp: number;
 }
@@ -289,7 +290,10 @@ export class SeaScene extends Phaser.Scene {
       art.container.destroy();
     }
     this.vessels.clear();
-    for (const art of this.buildings.values()) art.image.destroy();
+    for (const art of this.buildings.values()) {
+      art.image.destroy();
+      art.turret?.destroy();
+    }
     this.buildings.clear();
     this.projectiles.clear();
     this.seenImpactIds.clear();
@@ -821,6 +825,7 @@ export class SeaScene extends Phaser.Scene {
           620,
         );
         art.image.destroy();
+        art.turret?.destroy();
         this.buildings.delete(id);
       }
     }
@@ -833,7 +838,10 @@ export class SeaScene extends Phaser.Scene {
       if (!art) {
         const image = this.add.image(st.gridX * TILE, st.gridY * TILE, key)
           .setOrigin(0, 0).setDepth(10);
-        art = { image, key, hp: st.hp };
+        art = {
+          image, key, hp: st.hp,
+          turret: st.kind === "cannon" ? this.add.graphics().setDepth(16) : undefined,
+        };
         this.buildings.set(st.id, art);
       } else {
         if (art.key !== key) { art.image.setTexture(key); art.key = key; }
@@ -847,6 +855,22 @@ export class SeaScene extends Phaser.Scene {
         }
         art.hp = st.hp;
         art.image.setPosition(st.gridX * TILE, st.gridY * TILE);
+      }
+      // Cannon barrels visibly follow the same server-owned turret angle
+      // as ship guns; the structure texture remains the static base.
+      if (st.kind === "cannon") {
+        if (!art.turret) art.turret = this.add.graphics().setDepth(16);
+        const gfx = art.turret;
+        gfx.clear();
+        gfx.setPosition((st.gridX + st.width / 2) * TILE,
+          (st.gridY + st.height / 2) * TILE);
+        gfx.setRotation(st.turretAngleDeg * Math.PI / 180);
+        gfx.fillStyle(st.complete && st.connected ? 0x111827 : 0x475569, 1);
+        gfx.fillRect(-7, -7, 14, 14);
+        gfx.fillStyle(st.complete && st.connected ? 0xe2e8f0 : 0x64748b, 1);
+        gfx.fillRect(0, -3, 19, 6);
+        gfx.fillStyle(0xfbbf24, 0.8);
+        gfx.fillRect(15, -2, 4, 4);
       }
     }
     this.drawBuildingHighlight();
@@ -1215,9 +1239,14 @@ export class SeaScene extends Phaser.Scene {
         art.highlight.strokeCircle(0, 0, 19);
       }
       art.wake.clear();
-      if (Math.hypot(ship.velocityX, ship.velocityY) > 0.2) {
-        art.wake.lineStyle(2, 0xbae6fd, 0.3 + 0.2 * Math.sin(this.elapsed * 0.01));
-        art.wake.strokeCircle(-18, 0, 6);
+      const length = ship.kind === "scout" ? 24 : ship.kind === "gunboat" ? 32 : 42;
+      for (const foam of shipWakeSegments(
+        sample?.vx ?? ship.velocityX,
+        sample?.vy ?? ship.velocityY,
+        length, this.elapsed * 0.004,
+      )) {
+        art.wake.lineStyle(foam.width, 0xbae6fd, foam.alpha);
+        art.wake.lineBetween(foam.ax, foam.ay, foam.bx, foam.by);
       }
     }
     this.drawCombatOverlay(state);
