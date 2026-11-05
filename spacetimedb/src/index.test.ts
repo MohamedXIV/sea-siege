@@ -2040,6 +2040,26 @@ it("harvesting still works, replaces attack orders, and combat views stay member
   expect(bobShots.length).toBe(aliceShots.length);
 });
 
+it("completing a real platform-mounted Cannon arms one automatic defense timer", () => {
+  const { test, alice, matchId } = newActiveSkirmish();
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "cannon", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const cannon = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "cannon")!;
+  expect(cannon.complete).toBe(false);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+  test.clock.advance(TimeDuration.fromMillis(4000));
+  const construction = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: construction })
+  );
+  expect(test.db.structure.id.find(cannon.id)!.complete).toBe(true);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+});
+
 it("a completed Cannon autonomously defends using real aim/fire and exact impact events", () => {
   const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
   const lane = findOpenWaterLane(test, matchId, 20);
