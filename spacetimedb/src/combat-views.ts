@@ -29,6 +29,16 @@ const battleProjectile = t.row("BattleProjectile", {
   remainingRange: t.f64(),
 });
 
+const authoritativeImpact = t.row("AuthoritativeCombatImpact", {
+  id: t.u64().primaryKey(),
+  matchId: t.u64(),
+  projectileId: t.u64(),
+  kind: t.string(),
+  x: t.f64(),
+  y: t.f64(),
+  createdAtUs: t.i64(),
+});
+
 function activeMemberMatches(
   memberships: Iterable<{ matchId: bigint }>,
   phaseForMatch: (matchId: bigint) => string | undefined,
@@ -84,6 +94,21 @@ export const myBattleProjectiles = spacetimedb.view(
       vx: row.vx,
       vy: row.vy,
       remainingRange: row.remainingRange,
+    }))
+  ).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+);
+
+/** Brief exact hit/splash positions from the server, never inferred from despawn. */
+export const myBattleImpacts = spacetimedb.view(
+  { name: "my_battle_impacts", public: true },
+  t.array(authoritativeImpact),
+  ctx => activeMemberMatches(
+    ctx.db.matchMember.identity.filter(ctx.sender),
+    id => ctx.db.match.id.find(id)?.phase,
+  ).flatMap(matchId =>
+    Array.from(ctx.db.combatImpact.matchId.filter(matchId)).map(row => ({
+      id: row.id, matchId, projectileId: row.projectileId,
+      kind: row.kind, x: row.x, y: row.y, createdAtUs: row.createdAtUs,
     }))
   ).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
 );
