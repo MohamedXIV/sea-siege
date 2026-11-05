@@ -809,6 +809,7 @@ export { aimWeapon, fireWeapon, issueAttackOrder, advanceCombat } from "./combat
 export { myAttackOrders, myBattleProjectiles, myBattleImpacts } from "./combat-views.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
+export { myCompletedStandings } from "./match-result-views.ts";
 export { refitShip } from "./ship-refit-reducers.ts";
 export { myShipRefits } from "./ship-refit-views.ts";
 export { myProductionJobs } from "./production-views.ts";
