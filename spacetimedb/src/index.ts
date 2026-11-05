@@ -806,7 +806,7 @@ export {
 } from "./workshop-reducers.ts";
 
 export { aimWeapon, fireWeapon, issueAttackOrder, advanceCombat } from "./combat-reducers.ts";
-export { myAttackOrders, myBattleProjectiles } from "./combat-views.ts";
+export { myAttackOrders, myBattleProjectiles, myBattleImpacts } from "./combat-views.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
 export { refitShip } from "./ship-refit-reducers.ts";
