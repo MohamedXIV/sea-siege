@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { PhaserViewport } from "@/game/PhaserViewport";
 import { DevControls } from "@/components/DevControls";
 import { MatchHud } from "@/components/MatchHud";
+import { MatchResultOverlay } from "@/components/MatchResultOverlay";
 import { useSpacetime } from "@/network/useSpacetime";
 
 /**
@@ -15,7 +16,10 @@ export default function App() {
   const { status, subscriptionStatus, identity, activeMatch } = gameState;
   const [menuOpenedForMatch, setMenuOpenedForMatch] = useState<bigint | null>(null);
   const isPlaying = activeMatch?.phase === "active";
-  const menuOpen = isPlaying && menuOpenedForMatch === activeMatch?.id;
+  const finished = activeMatch?.phase === "finished";
+  const eliminated = isPlaying && gameState.myFaction?.eliminated === true;
+  const menuOpen = menuOpenedForMatch === activeMatch?.id;
+  const showResults = (finished || eliminated) && !menuOpen;
   const ready = status === "connected" && subscriptionStatus === "applied";
 
   return (
@@ -24,7 +28,12 @@ export default function App() {
         <PhaserViewport />
       </div>
 
-      {isPlaying && !menuOpen ? (
+      {showResults ? (
+        <MatchResultOverlay
+          state={gameState}
+          onDeployment={() => setMenuOpenedForMatch(activeMatch?.id ?? null)}
+        />
+      ) : isPlaying && !menuOpen ? (
         <MatchHud state={gameState} onMenu={() => setMenuOpenedForMatch(activeMatch?.id ?? null)} />
       ) : (
         <>
@@ -45,10 +54,12 @@ export default function App() {
 
             <section className="pointer-events-auto my-auto mx-auto grid w-full max-w-5xl grid-cols-1 items-center gap-6 py-7 lg:grid-cols-12">
               <div className="space-y-4 lg:col-span-7">
-                {isPlaying && (
+                {(isPlaying || finished) && (
                   <Button variant="outline" onClick={() => setMenuOpenedForMatch(null)}
                     className="border-sky-500/50 bg-slate-950 text-sky-300">
-                    Resume Match #{activeMatch.id.toString()}
+                    {finished ? "View final results" :
+                      eliminated ? "View elimination" :
+                        `Resume Match #${activeMatch.id.toString()}`}
                   </Button>
                 )}
                 <div className="inline-flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs uppercase tracking-widest text-amber-300">
