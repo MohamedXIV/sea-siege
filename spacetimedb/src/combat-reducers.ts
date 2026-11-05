@@ -382,6 +382,8 @@ export const advanceCombat = spacetimedb.reducer(
         ctx.db.turretAim.id.delete(job.id);
       for (const job of Array.from(ctx.db.attackOrder.matchId.filter(matchId)))
         ctx.db.attackOrder.shipId.delete(job.shipId);
+      for (const event of Array.from(ctx.db.combatImpact.matchId.filter(matchId)))
+        ctx.db.combatImpact.id.delete(event.id);
     }
     if (!ctx.senderAuth.isInternal) throw new Error("Combat scheduler is internal-only");
     const timer = ctx.db.combatSchedule.scheduledId.find(arg.scheduledId);
@@ -403,6 +405,11 @@ export const advanceCombat = spacetimedb.reducer(
      * never invents damage or a projectile; a denied shot simply waits.
      */
     const nowUs = ctx.timestamp.microsSinceUnixEpoch;
+    // Impact events live long enough to reach a browser subscription, then
+    // expire on this same match timer without persistent history growth.
+    for (const event of Array.from(ctx.db.combatImpact.matchId.filter(timer.matchId)))
+      if (nowUs - event.createdAtUs >= 850_000n)
+        ctx.db.combatImpact.id.delete(event.id);
     const attackOrders = Array.from(ctx.db.attackOrder.matchId.filter(timer.matchId))
       .sort((a, b) => a.shipId < b.shipId ? -1 : a.shipId > b.shipId ? 1 : 0);
     // A fixed Cannon has no Move/Attack command, so its authoritative
@@ -625,7 +632,7 @@ export const advanceCombat = spacetimedb.reducer(
         turretAngleDeg: standing.turretAngleDeg,
         lastFiredAtUs: standing.lastFiredAtUs,
       };
-      engageWeapon(source, target, capability);
+      if (target) engageWeapon(source, target, capability);
     }
 
     if (activeCannons.length) {
@@ -698,6 +705,22 @@ export const advanceCombat = spacetimedb.reducer(
         sourceFaction: row.sourceFaction, damage: row.damage, splash: row.splash,
         structureMultiplier: row.structureMultiplier, remainingRange: row.remainingRange,
       }, seconds, bodies);
+      if (!output.next) {
+        // Never approximate an impact from the last displayed position. At a
+        // hit use the actual swept server collision point; on range expiry
+        // compute the exact final travel distance of this simulation step.
+        const speed = Math.hypot(row.vx, row.vy);
+        const travelled = Math.min(row.remainingRange, speed * seconds);
+        const terminal = output.impact?.point ?? {
+          x: row.x + row.vx / speed * travelled,
+          y: row.y + row.vy / speed * travelled,
+        };
+        ctx.db.combatImpact.insert({
+          id: 0n, matchId: timer.matchId, projectileId: row.id,
+          kind: output.impact ? "hit" : "splash",
+          x: terminal.x, y: terminal.y, createdAtUs: nowUs,
+        });
+      }
       if (output.impact) {
         for (const hit of output.impact.hits) {
           if (hit.entityType === "ship") {
@@ -727,7 +750,9 @@ export const advanceCombat = spacetimedb.reducer(
     const remaining = Array.from(ctx.db.projectile.matchId.filter(timer.matchId)).length;
     const pendingAim = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId)).length;
     const pendingAttacks = Array.from(ctx.db.attackOrder.matchId.filter(timer.matchId)).length;
-    if (remaining === 0 && pendingAim === 0 && pendingAttacks === 0 && installedCannons.length === 0)
+    const pendingImpacts = Array.from(ctx.db.combatImpact.matchId.filter(timer.matchId)).length;
+    if (remaining === 0 && pendingAim === 0 && pendingAttacks === 0 &&
+        installedCannons.length === 0 && pendingImpacts === 0)
       ctx.db.combatSchedule.scheduledId.delete(timer.scheduledId);
     else ctx.db.combatSchedule.scheduledId.update({
       ...timer, lastTickAt: ctx.timestamp,
