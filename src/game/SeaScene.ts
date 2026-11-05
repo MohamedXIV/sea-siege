@@ -17,6 +17,7 @@ import { selectStructureAt } from "./input/structure-selection";
 import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
 import { shipWakeSegments } from "./vfx/ship-wake";
+import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import {
   RESOURCE_TYPES, type AdvancedResourceKind,
 } from "../../spacetimedb/src/sim/materials";
