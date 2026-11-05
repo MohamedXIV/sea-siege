@@ -58,6 +58,7 @@ interface ProjectileArt {
   serverY: number;
   vx: number;
   vy: number;
+  remainingRange: number;
   observedAtMs: number;
   sourceFaction: number;
 }
@@ -992,6 +993,7 @@ export class SeaScene extends Phaser.Scene {
         }
         existing.vx = row.vx;
         existing.vy = row.vy;
+        existing.remainingRange = row.remainingRange;
         continue;
       }
       const muzzle = row.sourceType === "ship"
@@ -1008,7 +1010,8 @@ export class SeaScene extends Phaser.Scene {
       this.projectiles.set(row.id, {
         displayX: row.x, displayY: row.y,
         serverX: row.x, serverY: row.y,
-        vx: row.vx, vy: row.vy, observedAtMs: Date.now(),
+        vx: row.vx, vy: row.vy,
+        remainingRange: row.remainingRange, observedAtMs: Date.now(),
         sourceFaction: row.sourceFaction,
       });
     }
@@ -1125,12 +1128,13 @@ export class SeaScene extends Phaser.Scene {
       // Advance the observed launch velocity between 10Hz server updates.
       // A short cap prevents runaway predictions across network stalls.
       const elapsed = Math.max(0, Math.min(0.12, (now - art.observedAtMs) / 1000));
-      const targetX = art.serverX + art.vx * elapsed;
-      const targetY = art.serverY + art.vy * elapsed;
+      const length = Math.hypot(art.vx, art.vy) || 1;
+      const distance = Math.min(art.remainingRange, length * elapsed);
+      const targetX = art.serverX + art.vx / length * distance;
+      const targetY = art.serverY + art.vy / length * distance;
       art.displayX += (targetX - art.displayX) * t;
       art.displayY += (targetY - art.displayY) * t;
       const x = art.displayX * TILE, y = art.displayY * TILE;
-      const length = Math.hypot(art.vx, art.vy) || 1;
       const dx = art.vx / length, dy = art.vy / length;
       const tint = Number.parseInt(geminiFactionColor(art.sourceFaction).slice(1), 16);
       gfx.lineStyle(2, tint, 0.7);
