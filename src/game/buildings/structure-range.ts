@@ -1,6 +1,6 @@
-import { COMBAT_RULES } from "../../../spacetimedb/src/sim/combat";
-import { ECONOMY_RULES } from "../../../spacetimedb/src/sim/economy";
-import { WORKSHOP_RULES, type WorkshopTier } from "../../../spacetimedb/src/sim/workshop";
+import { COMBAT_RULES } from "../../../spacetimedb/src/sim/combat.ts";
+import { ECONOMY_RULES } from "../../../spacetimedb/src/sim/economy.ts";
+import { WORKSHOP_RULES, type WorkshopTier } from "../../../spacetimedb/src/sim/workshop.ts";
 
 /** Only real operational radii, shared by placement and selection overlays. */
 export function structureInfluenceRange(kind: string, level = 1): number | null {
