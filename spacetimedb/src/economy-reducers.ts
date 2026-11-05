@@ -65,6 +65,8 @@ export const orderHarvest = spacetimedb.reducer(
     // A hybrid fighting ship may have one resource task, never two paid
     // extraction orders that duplicate production from the same hull.
     ctx.db.materialHarvestOrder.shipId.delete(shipId);
+    // Harvesting replaces an Attack Target order (Move/Stop already do).
+    ctx.db.attackOrder.shipId.delete(shipId);
   },
 );
 
@@ -117,6 +119,7 @@ export const orderMaterialHarvest = spacetimedb.reducer(
     else ctx.db.materialHarvestOrder.insert(order);
     ctx.db.harvestOrder.shipId.delete(shipId);
     ctx.db.shipRoute.shipId.delete(shipId);
+    ctx.db.attackOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
       ...vessel, velocityX: 0, velocityY: 0,
       targetX: vessel.x, targetY: vessel.y,

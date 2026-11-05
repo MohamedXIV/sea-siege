@@ -99,7 +99,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
             <div className="space-y-1">
               <span className="flex items-center gap-1">
-                <Compass className="size-3 text-cyan-300" /> LMB select / drag to box-select · RMB move
+                <Compass className="size-3 text-cyan-300" /> LMB select / drag to box-select · RMB move · RMB enemy attack
               </span>
               <div>Drag empty sea to deselect · Esc/RMB cancel build · E enemy · H home</div>
             </div>

@@ -111,6 +111,11 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
   const selectedBuilding = selected?.type === "structure"
     ? state.battleStructures.find(st => st.id === selected.id)
     : undefined;
+  const selectedAttackOrders = state.attackOrders.filter(order =>
+    selectedShipIds.includes(order.shipId));
+  const selectedAttack = selectedShip
+    ? selectedAttackOrders.find(order => order.shipId === selectedShip.id)
+    : undefined;
   const salvage = state.myFaction?.salvage ?? 0;
 
   const harvestNearest = (kind: ResourceKind) => {
@@ -188,6 +193,11 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
         {selectedShips.length > 1 ? (
           <div className="space-y-1.5 text-xs">
             <div className="font-semibold text-sky-300">{selectedShips.length} SHIPS SELECTED</div>
+            {selectedAttackOrders.length > 0 && (
+              <div className="rounded border border-rose-900/60 bg-rose-950/30 px-2 py-1 text-[11px] text-rose-200">
+                Attacking with {selectedAttackOrders.length} of {selectedShips.length} ships
+              </div>
+            )}
             <Button size="sm" variant="outline" disabled={pending}
               onClick={() => void perform(async () => {
                 const results = await Promise.allSettled(
@@ -200,13 +210,19 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
               <CircleStop className="size-3" /> Stop selected fleet
             </Button>
             <p className="text-[10px] text-slate-400">
-              Right-click water to move selected ships in a loose formation.
-              Drag on empty water to deselect.
+              Right-click an enemy ship or building to attack. Right-click water
+              to move in a loose formation. Drag on empty water to deselect.
             </p>
           </div>
         ) : selectedShip ? (
           <div className="space-y-1.5 text-xs">
             <div className="font-semibold text-white">{selectedShip.kind.toUpperCase()} · HP {selectedShip.hp}</div>
+            {selectedAttack && (
+              <div className="rounded border border-rose-900/60 bg-rose-950/30 px-2 py-1 text-[11px] text-rose-200">
+                Attacking {selectedAttack.targetType} #{selectedAttack.targetId.toString()}
+                <span className="ml-1 text-rose-300/70">· Stop cancels the order</span>
+              </div>
+            )}
             <div className="flex flex-wrap gap-1.5">
               {(["iron", "oil", "alloy", "isotope"] as const).map(kind => (
                 <Button key={kind} size="sm" variant="outline"
@@ -226,7 +242,7 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
                 <CircleStop className="size-3" /> Stop
               </Button>
             </div>
-            <p className="text-[10px] text-slate-400">Pick a material to approach or gather. At harvesting range, click again to start extraction; combat stays available.</p>
+            <p className="text-[10px] text-slate-400">Right-click an enemy ship or building to attack. Pick a material to approach or gather; combat stays available.</p>
             <ShipRefitPanel state={state} ship={selectedShip} />
           </div>
         ) : selectedBuilding ? (
