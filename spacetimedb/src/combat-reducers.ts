@@ -512,7 +512,11 @@ export const advanceCombat = spacetimedb.reducer(
         ));
       const plan = planAttackStep({
         ship: { x: vessel.x, y: vessel.y }, target,
-        weaponRange: weapon.range, mapCells: attackMapCells, lineOfSight,
+        // dispatchFire enforces BOTH weapon.range and weapon.vision.
+        // Siege has range=11 but vision=9.5: do not stop at 10 cells
+        // and keep retrying a shot the server will never authorize.
+        weaponRange: Math.min(weapon.range, weapon.vision),
+        mapCells: attackMapCells, lineOfSight,
       });
       if (plan.kind === "cancel") {
         ctx.db.attackOrder.shipId.delete(order.shipId);
