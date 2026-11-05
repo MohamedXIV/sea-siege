@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { TacticalOverview } from "@/components/TacticalOverview";
 import { GeminiCommandDock } from "@/components/GeminiCommandDock";
 import { MaterialInventory } from "@/components/MaterialInventory";
+import { MatchClock } from "@/components/MatchClock";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 
 interface MatchHudProps {
@@ -35,7 +36,8 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
             </div>
           </div>
         </div>
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex flex-wrap items-center gap-2">
+          <MatchClock match={match} />
           <div
             role="status"
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-semibold backdrop-blur-md ${
