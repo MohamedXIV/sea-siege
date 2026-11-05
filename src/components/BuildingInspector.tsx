@@ -7,6 +7,7 @@ import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import { COMBAT_RULES } from "../../spacetimedb/src/sim/combat";
 import { WORKSHOP_RULES, nextWorkshopUpgrade } from "../../spacetimedb/src/sim/workshop";
 import { RESOURCE_TYPES, type AdvancedResourceKind } from "../../spacetimedb/src/sim/materials";
+import { WorkshopServices } from "@/components/WorkshopServices";
 
 const SHIP_TYPES = ["scout", "gunboat", "siege"] as const;
 
@@ -119,7 +120,9 @@ export function BuildingInspector({
         <p className="text-[11px] text-slate-300">
           <Shield className="mr-1 inline size-3" />
           Cannon range: {COMBAT_RULES.weapons.cannon.range} cells · Base damage: {COMBAT_RULES.weapons.cannon.damage}.
-          Combat targeting controls are being expanded; this is not a ship-production building.
+          {online ? "Automatically targets and fires on nearby enemy ships and structures." :
+            "Offline: no automatic defense until connected and fully built."}
+          Ships and Cannons share authoritative aiming, cooldown, projectiles and damage rules.
         </p>
       )}
 
@@ -131,8 +134,13 @@ export function BuildingInspector({
           <p className="text-[11px] text-slate-300">
             {tier ? `Repair radius: ${WORKSHOP_RULES.tiers[tier as 1 | 2 | 3]?.radiusCells} cells. ` : ""}
             Select a ship near an operational Workshop for Oil/Alloy refits.
-            The server also supports ship and structure repairs.
+            Repair damaged allied ships and connected structures manually using the dock below.
+            Refits and Workshop tiers use real server transactions.
           </p>
+          {own && ownedRow && (
+            <WorkshopServices state={state} workshop={ownedRow}
+              pending={pending} perform={perform} />
+          )}
           {own && ownedRow?.upgradeRemainingUs && ownedRow.upgradeRemainingUs > 0n && (
             <p className="text-amber-300">
               Upgrading · {Math.ceil(Number(ownedRow.upgradeRemainingUs) / 1_000_000)}s remaining
