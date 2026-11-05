@@ -53,6 +53,9 @@ interface ProjectileArt {
   displayY: number;
   serverX: number;
   serverY: number;
+  vx: number;
+  vy: number;
+  observedAtMs: number;
   sourceFaction: number;
 }
 
@@ -92,6 +95,7 @@ export class SeaScene extends Phaser.Scene {
   private projectileGraphics!: Phaser.GameObjects.Graphics;
   private effectsGraphics!: Phaser.GameObjects.Graphics;
   private projectiles = new Map<bigint, ProjectileArt>();
+  private seenImpactIds = new Set<bigint>();
   private effects: CombatEffect[] = [];
   private attackTargets = new Map<bigint, { targetType: string; targetId: bigint }>();
   private vessels = new Map<bigint, VesselArt>();
@@ -287,6 +291,7 @@ export class SeaScene extends Phaser.Scene {
     for (const art of this.buildings.values()) art.image.destroy();
     this.buildings.clear();
     this.projectiles.clear();
+    this.seenImpactIds.clear();
     this.projectileGraphics?.clear();
     this.effects = [];
     this.effectsGraphics?.clear();
@@ -705,6 +710,7 @@ export class SeaScene extends Phaser.Scene {
     this.syncShips(state.battleShips);
     this.syncAttackOrders(state);
     this.syncProjectiles(state);
+    this.syncImpacts(state);
     if (this.centeredMatchId !== matchId && state.myStructures
       .some(st => st.kind === "command_core")) {
       this.focusHome();
@@ -937,8 +943,15 @@ export class SeaScene extends Phaser.Scene {
       seen.add(row.id);
       const existing = this.projectiles.get(row.id);
       if (existing) {
-        existing.serverX = row.x;
-        existing.serverY = row.y;
+        // Preserve the timestamp if this subscription pass contains no new
+        // authoritative motion row (unrelated HUD updates are frequent).
+        if (existing.serverX !== row.x || existing.serverY !== row.y) {
+          existing.serverX = row.x;
+          existing.serverY = row.y;
+          existing.observedAtMs = Date.now();
+        }
+        existing.vx = row.vx;
+        existing.vy = row.vy;
         continue;
       }
       const muzzle = row.sourceType === "ship"
@@ -955,13 +968,32 @@ export class SeaScene extends Phaser.Scene {
       this.projectiles.set(row.id, {
         displayX: row.x, displayY: row.y,
         serverX: row.x, serverY: row.y,
+        vx: row.vx, vy: row.vy, observedAtMs: Date.now(),
         sourceFaction: row.sourceFaction,
       });
     }
-    for (const [id, art] of this.projectiles) {
-      if (seen.has(id)) continue;
-      this.spawnEffect("splash", art.displayX * TILE, art.displayY * TILE, 320);
-      this.projectiles.delete(id);
+    for (const id of this.projectiles.keys()) {
+      if (!seen.has(id)) this.projectiles.delete(id);
+    }
+  }
+
+  private syncImpacts(state: SpacetimeClientState): void {
+    const live = new Set<bigint>();
+    for (const impact of state.battleImpacts) {
+      live.add(impact.id);
+      if (this.seenImpactIds.has(impact.id)) continue;
+      this.seenImpactIds.add(impact.id);
+      // Effects are ONLY drawn at the true authoritative swept-collision
+      // or maximum-flight endpoint, not a stale, lagging client sprite.
+      this.projectiles.delete(impact.projectileId);
+      this.spawnEffect(
+        impact.kind === "hit" ? "hit" : "splash",
+        impact.x * TILE, impact.y * TILE,
+        impact.kind === "hit" ? 330 : 360,
+      );
+    }
+    for (const id of this.seenImpactIds) {
+      if (!live.has(id)) this.seenImpactIds.delete(id);
     }
   }
 
@@ -1047,21 +1079,26 @@ export class SeaScene extends Phaser.Scene {
     const gfx = this.projectileGraphics;
     if (!gfx) return;
     gfx.clear();
-    const t = Math.min(1, delta / 110);
+    const t = Math.min(1, delta / 35);
+    const now = Date.now();
     for (const art of this.projectiles.values()) {
-      art.displayX += (art.serverX - art.displayX) * t;
-      art.displayY += (art.serverY - art.displayY) * t;
+      // Advance the observed launch velocity between 10Hz server updates.
+      // A short cap prevents runaway predictions across network stalls.
+      const elapsed = Math.max(0, Math.min(0.12, (now - art.observedAtMs) / 1000));
+      const targetX = art.serverX + art.vx * elapsed;
+      const targetY = art.serverY + art.vy * elapsed;
+      art.displayX += (targetX - art.displayX) * t;
+      art.displayY += (targetY - art.displayY) * t;
       const x = art.displayX * TILE, y = art.displayY * TILE;
-      const dx = (art.serverX - art.displayX) * TILE;
-      const dy = (art.serverY - art.displayY) * TILE;
-      const length = Math.hypot(dx, dy) || 1;
+      const length = Math.hypot(art.vx, art.vy) || 1;
+      const dx = art.vx / length, dy = art.vy / length;
       const tint = Number.parseInt(geminiFactionColor(art.sourceFaction).slice(1), 16);
-      gfx.lineStyle(2, tint, 0.6);
-      gfx.lineBetween(x - dx / length * 7, y - dy / length * 7, x, y);
-      gfx.fillStyle(0xfef3c7, 0.95);
+      gfx.lineStyle(2, tint, 0.7);
+      gfx.lineBetween(x - dx * 10, y - dy * 10, x, y);
+      gfx.fillStyle(0xfef3c7, 0.98);
       gfx.fillCircle(x, y, 2.4);
-      gfx.fillStyle(tint, 0.55);
-      gfx.fillCircle(x, y, 5);
+      gfx.fillStyle(tint, 0.5);
+      gfx.fillCircle(x, y, 4);
     }
   }
 
