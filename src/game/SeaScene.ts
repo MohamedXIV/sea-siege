@@ -14,6 +14,7 @@ import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
 import { shipsInSelectionBox } from "./input/selection-box";
 import { selectStructureAt } from "./input/structure-selection";
+import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import {
@@ -421,6 +422,18 @@ export class SeaScene extends Phaser.Scene {
         const x = cell.gridX * TILE, y = cell.gridY * TILE;
         this.buildPreview.fillRect(x, y, def.width * TILE, def.height * TILE);
         this.buildPreview.strokeRect(x, y, def.width * TILE, def.height * TILE);
+      }
+    }
+    const radius = structureInfluenceRange(kind);
+    if (radius !== null) {
+      const cells = plan.cells.length ? plan.cells : [{ gridX: sx, gridY: sy }];
+      for (const cell of cells) {
+        const centerX = (cell.gridX + def.width / 2) * TILE;
+        const centerY = (cell.gridY + def.height / 2) * TILE;
+        this.buildPreview.fillStyle(color, 0.035);
+        this.buildPreview.fillCircle(centerX, centerY, radius * TILE);
+        this.buildPreview.lineStyle(1.5, color, 0.8);
+        this.buildPreview.strokeCircle(centerX, centerY, radius * TILE);
       }
     }
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_PREVIEW_EVENT, {
@@ -855,12 +868,14 @@ export class SeaScene extends Phaser.Scene {
       building.gridX * TILE - 2, building.gridY * TILE - 2,
       building.width * TILE + 4, building.height * TILE + 4,
     );
-    if (building.kind === "salvage_rig") {
+    const owned = spacetimeClient.getState().myStructures.find(st => st.id === building.id);
+    const radius = structureInfluenceRange(building.kind, owned?.level ?? 1);
+    if (radius !== null) {
       gfx.lineStyle(2, 0x34d399, 0.65);
       gfx.strokeCircle(
         (building.gridX + building.width / 2) * TILE,
         (building.gridY + building.height / 2) * TILE,
-        ECONOMY_RULES.rigRangeCells * TILE,
+        radius * TILE,
       );
     }
   }
