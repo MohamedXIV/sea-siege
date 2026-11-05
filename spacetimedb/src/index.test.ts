@@ -1901,6 +1901,27 @@ it("an out-of-range order chases the live target and re-paths when it moves", ()
   expect(Math.hypot(newGoal.x - (ax + 18), newGoal.y - ay)).toBeLessThanOrEqual(5.5);
 });
 
+it("Siege closes inside its shorter fire-visibility range instead of stalling", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  const lane = findOpenWaterLane(test, matchId, 20);
+  const x = lane.x + 0.5, y = lane.y + 0.5;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const own = ctx.db.ship.id.find(attacker.id)!;
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...own, kind: "siege", x, y });
+    ctx.db.ship.id.update({ ...enemy, x: x + 10, y, hp: 500 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  // Siege weapon range is 11 but its actual dispatchFire vision cap is 9.5.
+  // At 10 cells it MUST approach instead of idling and failing every shot.
+  expect(test.db.shipRoute.shipId.find(attacker.id)).toBeTruthy();
+  expect(test.db.ship.id.find(attacker.id)!.lastFiredAtUs).toBe(-1n);
+  expect(test.db.attackOrder.shipId.find(attacker.id)).not.toBeNull();
+});
+
 it("multiple owned ships keep independent attack orders and never duplicate shots", () => {
   const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
   test.withReducerTx(TestAuth.internal(), ctx => {
