@@ -760,6 +760,15 @@ it("moving defender dodges the fired trajectory; only internal scheduler can adv
   }
   expect(test.db.ship.id.find(second.id)!.hp).toBe(initial);
   expect(test.db.projectile.count()).toBe(0n);
+  // A true range-expiry splash is kept briefly for clients to receive.
+  expect(test.db.combatImpact.count()).toBe(1n);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(900));
+  const expiry = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: expiry })
+  );
+  expect(test.db.combatImpact.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
 
@@ -785,6 +794,17 @@ it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", (
   }));
   expect(test.db.ship.id.find(enemy.id)!.hp).toBe(210 - 16); // Scout 18 minus Scout armor 2
   expect(test.db.projectile.count()).toBe(0n);
+  const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
+  expect(impact.kind).toBe("hit");
+  expect(impact.x).toBeGreaterThan(own.x);
+  expect(impact.x).toBeLessThan(enemy.x);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(900));
+  const expiry = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: expiry })
+  );
+  expect(test.db.combatImpact.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
 
