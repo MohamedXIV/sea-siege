@@ -1,7 +1,7 @@
 import { ScheduleAt } from "spacetimedb";
 import { t, SenderError } from "spacetimedb/server";
 import spacetimedb, {
-  motionSchedule, constructionSchedule, economySchedule,
+  motionSchedule, constructionSchedule, economySchedule, combatSchedule,
   ship, matchMember, factionState,
 } from "./schema.ts";
 import { deadlineMicroseconds } from "./sim/match-outcome.ts";
@@ -14,6 +14,7 @@ import { generateMaterialNodes } from "./sim/material-world.ts";
 import { ADVANCED_RESOURCE_KINDS, materialBalanceKey } from "./sim/materials.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { BOT_RULES } from "./sim/bot-policy.ts";
+import { COMBAT_RULES } from "./sim/combat.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
 import { planBoxConstruction } from "./sim/box-construction.ts";
 import { nextWorkshopUpgrade } from "./sim/workshop.ts";
@@ -780,6 +781,17 @@ export const completeConstruction = spacetimedb.reducer(
       const connected = structureOnline({ ...row, kind: row.kind as StructureKind }, shapes, world.mapCells);
       if (row.connected !== connected) ctx.db.structure.id.update({ ...row, connected });
     }
+    // A completed Cannon must defend even without a nearby human-issued
+    // attack. Keep one 10Hz combat scheduler for all cannons in the match;
+    // it sleeps again once no live cannon/attack/projectile remains.
+    if (target.kind === "cannon" &&
+        !Array.from(ctx.db.combatSchedule.matchId.filter(target.matchId)).length) {
+      ctx.db.combatSchedule.insert({
+        scheduledId: 0n, matchId: target.matchId,
+        scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
+        lastTickAt: ctx.timestamp,
+      });
+    }
   },
 );
 
@@ -794,7 +806,7 @@ export {
 } from "./workshop-reducers.ts";
 
 export { aimWeapon, fireWeapon, issueAttackOrder, advanceCombat } from "./combat-reducers.ts";
-export { myAttackOrders, myBattleProjectiles } from "./combat-views.ts";
+export { myAttackOrders, myBattleProjectiles, myBattleImpacts } from "./combat-views.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
 export { refitShip } from "./ship-refit-reducers.ts";

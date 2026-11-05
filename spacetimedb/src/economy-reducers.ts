@@ -1,10 +1,11 @@
 import { t, SenderError } from "spacetimedb/server";
+import { ScheduleAt } from "spacetimedb";
 import spacetimedb, { economySchedule } from "./schema.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
-import { terrainLineOfSight } from "./sim/combat.ts";
+import { COMBAT_RULES, terrainLineOfSight } from "./sim/combat.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
   ADVANCED_RESOURCE_KINDS, allocateResourceDraws, materialBalanceKey,
@@ -219,6 +220,17 @@ export const advanceEconomy = spacetimedb.reducer(
     };
     const structures = Array.from(ctx.db.structure.matchId.filter(timer.matchId))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    // Also recover existing cannons published before auto-defense was added.
+    // The 1Hz economy clock safely wakes one shared combat scheduler without
+    // waiting for a new construction or a player-fired projectile.
+    if (structures.some(row => row.kind === "cannon" && row.complete && row.hp > 0) &&
+        !Array.from(ctx.db.combatSchedule.matchId.filter(timer.matchId)).length) {
+      ctx.db.combatSchedule.insert({
+        scheduledId: 0n, matchId: timer.matchId,
+        scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
+        lastTickAt: ctx.timestamp,
+      });
+    }
     // Progress upgrades only for complete, connected and living Workshops.
     // Newly issued upgrades cannot inherit time from before their order.
     for (const row of structures) {

@@ -14,7 +14,9 @@ import { decodeTerrainChunks } from "../../spacetimedb/src/sim/navigation";
 import { planBoxConstruction } from "../../spacetimedb/src/sim/box-construction";
 import { shipsInSelectionBox } from "./input/selection-box";
 import { selectStructureAt } from "./input/structure-selection";
+import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
+import { shipWakeSegments } from "./vfx/ship-wake";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import {
   RESOURCE_TYPES, type AdvancedResourceKind,
@@ -44,6 +46,7 @@ interface VesselArt {
 
 interface BuildingArt {
   image: Phaser.GameObjects.Image;
+  turret?: Phaser.GameObjects.Graphics;
   key: string;
   hp: number;
 }
@@ -53,6 +56,10 @@ interface ProjectileArt {
   displayY: number;
   serverX: number;
   serverY: number;
+  vx: number;
+  vy: number;
+  remainingRange: number;
+  observedAtMs: number;
   sourceFaction: number;
 }
 
@@ -92,6 +99,7 @@ export class SeaScene extends Phaser.Scene {
   private projectileGraphics!: Phaser.GameObjects.Graphics;
   private effectsGraphics!: Phaser.GameObjects.Graphics;
   private projectiles = new Map<bigint, ProjectileArt>();
+  private seenImpactIds = new Set<bigint>();
   private effects: CombatEffect[] = [];
   private attackTargets = new Map<bigint, { targetType: string; targetId: bigint }>();
   private vessels = new Map<bigint, VesselArt>();
@@ -284,9 +292,13 @@ export class SeaScene extends Phaser.Scene {
       art.container.destroy();
     }
     this.vessels.clear();
-    for (const art of this.buildings.values()) art.image.destroy();
+    for (const art of this.buildings.values()) {
+      art.image.destroy();
+      art.turret?.destroy();
+    }
     this.buildings.clear();
     this.projectiles.clear();
+    this.seenImpactIds.clear();
     this.projectileGraphics?.clear();
     this.effects = [];
     this.effectsGraphics?.clear();
@@ -416,6 +428,18 @@ export class SeaScene extends Phaser.Scene {
         const x = cell.gridX * TILE, y = cell.gridY * TILE;
         this.buildPreview.fillRect(x, y, def.width * TILE, def.height * TILE);
         this.buildPreview.strokeRect(x, y, def.width * TILE, def.height * TILE);
+      }
+    }
+    const radius = structureInfluenceRange(kind);
+    if (radius !== null) {
+      const cells = plan.cells.length ? plan.cells : [{ gridX: sx, gridY: sy }];
+      for (const cell of cells) {
+        const centerX = (cell.gridX + def.width / 2) * TILE;
+        const centerY = (cell.gridY + def.height / 2) * TILE;
+        this.buildPreview.fillStyle(color, 0.035);
+        this.buildPreview.fillCircle(centerX, centerY, radius * TILE);
+        this.buildPreview.lineStyle(1.5, color, 0.8);
+        this.buildPreview.strokeCircle(centerX, centerY, radius * TILE);
       }
     }
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_PREVIEW_EVENT, {
@@ -705,6 +729,7 @@ export class SeaScene extends Phaser.Scene {
     this.syncShips(state.battleShips);
     this.syncAttackOrders(state);
     this.syncProjectiles(state);
+    this.syncImpacts(state);
     if (this.centeredMatchId !== matchId && state.myStructures
       .some(st => st.kind === "command_core")) {
       this.focusHome();
@@ -802,6 +827,7 @@ export class SeaScene extends Phaser.Scene {
           620,
         );
         art.image.destroy();
+        art.turret?.destroy();
         this.buildings.delete(id);
       }
     }
@@ -814,7 +840,10 @@ export class SeaScene extends Phaser.Scene {
       if (!art) {
         const image = this.add.image(st.gridX * TILE, st.gridY * TILE, key)
           .setOrigin(0, 0).setDepth(10);
-        art = { image, key, hp: st.hp };
+        art = {
+          image, key, hp: st.hp,
+          turret: st.kind === "cannon" ? this.add.graphics().setDepth(16) : undefined,
+        };
         this.buildings.set(st.id, art);
       } else {
         if (art.key !== key) { art.image.setTexture(key); art.key = key; }
@@ -828,6 +857,22 @@ export class SeaScene extends Phaser.Scene {
         }
         art.hp = st.hp;
         art.image.setPosition(st.gridX * TILE, st.gridY * TILE);
+      }
+      // Cannon barrels visibly follow the same server-owned turret angle
+      // as ship guns; the structure texture remains the static base.
+      if (st.kind === "cannon") {
+        if (!art.turret) art.turret = this.add.graphics().setDepth(16);
+        const gfx = art.turret;
+        gfx.clear();
+        gfx.setPosition((st.gridX + st.width / 2) * TILE,
+          (st.gridY + st.height / 2) * TILE);
+        gfx.setRotation(st.turretAngleDeg * Math.PI / 180);
+        gfx.fillStyle(st.complete && st.connected ? 0x111827 : 0x475569, 1);
+        gfx.fillRect(-7, -7, 14, 14);
+        gfx.fillStyle(st.complete && st.connected ? 0xe2e8f0 : 0x64748b, 1);
+        gfx.fillRect(0, -3, 19, 6);
+        gfx.fillStyle(0xfbbf24, 0.8);
+        gfx.fillRect(15, -2, 4, 4);
       }
     }
     this.drawBuildingHighlight();
@@ -849,12 +894,14 @@ export class SeaScene extends Phaser.Scene {
       building.gridX * TILE - 2, building.gridY * TILE - 2,
       building.width * TILE + 4, building.height * TILE + 4,
     );
-    if (building.kind === "salvage_rig") {
+    const owned = spacetimeClient.getState().myStructures.find(st => st.id === building.id);
+    const radius = structureInfluenceRange(building.kind, owned?.level ?? 1);
+    if (radius !== null) {
       gfx.lineStyle(2, 0x34d399, 0.65);
       gfx.strokeCircle(
         (building.gridX + building.width / 2) * TILE,
         (building.gridY + building.height / 2) * TILE,
-        ECONOMY_RULES.rigRangeCells * TILE,
+        radius * TILE,
       );
     }
   }
@@ -937,8 +984,16 @@ export class SeaScene extends Phaser.Scene {
       seen.add(row.id);
       const existing = this.projectiles.get(row.id);
       if (existing) {
-        existing.serverX = row.x;
-        existing.serverY = row.y;
+        // Preserve the timestamp if this subscription pass contains no new
+        // authoritative motion row (unrelated HUD updates are frequent).
+        if (existing.serverX !== row.x || existing.serverY !== row.y) {
+          existing.serverX = row.x;
+          existing.serverY = row.y;
+          existing.observedAtMs = Date.now();
+        }
+        existing.vx = row.vx;
+        existing.vy = row.vy;
+        existing.remainingRange = row.remainingRange;
         continue;
       }
       const muzzle = row.sourceType === "ship"
@@ -955,13 +1010,33 @@ export class SeaScene extends Phaser.Scene {
       this.projectiles.set(row.id, {
         displayX: row.x, displayY: row.y,
         serverX: row.x, serverY: row.y,
+        vx: row.vx, vy: row.vy,
+        remainingRange: row.remainingRange, observedAtMs: Date.now(),
         sourceFaction: row.sourceFaction,
       });
     }
-    for (const [id, art] of this.projectiles) {
-      if (seen.has(id)) continue;
-      this.spawnEffect("splash", art.displayX * TILE, art.displayY * TILE, 320);
-      this.projectiles.delete(id);
+    for (const id of this.projectiles.keys()) {
+      if (!seen.has(id)) this.projectiles.delete(id);
+    }
+  }
+
+  private syncImpacts(state: SpacetimeClientState): void {
+    const live = new Set<bigint>();
+    for (const impact of state.battleImpacts) {
+      live.add(impact.id);
+      if (this.seenImpactIds.has(impact.id)) continue;
+      this.seenImpactIds.add(impact.id);
+      // Effects are ONLY drawn at the true authoritative swept-collision
+      // or maximum-flight endpoint, not a stale, lagging client sprite.
+      this.projectiles.delete(impact.projectileId);
+      this.spawnEffect(
+        impact.kind === "hit" ? "hit" : "splash",
+        impact.x * TILE, impact.y * TILE,
+        impact.kind === "hit" ? 330 : 360,
+      );
+    }
+    for (const id of this.seenImpactIds) {
+      if (!live.has(id)) this.seenImpactIds.delete(id);
     }
   }
 
@@ -1047,21 +1122,27 @@ export class SeaScene extends Phaser.Scene {
     const gfx = this.projectileGraphics;
     if (!gfx) return;
     gfx.clear();
-    const t = Math.min(1, delta / 110);
+    const t = Math.min(1, delta / 35);
+    const now = Date.now();
     for (const art of this.projectiles.values()) {
-      art.displayX += (art.serverX - art.displayX) * t;
-      art.displayY += (art.serverY - art.displayY) * t;
+      // Advance the observed launch velocity between 10Hz server updates.
+      // A short cap prevents runaway predictions across network stalls.
+      const elapsed = Math.max(0, Math.min(0.12, (now - art.observedAtMs) / 1000));
+      const length = Math.hypot(art.vx, art.vy) || 1;
+      const distance = Math.min(art.remainingRange, length * elapsed);
+      const targetX = art.serverX + art.vx / length * distance;
+      const targetY = art.serverY + art.vy / length * distance;
+      art.displayX += (targetX - art.displayX) * t;
+      art.displayY += (targetY - art.displayY) * t;
       const x = art.displayX * TILE, y = art.displayY * TILE;
-      const dx = (art.serverX - art.displayX) * TILE;
-      const dy = (art.serverY - art.displayY) * TILE;
-      const length = Math.hypot(dx, dy) || 1;
+      const dx = art.vx / length, dy = art.vy / length;
       const tint = Number.parseInt(geminiFactionColor(art.sourceFaction).slice(1), 16);
-      gfx.lineStyle(2, tint, 0.6);
-      gfx.lineBetween(x - dx / length * 7, y - dy / length * 7, x, y);
-      gfx.fillStyle(0xfef3c7, 0.95);
+      gfx.lineStyle(2, tint, 0.7);
+      gfx.lineBetween(x - dx * 10, y - dy * 10, x, y);
+      gfx.fillStyle(0xfef3c7, 0.98);
       gfx.fillCircle(x, y, 2.4);
-      gfx.fillStyle(tint, 0.55);
-      gfx.fillCircle(x, y, 5);
+      gfx.fillStyle(tint, 0.5);
+      gfx.fillCircle(x, y, 4);
     }
   }
 
@@ -1163,9 +1244,14 @@ export class SeaScene extends Phaser.Scene {
         art.highlight.strokeCircle(0, 0, 19);
       }
       art.wake.clear();
-      if (Math.hypot(ship.velocityX, ship.velocityY) > 0.2) {
-        art.wake.lineStyle(2, 0xbae6fd, 0.3 + 0.2 * Math.sin(this.elapsed * 0.01));
-        art.wake.strokeCircle(-18, 0, 6);
+      const length = ship.kind === "scout" ? 24 : ship.kind === "gunboat" ? 32 : 42;
+      for (const foam of shipWakeSegments(
+        sample?.vx ?? ship.velocityX,
+        sample?.vy ?? ship.velocityY,
+        length, this.elapsed * 0.004,
+      )) {
+        art.wake.lineStyle(foam.width, 0xbae6fd, foam.alpha);
+        art.wake.lineBetween(foam.ax, foam.ay, foam.bx, foam.by);
       }
     }
     this.drawCombatOverlay(state);

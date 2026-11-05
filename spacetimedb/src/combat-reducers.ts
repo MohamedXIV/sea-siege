@@ -7,7 +7,7 @@ import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-comma
 import { structureOnline, type StructureKind } from "./sim/construction.ts";
 import { boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
 import {
-  advanceTurret, type TurretKind,
+  advanceTurret, desiredBearing, type TurretKind,
 } from "./sim/turret-aim.ts";
 import {
   COMBAT_RULES, advanceProjectile, terrainLineOfSight, weaponDefinition,
@@ -18,6 +18,7 @@ import {
 } from "./sim/attack-order.ts";
 import { dispatchMovement } from "./sim/world-command-dispatch.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
+import { chooseDefenseTarget } from "./sim/defense-targeting.ts";
 
 
 /**
@@ -381,6 +382,8 @@ export const advanceCombat = spacetimedb.reducer(
         ctx.db.turretAim.id.delete(job.id);
       for (const job of Array.from(ctx.db.attackOrder.matchId.filter(matchId)))
         ctx.db.attackOrder.shipId.delete(job.shipId);
+      for (const event of Array.from(ctx.db.combatImpact.matchId.filter(matchId)))
+        ctx.db.combatImpact.id.delete(event.id);
     }
     if (!ctx.senderAuth.isInternal) throw new Error("Combat scheduler is internal-only");
     const timer = ctx.db.combatSchedule.scheduledId.find(arg.scheduledId);
@@ -402,8 +405,19 @@ export const advanceCombat = spacetimedb.reducer(
      * never invents damage or a projectile; a denied shot simply waits.
      */
     const nowUs = ctx.timestamp.microsSinceUnixEpoch;
+    // Impact events live long enough to reach a browser subscription, then
+    // expire on this same match timer without persistent history growth.
+    for (const event of Array.from(ctx.db.combatImpact.matchId.filter(timer.matchId)))
+      if (nowUs - event.createdAtUs >= 850_000n)
+        ctx.db.combatImpact.id.delete(event.id);
     const attackOrders = Array.from(ctx.db.attackOrder.matchId.filter(timer.matchId))
       .sort((a, b) => a.shipId < b.shipId ? -1 : a.shipId > b.shipId ? 1 : 0);
+    // A fixed Cannon has no Move/Attack command, so its authoritative
+    // defense automatically acquires hostile targets in its firing radius.
+    const installedCannons = Array.from(ctx.db.structure.matchId.filter(timer.matchId))
+      .filter(row => row.kind === "cannon" && row.complete && row.hp > 0)
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const activeCannons = installedCannons.filter(row => row.connected);
     let attackMapCells = 0;
     let attackTerrain: Uint8Array | null = null;
     let attackEnvironment: Readonly<{
@@ -411,7 +425,7 @@ export const advanceCombat = spacetimedb.reducer(
       vessels: readonly { id: bigint; x: number; y: number; radius: number }[];
       footprints: readonly { x: number; y: number; width: number; height: number }[];
     }> | null = null;
-    if (attackOrders.length) {
+    if (attackOrders.length || activeCannons.length) {
       const world = ctx.db.worldConfig.matchId.find(timer.matchId);
       if (!world) throw new Error("Missing combat world");
       attackMapCells = world.mapCells;
@@ -471,6 +485,61 @@ export const advanceCombat = spacetimedb.reducer(
       },
       ensureMotionTick,
     });
+    /**
+     * One shared authoritative engagement path for ships AND fixed Cannons.
+     * It calls the very same dispatchAim/dispatchFire validators and writes
+     * the same turret/projectile rows. Only target selection and ship approach
+     * differ; there are no duplicated weapon/damage algorithms to maintain.
+     */
+    const engageWeapon = (
+      source: WeaponSource,
+      target: AttackableTarget,
+      faction: Readonly<{
+        matchId: bigint; slot: number; controller: "human" | "bot";
+        eliminated: boolean;
+      }>,
+    ): void => {
+      dispatchAim({
+        faction, source, desiredAngleDeg: desiredBearing(source, target),
+      }, {
+        clearAim: (type, id) => {
+          for (const aim of Array.from(ctx.db.turretAim.matchId.filter(timer.matchId)))
+            if (aim.sourceType === type && aim.sourceId === id)
+              ctx.db.turretAim.id.delete(aim.id);
+        },
+        upsertAim: (type, id, angle) => {
+          const current = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId))
+            .find(row => row.sourceType === type && row.sourceId === id);
+          if (current) ctx.db.turretAim.id.update({ ...current, desiredAngleDeg: angle });
+          else ctx.db.turretAim.insert({
+            id: 0n, matchId: timer.matchId, sourceType: type,
+            sourceId: id, desiredAngleDeg: angle,
+          });
+        },
+        ensureCombatTick: () => {},
+      });
+      // A denied shot stays denied: target, LOS, cooldown, alignment and
+      // projectile count are never synthesized by the automatic controller.
+      dispatchFire({
+        faction, source, target, nowUs, terrain: attackTerrain!,
+        mapCells: attackMapCells, targetVisible: true,
+        projectileCount: Array.from(ctx.db.projectile.matchId.filter(timer.matchId)).length,
+      }, {
+        markFired: (_, atUs) => {
+          if (source.type === "ship") {
+            const row = ctx.db.ship.id.find(source.id);
+            if (row) ctx.db.ship.id.update({
+              ...row, lastFiredAtUs: atUs, updatedAt: ctx.timestamp,
+            });
+          } else {
+            const row = ctx.db.structure.id.find(source.id);
+            if (row) ctx.db.structure.id.update({ ...row, lastFiredAtUs: atUs });
+          }
+        },
+        insertProjectile: shot => { ctx.db.projectile.insert({ id: 0n, ...shot }); },
+        ensureCombatTick: () => {},
+      });
+    };
     for (const order of attackOrders) {
       const vessel = ctx.db.ship.id.find(order.shipId);
       if (!vessel || vessel.hp <= 0 || vessel.matchId !== timer.matchId) {
@@ -563,41 +632,40 @@ export const advanceCombat = spacetimedb.reducer(
         turretAngleDeg: standing.turretAngleDeg,
         lastFiredAtUs: standing.lastFiredAtUs,
       };
-      dispatchAim({
-        faction: capability, source, desiredAngleDeg: plan.desiredAngleDeg,
-      }, {
-        clearAim: (type, id) => {
-          for (const aim of Array.from(ctx.db.turretAim.matchId.filter(timer.matchId)))
-            if (aim.sourceType === type && aim.sourceId === id)
-              ctx.db.turretAim.id.delete(aim.id);
-        },
-        upsertAim: (type, id, angle) => {
-          const current = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId))
-            .find(row => row.sourceType === type && row.sourceId === id);
-          if (current) ctx.db.turretAim.id.update({ ...current, desiredAngleDeg: angle });
-          else ctx.db.turretAim.insert({
-            id: 0n, matchId: timer.matchId, sourceType: type, sourceId: id,
-            desiredAngleDeg: angle,
-          });
-        },
-        ensureCombatTick: () => {},
-      });
-      // A rejected shot (cooldown, alignment, range, line of sight, cap) is
-      // expected and never retried outside these authoritative rules.
-      dispatchFire({
-        faction: capability, source, target, nowUs, terrain: attackTerrain!,
-        mapCells: attackMapCells, targetVisible: true,
-        projectileCount: Array.from(ctx.db.projectile.matchId.filter(timer.matchId)).length,
-      }, {
-        markFired: (_, atUs) => {
-          const row = ctx.db.ship.id.find(order.shipId);
-          if (row) ctx.db.ship.id.update({
-            ...row, lastFiredAtUs: atUs, updatedAt: ctx.timestamp,
-          });
-        },
-        insertProjectile: shot => { ctx.db.projectile.insert({ id: 0n, ...shot }); },
-        ensureCombatTick: () => {},
-      });
+      if (target) engageWeapon(source, target, capability);
+    }
+
+    if (activeCannons.length) {
+      // Compute one match snapshot for all fixed defenses. No hidden sensors:
+      // the battlefield is openly visible, but faction ownership still gates
+      // fire and allies are never targeted.
+      const targets: AttackableTarget[] = combatBodies(timer.matchId).map(body => ({
+        id: body.id, matchId: timer.matchId, ownerSlot: body.faction,
+        type: body.entityType,
+        x: body.entityType === "ship" ? body.x : body.x + body.width / 2,
+        y: body.entityType === "ship" ? body.y : body.y + body.height / 2,
+        hp: body.hp,
+      }));
+      const factions = Array.from(ctx.db.factionState.matchId.filter(timer.matchId));
+      for (const cannon of activeCannons) {
+        const faction = factions.find(row => row.slot === cannon.ownerSlot);
+        if (!faction || faction.eliminated) continue;
+        const source: WeaponSource = {
+          type: "structure", id: cannon.id, matchId: timer.matchId,
+          ownerSlot: cannon.ownerSlot, kind: "cannon",
+          x: cannon.gridX + cannon.width / 2,
+          y: cannon.gridY + cannon.height / 2,
+          hp: cannon.hp, complete: cannon.complete, connected: cannon.connected,
+          turretAngleDeg: cannon.turretAngleDeg,
+          lastFiredAtUs: cannon.lastFiredAtUs,
+        };
+        const target = chooseDefenseTarget(source, targets, attackTerrain!, attackMapCells);
+        if (target) engageWeapon(source, target, {
+          matchId: timer.matchId, slot: faction.slot,
+          controller: faction.controller === "bot" ? "bot" : "human",
+          eliminated: faction.eliminated,
+        });
+      }
     }
 
     const aiming = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId))
@@ -637,6 +705,22 @@ export const advanceCombat = spacetimedb.reducer(
         sourceFaction: row.sourceFaction, damage: row.damage, splash: row.splash,
         structureMultiplier: row.structureMultiplier, remainingRange: row.remainingRange,
       }, seconds, bodies);
+      if (!output.next) {
+        // Never approximate an impact from the last displayed position. At a
+        // hit use the actual swept server collision point; on range expiry
+        // compute the exact final travel distance of this simulation step.
+        const speed = Math.hypot(row.vx, row.vy);
+        const travelled = Math.min(row.remainingRange, speed * seconds);
+        const terminal = output.impact?.point ?? {
+          x: row.x + row.vx / speed * travelled,
+          y: row.y + row.vy / speed * travelled,
+        };
+        ctx.db.combatImpact.insert({
+          id: 0n, matchId: timer.matchId, projectileId: row.id,
+          kind: output.impact ? "hit" : "splash",
+          x: terminal.x, y: terminal.y, createdAtUs: nowUs,
+        });
+      }
       if (output.impact) {
         for (const hit of output.impact.hits) {
           if (hit.entityType === "ship") {
@@ -666,7 +750,9 @@ export const advanceCombat = spacetimedb.reducer(
     const remaining = Array.from(ctx.db.projectile.matchId.filter(timer.matchId)).length;
     const pendingAim = Array.from(ctx.db.turretAim.matchId.filter(timer.matchId)).length;
     const pendingAttacks = Array.from(ctx.db.attackOrder.matchId.filter(timer.matchId)).length;
-    if (remaining === 0 && pendingAim === 0 && pendingAttacks === 0)
+    const pendingImpacts = Array.from(ctx.db.combatImpact.matchId.filter(timer.matchId)).length;
+    if (remaining === 0 && pendingAim === 0 && pendingAttacks === 0 &&
+        installedCannons.length === 0 && pendingImpacts === 0)
       ctx.db.combatSchedule.scheduledId.delete(timer.scheduledId);
     else ctx.db.combatSchedule.scheduledId.update({
       ...timer, lastTickAt: ctx.timestamp,

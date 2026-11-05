@@ -760,6 +760,15 @@ it("moving defender dodges the fired trajectory; only internal scheduler can adv
   }
   expect(test.db.ship.id.find(second.id)!.hp).toBe(initial);
   expect(test.db.projectile.count()).toBe(0n);
+  // A true range-expiry splash is kept briefly for clients to receive.
+  expect(test.db.combatImpact.count()).toBe(1n);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(900));
+  const expiry = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: expiry })
+  );
+  expect(test.db.combatImpact.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
 
@@ -785,6 +794,17 @@ it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", (
   }));
   expect(test.db.ship.id.find(enemy.id)!.hp).toBe(210 - 16); // Scout 18 minus Scout armor 2
   expect(test.db.projectile.count()).toBe(0n);
+  const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
+  expect(impact.kind).toBe("hit");
+  expect(impact.x).toBeGreaterThan(own.x);
+  expect(impact.x).toBeLessThan(enemy.x);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(900));
+  const expiry = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: expiry })
+  );
+  expect(test.db.combatImpact.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
 
@@ -1844,6 +1864,15 @@ it("an in-range attack order aims, fires on cooldown, and applies server damage"
   advanceCombatTick(test);
   // Scout 18 damage minus 2 armour, exactly once.
   expect(test.db.ship.id.find(defender.id)?.hp).toBe(484);
+  const hit = [...test.db.combatImpact.matchId.filter(matchId)]
+    .find(row => row.kind === "hit");
+  expect(hit).toBeDefined();
+  // Swept collision is on the target's hull boundary: never the launch point
+  // or the stale interpolated position where the old splash was drawn.
+  expect(hit!.x).toBeGreaterThan(attacker.x);
+  expect(hit!.x).toBeLessThan(attacker.x + 3);
+  expect(moduleExports.myBattleImpacts(test.viewContext(alice))
+    .some(row => row.id === hit!.id)).toBe(true);
 
   // Repeated ticks inside the 950ms cooldown must not create a second shot.
   for (let i = 0; i < 4; i++) advanceCombatTick(test);
@@ -2009,4 +2038,69 @@ it("harvesting still works, replaces attack orders, and combat views stay member
   const bobShots = moduleExports.myBattleProjectiles(test.viewContext(bob));
   expect(aliceShots.length).toBeGreaterThan(0);
   expect(bobShots.length).toBe(aliceShots.length);
+});
+
+it("completing a real platform-mounted Cannon arms one automatic defense timer", () => {
+  const { test, alice, matchId } = newActiveSkirmish();
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "cannon", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const cannon = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "cannon")!;
+  expect(cannon.complete).toBe(false);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+  test.clock.advance(TimeDuration.fromMillis(4000));
+  const construction = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: construction })
+  );
+  expect(test.db.structure.id.find(cannon.id)!.complete).toBe(true);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+});
+
+it("a completed Cannon autonomously defends using real aim/fire and exact impact events", () => {
+  const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
+  const lane = findOpenWaterLane(test, matchId, 20);
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  const x = lane.x + 4, y = lane.y;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.structure.insert({
+      ...core, id: 0n, kind: "cannon", channel: "superstructure",
+      gridX: x, gridY: y, width: 1, height: 1,
+      hp: 300, turretAngleDeg: 0, lastFiredAtUs: -1n,
+      complete: true, connected: true,
+    });
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...enemy, x: x + 4.5, y: y + 0.5, hp: 500 });
+    const ally = ctx.db.ship.id.find(attacker.id)!;
+    ctx.db.ship.id.update({ ...ally, x: x - 2.5, y: y + 0.5 });
+  });
+  const cannon = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "cannon")!;
+  // No player Attack/Aim/Fire action: the existing economy tick wakes the
+  // single shared combat scheduler for persisted operational Cannons.
+  expect(test.db.combatSchedule.count()).toBe(0n);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const economy = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: economy })
+  );
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  advanceCombatTick(test);
+  expect(test.db.structure.id.find(cannon.id)?.lastFiredAtUs).not.toBe(-1n);
+  expect([...test.db.projectile.matchId.filter(matchId)]
+    .some(row => row.sourceType === "structure" && row.sourceId === cannon.id)).toBe(true);
+  for (let i = 0; i < 4; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(defender.id)!.hp).toBeLessThan(500);
+  const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
+  expect(impact).toBeDefined();
+  expect(impact.x).toBeGreaterThan(cannon.gridX + 0.5);
+  expect(moduleExports.myBattleImpacts(test.viewContext(alice))
+    .some(row => row.id === impact.id)).toBe(true);
+  expect(moduleExports.myBattleImpacts(test.viewContext(bob))
+    .some(row => row.id === impact.id)).toBe(true);
+  expect(test.db.combatSchedule.count()).toBe(1n);
 });
