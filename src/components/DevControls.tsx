@@ -42,6 +42,7 @@ export function DevControls() {
   const [isActing, setIsActing] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [player2Joined, setPlayer2Joined] = useState(false);
+  const [copiedLobbyId, setCopiedLobbyId] = useState<bigint | null>(null);
 
   const handleQuickPlay = async () => {
     if (isActing) return;
@@ -95,6 +96,17 @@ export function DevControls() {
       return;
     }
     handleJoin(validation.value);
+  };
+
+  const copyLobbyId = async () => {
+    if (!activeMatchId) return;
+    try {
+      await navigator.clipboard.writeText(activeMatchId.toString());
+      setCopiedLobbyId(activeMatchId);
+      setActionError(null);
+    } catch {
+      setActionError("Could not copy the lobby ID. Select the Match number above instead.");
+    }
   };
 
   const handleStart = async () => {
@@ -300,6 +312,13 @@ export function DevControls() {
                       <span>I confirm Player 2 has joined in second window</span>
                     </label>
                   </div>
+                  <Button
+                    size="sm" variant="outline"
+                    className="w-full border-sky-700 text-sky-200"
+                    onClick={() => void copyLobbyId()}>
+                    {copiedLobbyId === activeMatchId ? "Lobby ID copied" :
+                      `Copy Lobby #${activeMatchId?.toString() ?? ""} for your opponents`}
+                  </Button>
                   <Button
                     onClick={handleStart}
                     disabled={isActing || !player2Joined}
