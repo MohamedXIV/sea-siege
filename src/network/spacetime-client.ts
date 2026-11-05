@@ -729,6 +729,18 @@ export class SpacetimeClient {
     await this.conn.reducers.enqueueShip({ shipyardId, kind });
   }
 
+  async repairShip(workshopId: bigint, shipId: bigint, requestedHp: number): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop repairs");
+    await this.conn.reducers.repairShip({ workshopId, shipId, requestedHp });
+  }
+
+  async repairStructure(workshopId: bigint, structureId: bigint, requestedHp: number): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop repairs");
+    await this.conn.reducers.repairStructure({ workshopId, structureId, requestedHp });
+  }
+
   async upgradeWorkshop(workshopId: bigint): Promise<void> {
     if (!this.conn || this.status !== "connected")
       throw new Error("Not connected for Workshop upgrade");
