@@ -312,6 +312,24 @@ const projectile = table(
   },
 );
 
+/**
+ * Short-lived authoritative impact locations for VFX. This is a PRIVATE
+ * presentation event ledger; actual damage is still resolved from projectile
+ * collision in advanceCombat. Match members see it through a scoped view.
+ */
+export const combatImpact = table(
+  { name: "combat_impact" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    projectileId: t.u64(),
+    kind: t.string(), // "hit" | "splash"
+    x: t.f64(),
+    y: t.f64(),
+    createdAtUs: t.i64(),
+  },
+);
+
 /** One lazy timer per active combat match, never one per projectile. */
 export const combatSchedule = table(
   { name: "combat_schedule" },
@@ -382,7 +400,7 @@ const spacetimedb = schema({
   worldConfig, worldSpawn, worldChunk, salvageNode,
   materialNode, materialBalance, materialHarvestOrder,
   structure, constructionSchedule,
-  harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
+  harvestOrder, productionOrder, economySchedule, projectile, combatImpact, combatSchedule, turretAim,
   attackOrder, matchDeadline, botSchedule,
 });
 export default spacetimedb;
