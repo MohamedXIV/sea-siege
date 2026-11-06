@@ -118,6 +118,7 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
   let reservedSalvage = 0;
   const usedShips = new Set<bigint>();
   const occupiedTargets = new Set<bigint>();
+  const reservedMaterialNodes = new Set<bigint>();
   const ships = [...obs.ships].sort((a, b) => sortBigint(a.id, b.id));
   const liveEnemies = obs.visibleEnemies.filter(e =>
     obs.nowUs - e.observedAtUs <= BOT_RULES.maxIntelAgeUs,
@@ -204,11 +205,11 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
       (n.kind === 'oil' && wantedMaterial.oil) ||
       (n.kind === 'alloy' && wantedMaterial.alloy));
     if (!goals.length) continue;
-    const targeted = goals.filter(n => !occupiedTargets.has(n.id))
+    const targeted = goals.filter(n => !reservedMaterialNodes.has(n.id))
       .sort((a, b) => distance(ship.position, a.position) -
         distance(ship.position, b.position) || sortBigint(a.id, b.id))[0];
     if (!targeted) continue;
-    occupiedTargets.add(targeted.id);
+    reservedMaterialNodes.add(targeted.id);
     if (distance(ship.position, targeted.position) <= ECONOMY_RULES.harvestRangeCells) {
       emit({ type: 'harvest_material', shipId: ship.id,
         nodeId: targeted.id, kind: targeted.kind }, ship.id);
