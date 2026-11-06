@@ -1,4 +1,5 @@
-/** Server-only sensor filtering. Never return all enemy rows to bot-policy. */
+/** Match-scoped Bot perception helpers: public Open Battlefield is the
+ * gameplay default; old bounded sensor filtering remains for regression. */
 import { terrainLineOfSight } from './combat.ts';
 import type { VisibleEnemy, Position } from './bot-policy.ts';
 
