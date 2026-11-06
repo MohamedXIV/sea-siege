@@ -166,7 +166,6 @@ export const advanceBots = spacetimedb.reducer(
       for (const workshop of ownStructures.filter(row => row.kind === "workshop")) {
         for (const vessel of ownShips) {
           if (ctx.db.harvestOrder.shipId.find(vessel.id) ||
-              ctx.db.materialHarvestOrder.shipId.find(vessel.id) ||
               ctx.db.attackOrder.shipId.find(vessel.id)) continue;
           if (validateRefitStation(
             match.id, bot.slot, workshop, vessel,
@@ -221,6 +220,11 @@ export const advanceBots = spacetimedb.reducer(
             ctx.db.harvestOrder.shipId.find(row.id) ||
             ctx.db.materialHarvestOrder.shipId.find(row.id) ||
             ctx.db.attackOrder.shipId.find(row.id)),
+          harvestingMaterial: (() => {
+            const order = ctx.db.materialHarvestOrder.shipId.find(row.id);
+            const node = order ? ctx.db.materialNode.id.find(order.nodeId) : null;
+            return node ? node.kind as AdvancedResourceKind : undefined;
+          })(),
         })),
         structures: ownStructures.map(row => ({
           id: row.id, kind: row.kind,
@@ -265,6 +269,21 @@ export const advanceBots = spacetimedb.reducer(
           if (!result.ok) continue;
           ctx.db.materialHarvestOrder.shipId.delete(intent.shipId);
           ctx.db.attackOrder.shipId.delete(intent.shipId);
+        } else if (intent.type === "release_material") {
+          const vessel = ctx.db.ship.id.find(intent.shipId);
+          const order = ctx.db.materialHarvestOrder.shipId.find(intent.shipId);
+          if (!vessel || vessel.ownerSlot !== bot.slot ||
+              vessel.matchId !== match.id || !order ||
+              order.matchId !== match.id) continue;
+          const node = ctx.db.materialNode.id.find(order.nodeId);
+          const balancesNow = Array.from(ctx.db.materialBalance.matchId.filter(match.id))
+            .filter(row => row.ownerSlot === bot.slot);
+          const required = node?.kind === "oil" ? 45 :
+            node?.kind === "alloy" ? 35 : null;
+          const wallet = node
+            ? balancesNow.find(row => row.kind === node.kind)?.amount ?? 0 : 0;
+          if (required === null || wallet < required) continue;
+          ctx.db.materialHarvestOrder.shipId.delete(vessel.id);
         } else if (intent.type === "harvest_material") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
           const node = ctx.db.materialNode.id.find(intent.nodeId);
