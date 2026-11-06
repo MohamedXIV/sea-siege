@@ -5,6 +5,7 @@ import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { mayControlFaction } from "./sim/faction-ownership.ts";
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
+import { dispatchMaterialHarvest } from "./sim/material-harvest-command.ts";
 import { COMBAT_RULES, terrainLineOfSight } from "./sim/combat.ts";
 import { progressWorkshopUpgrade } from "./sim/workshop.ts";
 import {
@@ -95,37 +96,37 @@ export const orderMaterialHarvest = spacetimedb.reducer(
     if (!match || !matchStillActive(match.phase, match.startedAtUs,
       ctx.timestamp.microsSinceUnixEpoch))
       throw new SenderError("Match is not active");
-    const definition = shipDefinition(vessel.kind);
-    if (!definition || definition.harvestPerSecond === 0 || vessel.hp === 0)
-      throw new SenderError("This ship cannot collect materials");
-    if (!inRange({ x: vessel.x, y: vessel.y },
-      { x: node.gridX + 0.5, y: node.gridY + 0.5 },
-      ECONOMY_RULES.harvestRangeCells))
-      throw new SenderError("Material deposit out of range");
     const world = ctx.db.worldConfig.matchId.find(vessel.matchId);
     if (!world) throw new SenderError("Missing authoritative world");
     const terrain = decodeTerrainChunks(world.mapCells,
       Array.from(ctx.db.worldChunk.matchId.filter(vessel.matchId)));
-    if (!terrainLineOfSight(
-      { x: vessel.x, y: vessel.y },
-      { x: node.gridX + 0.5, y: node.gridY + 0.5 },
-      terrain, world.mapCells))
-      throw new SenderError("Terrain blocks the material deposit");
-    const existing = ctx.db.materialHarvestOrder.shipId.find(shipId);
-    const order = {
-      shipId, matchId: vessel.matchId, nodeId,
-      assignedAtUs: ctx.timestamp.microsSinceUnixEpoch,
-    };
-    if (existing) ctx.db.materialHarvestOrder.shipId.update({ ...existing, ...order });
-    else ctx.db.materialHarvestOrder.insert(order);
-    ctx.db.harvestOrder.shipId.delete(shipId);
-    ctx.db.shipRoute.shipId.delete(shipId);
-    ctx.db.attackOrder.shipId.delete(shipId);
-    ctx.db.ship.id.update({
-      ...vessel, velocityX: 0, velocityY: 0,
-      targetX: vessel.x, targetY: vessel.y,
-      revision: vessel.revision + 1n, updatedAt: ctx.timestamp,
+    const result = dispatchMaterialHarvest({
+      faction: { matchId: vessel.matchId, slot: faction!.slot,
+        controller: "human", eliminated: faction!.eliminated },
+      ship: vessel, node, nowUs: ctx.timestamp.microsSinceUnixEpoch,
+      lineOfSight: terrainLineOfSight(
+        { x: vessel.x, y: vessel.y },
+        { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+        terrain, world.mapCells,
+      ),
+    }, {
+      clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
+      clearIronHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+      clearAttack: id => { ctx.db.attackOrder.shipId.delete(id); },
+      upsertMaterial: order => {
+        const current = ctx.db.materialHarvestOrder.shipId.find(order.shipId);
+        if (current) ctx.db.materialHarvestOrder.shipId.update({ ...current, ...order });
+        else ctx.db.materialHarvestOrder.insert(order);
+      },
+      stopShip: (_, revision) => {
+        ctx.db.ship.id.update({
+          ...vessel, velocityX: 0, velocityY: 0,
+          targetX: vessel.x, targetY: vessel.y,
+          revision, updatedAt: ctx.timestamp,
+        });
+      },
     });
+    if (!result.ok) throw new SenderError(result.reason);
   },
 );
 

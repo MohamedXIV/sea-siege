@@ -1,13 +1,15 @@
 /**
  * Pure strategic policy for server-owned Sea Siege factions.
- * The observation is an explicit, visibility-filtered capability: this file
- * must NEVER import database tables, full world chunks or hidden enemy rows.
+ * The observation is an explicit public-world plus own-faction capability:
+ * no direct DB tables, other-match rows, enemy wallets or secret orders.
  * An authoritative adapter must revalidate EVERY returned intent before use.
  */
 import { ECONOMY_RULES, type ShipKind } from './economy.ts';
 import { CONSTRUCTION_RULES } from './construction.ts';
 import { COMBAT_RULES, type WeaponKind } from './combat.ts';
 import { desiredBearing, turretAligned } from './turret-aim.ts';
+import { type ResourceWallet, type AdvancedResourceKind, canAffordResources } from './materials.ts';
+import { SHIP_REFIT_RULES, type ShipRefitKind } from './ship-refits.ts';
 
 export const BOT_RULES = {
   strategicTickUs: 1_000_000n,
@@ -24,13 +26,18 @@ export const BOT_RULES = {
 export type BotDifficulty = keyof typeof BOT_RULES.difficulties;
 export type Position = Readonly<{ x: number; y: number }>;
 export type BotShip = Readonly<{ id: bigint; kind: ShipKind; position: Position;
-  hp: number; turretAngleDeg: number; busy: boolean }>;
+  hp: number; turretAngleDeg: number; busy: boolean;
+  harvestingMaterial?: AdvancedResourceKind }>;
 export type BotStructure = Readonly<{ id: bigint; kind: string; position: Position;
   complete: boolean; connected: boolean; queueLength: number }>;
 export type VisibleEnemy = Readonly<{ id: bigint; entityType: 'ship' | 'structure';
   position: Position; observedAtUs: bigint }>;
 export type KnownDeposit = Readonly<{ id: bigint; position: Position; remaining: number }>;
-export type LegalBuildCandidate = Readonly<{ kind: 'platform' | 'shipyard' | 'salvage_rig' | 'cannon';
+export type KnownAdvancedDeposit = Readonly<{ id: bigint; kind: AdvancedResourceKind;
+  position: Position; remaining: number }>;
+export type LegalRefitCandidate = Readonly<{ workshopId: bigint; shipId: bigint;
+  kind: ShipRefitKind }>;
+export type LegalBuildCandidate = Readonly<{ kind: 'platform' | 'shipyard' | 'salvage_rig' | 'cannon' | 'workshop';
   gridX: number; gridY: number }>;
 export type BotObservation = Readonly<{
   slot: number;
@@ -39,10 +46,16 @@ export type BotObservation = Readonly<{
   salvage: number;
   ships: readonly BotShip[];
   structures: readonly BotStructure[];
-  /** ONLY actively detected enemies, not full hidden-world state. */
+  /** Public enemy locations on our No-Fog open battlefield. */
   visibleEnemies: readonly VisibleEnemy[];
-  /** ONLY discovered resource nodes, not all deposits in the database. */
+  /** Public Iron deposits in this match, never another match's rows. */
   knownDeposits: readonly KnownDeposit[];
+  /** Physical nodes publicly visible on the approved open battlefield. */
+  knownMaterials?: readonly KnownAdvancedDeposit[];
+  /** Actual faction balances. Iron is mirrored from salvage, not duplicated. */
+  wallet?: ResourceWallet;
+  /** Verified potential Workshop operations; the adapter must recheck them. */
+  legalRefits?: readonly LegalRefitCandidate[];
   /** ONLY legal candidates generated from server-authorized local knowledge. */
   legalBuildCandidates: readonly LegalBuildCandidate[];
   /** Explorable frontier centers, never secret enemy positions. */
@@ -53,6 +66,9 @@ export type BotIntent =
   | Readonly<{ type: 'fire'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
   | Readonly<{ type: 'attack'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
   | Readonly<{ type: 'harvest'; shipId: bigint; nodeId: bigint }>
+  | Readonly<{ type: 'harvest_material'; shipId: bigint; nodeId: bigint; kind: AdvancedResourceKind }>
+  | Readonly<{ type: 'release_material'; shipId: bigint }>
+  | Readonly<{ type: 'refit'; workshopId: bigint; shipId: bigint; kind: ShipRefitKind }>
   | Readonly<{ type: 'move'; shipId: bigint; destination: Position }>
   | Readonly<{ type: 'build'; kind: LegalBuildCandidate['kind']; gridX: number; gridY: number }>
   | Readonly<{ type: 'enqueue'; yardId: bigint; shipKind: ShipKind }>;
@@ -72,10 +88,23 @@ function validateObservation(obs: BotObservation): void {
   if (!Number.isInteger(obs.slot) || obs.slot < 0 || !Number.isInteger(obs.seed) ||
       obs.seed < 0 || obs.seed > 0xffffffff || obs.nowUs < 0n ||
       !Number.isSafeInteger(obs.salvage) || obs.salvage < 0 ||
-      !obs.ships.every(s => s.hp > 0 && Number.isFinite(s.turretAngleDeg) && validPosition(s.position)) ||
+      !obs.ships.every(s => s.hp > 0 && Number.isFinite(s.turretAngleDeg) &&
+        validPosition(s.position) &&
+        (s.harvestingMaterial === undefined ||
+          s.harvestingMaterial === 'oil' || s.harvestingMaterial === 'alloy' ||
+          s.harvestingMaterial === 'isotope')) ||
       !obs.structures.every(s => validPosition(s.position) && Number.isSafeInteger(s.queueLength) && s.queueLength >= 0) ||
       !obs.visibleEnemies.every(e => validPosition(e.position) && e.observedAtUs <= obs.nowUs) ||
       !obs.knownDeposits.every(n => validPosition(n.position) && Number.isSafeInteger(n.remaining) && n.remaining >= 0) ||
+      !(obs.knownMaterials ?? []).every(n =>
+        validPosition(n.position) && Number.isSafeInteger(n.remaining) && n.remaining >= 0 &&
+        (n.kind === 'oil' || n.kind === 'alloy' || n.kind === 'isotope')) ||
+      (obs.wallet !== undefined && (
+        Object.values(obs.wallet).some(n => !Number.isSafeInteger(n) || n < 0) ||
+        obs.wallet.iron !== obs.salvage
+      )) ||
+      !(obs.legalRefits ?? []).every(r => r.workshopId >= 0n && r.shipId >= 0n &&
+        (r.kind === 'reinforced_hull' || r.kind === 'high_output_engine')) ||
       !obs.explorationFrontiers.every(validPosition)) {
     throw new RangeError('Invalid bot observation');
   }
@@ -95,12 +124,22 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
   let reservedSalvage = 0;
   const usedShips = new Set<bigint>();
   const occupiedTargets = new Set<bigint>();
+  const reservedMaterialNodes = new Set<bigint>();
   const ships = [...obs.ships].sort((a, b) => sortBigint(a.id, b.id));
   const liveEnemies = obs.visibleEnemies.filter(e =>
     obs.nowUs - e.observedAtUs <= BOT_RULES.maxIntelAgeUs,
   ).sort((a, b) => sortBigint(a.id, b.id));
   const deposits = obs.knownDeposits.filter(n => n.remaining > 0)
     .sort((a, b) => sortBigint(a.id, b.id));
+  const wallet = obs.wallet ?? { iron: obs.salvage, oil: 0, alloy: 0, isotope: 0 };
+  const materials = (obs.knownMaterials ?? []).filter(n => n.remaining > 0)
+    .sort((a, b) => sortBigint(a.id, b.id));
+  // A first optional engine/hull is a meaningful goal, not a mandatory tech
+  // gate. Other ship production may continue entirely on Iron.
+  const wantedMaterial = {
+    oil: wallet.oil < SHIP_REFIT_RULES.high_output_engine.cost.oil,
+    alloy: wallet.alloy < SHIP_REFIT_RULES.reinforced_hull.cost.alloy,
+  };
   const yards = obs.structures.filter(s => s.kind === 'shipyard' && s.complete && s.connected)
     .sort((a, b) => sortBigint(a.id, b.id));
   const canAdd = (): boolean => intents.length < rule.maxOrders;
@@ -110,7 +149,7 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     if (shipId !== undefined) usedShips.add(shipId);
   };
 
-  // Defense/attack actions: only observable hostiles, never global enemy rows.
+  // Defense/attack actions: only living public hostiles from this match.
   for (const ship of ships) {
     if (!canAdd()) break;
     const weapon = COMBAT_RULES.weapons[ship.kind as WeaponKind];
@@ -144,7 +183,60 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     }
   }
 
-  // Harvest opportunities use discovered nodes only and cannot create resources.
+  // Buy an affordable optional specialization before spending its Iron on
+  // expansion. Candidates are built from the current owned, idle and
+  // in-range Workshop snapshot and validated AGAIN by the server adapter.
+  for (const candidate of [...(obs.legalRefits ?? [])].sort((a, b) =>
+    sortBigint(a.shipId, b.shipId) || sortBigint(a.workshopId, b.workshopId) ||
+    a.kind.localeCompare(b.kind))) {
+    if (!canAdd()) break;
+    if (usedShips.has(candidate.shipId)) continue;
+    const recipe = SHIP_REFIT_RULES[candidate.kind].cost;
+    if (!canAffordResources({ ...wallet, iron: wallet.iron - reservedSalvage }, recipe))
+      continue;
+    emit({ type: 'refit', ...candidate }, candidate.shipId);
+    reservedSalvage += recipe.iron;
+    break; // one refit per decision: no double spending on advanced stock
+  }
+
+  // Finished the amount needed for a refit? Release a stale material task
+  // instead of camping on Oil forever while Alloys go uncontested. This
+  // consumes a normal strategic order; no free instantaneous reassignment.
+  for (const ship of ships) {
+    if (!canAdd()) break;
+    if (usedShips.has(ship.id)) continue;
+    if ((ship.harvestingMaterial === 'oil' && !wantedMaterial.oil) ||
+        (ship.harvestingMaterial === 'alloy' && !wantedMaterial.alloy)) {
+      emit({ type: 'release_material', shipId: ship.id }, ship.id);
+    }
+  }
+
+  // Hybrid harvesting is deliberately a choice between Oil/Alloy and Iron.
+  // When Iron is scarce, return to the original salvage economy so advanced
+  // chasing cannot bankrupt every hull or prevent shipyards being built.
+  for (const ship of ships) {
+    if (!canAdd()) break;
+    if (usedShips.has(ship.id) || ship.busy || ECONOMY_RULES.ships[ship.kind].harvestPerSecond === 0)
+      continue;
+    if (obs.salvage < CONSTRUCTION_RULES.definitions.shipyard.cost || materials.length === 0) continue;
+    const goals = materials.filter(n =>
+      (n.kind === 'oil' && wantedMaterial.oil) ||
+      (n.kind === 'alloy' && wantedMaterial.alloy));
+    if (!goals.length) continue;
+    const targeted = goals.filter(n => !reservedMaterialNodes.has(n.id))
+      .sort((a, b) => distance(ship.position, a.position) -
+        distance(ship.position, b.position) || sortBigint(a.id, b.id))[0];
+    if (!targeted) continue;
+    reservedMaterialNodes.add(targeted.id);
+    if (distance(ship.position, targeted.position) <= ECONOMY_RULES.harvestRangeCells) {
+      emit({ type: 'harvest_material', shipId: ship.id,
+        nodeId: targeted.id, kind: targeted.kind }, ship.id);
+    } else {
+      emit({ type: 'move', shipId: ship.id, destination: targeted.position }, ship.id);
+    }
+  }
+
+  // Iron collection remains fully viable, and ships keep their weapons.
   for (const ship of ships) {
     if (!canAdd()) break;
     if (usedShips.has(ship.id) || ship.busy || ECONOMY_RULES.ships[ship.kind].harvestPerSecond === 0) continue;
@@ -163,9 +255,13 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
   // queue duplicate shipyards/rigs while its first project is still building.
   const shipyards = obs.structures.filter(s => s.kind === 'shipyard');
   const rigs = obs.structures.filter(s => s.kind === 'salvage_rig');
+  const workshops = obs.structures.filter(s => s.kind === 'workshop');
+  const preparingRefits = wallet.oil > 0 || wallet.alloy > 0;
   const preference: LegalBuildCandidate['kind'][] =
     shipyards.length === 0 ? ['shipyard', 'platform'] :
-    rigs.length === 0 ? ['salvage_rig', 'platform', 'cannon'] : ['cannon', 'platform'];
+    rigs.length === 0 ? ['salvage_rig', 'platform', 'cannon'] :
+    workshops.length === 0 && preparingRefits ?
+      ['workshop', 'platform', 'cannon'] : ['cannon', 'platform'];
   for (const kind of preference) {
     if (!canAdd()) break;
     const cost = CONSTRUCTION_RULES.definitions[kind].cost;
