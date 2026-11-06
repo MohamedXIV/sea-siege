@@ -1,17 +1,24 @@
 import { ScheduleAt } from "spacetimedb";
 import spacetimedb, { botSchedule } from "./schema.ts";
-import { BOT_RULES, decideBot, type BotDifficulty, type BotObservation } from "./sim/bot-policy.ts";
-import { detectBotEnemies, type Sensor } from "./sim/bot-perception.ts";
+import { BOT_RULES, decideBot, type BotDifficulty, type BotObservation,
+  type LegalRefitCandidate } from "./sim/bot-policy.ts";
+import { detectOpenBattlefieldEnemies } from "./sim/bot-perception.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { decodeTerrainChunks } from "./sim/navigation.ts";
 import { isNavigationCellBlocked } from "./sim/collision.ts";
 import { validateStructurePlacement, type StructureKind } from "./sim/construction.ts";
 import { ECONOMY_RULES, type ShipKind } from "./sim/economy.ts";
-import { COMBAT_RULES, terrainLineOfSight, weaponDefinition, withinRange } from "./sim/combat.ts";
+import { COMBAT_RULES, terrainLineOfSight, weaponDefinition } from "./sim/combat.ts";
 import { angularDifference, desiredBearing } from "./sim/turret-aim.ts";
 import { SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
-import { visibleResources, orderedBuildOrigins } from "./sim/bot-observation.ts";
+import { orderedBuildOrigins } from "./sim/bot-observation.ts";
 import { dispatchHarvest, dispatchProduction } from "./sim/command-dispatch.ts";
+import { dispatchMaterialHarvest } from "./sim/material-harvest-command.ts";
+import { ADVANCED_RESOURCE_KINDS, type AdvancedResourceKind,
+  type ResourceWallet } from "./sim/materials.ts";
+import { purchaseShipRefit, alreadyInstalled, NO_SHIP_REFITS,
+  type ShipRefitState } from "./sim/ship-refits.ts";
+import { validateRefitStation } from "./sim/ship-refit-station.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
 import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-command-dispatch.ts";
 import { dispatchAttackOrder, type AttackableTarget } from "./sim/attack-order.ts";
@@ -113,26 +120,9 @@ export const advanceBots = spacetimedb.reducer(
       const ownStructures = currentShapes()
         .filter(row => row.ownerSlot === bot.slot && row.hp > 0)
         .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-      const sensors: Sensor[] = [];
-      for (const ship of ownShips) {
-        const weapon = weaponDefinition(ship.kind);
-        if (weapon) sensors.push({
-          id: ship.id, position: { x: ship.x, y: ship.y }, radius: weapon.vision,
-        });
-      }
-      for (const structure of ownStructures) {
-        if (!structure.complete || !structure.connected) continue;
-        if (structure.kind === "command_core" || structure.kind === "cannon") {
-          sensors.push({
-            id: structure.id, position: {
-              x: structure.gridX + structure.width / 2,
-              y: structure.gridY + structure.height / 2,
-            },
-            radius: structure.kind === "command_core" ? BOT_RULES.coreSensorRadius :
-              COMBAT_RULES.weapons.cannon.vision,
-          });
-        }
-      }
+      // The battlefield is OPEN by design: player and Bot know the same
+      // live positions of enemies and public resource deposits. No private
+      // wallets, orders or hidden opponent state enter the policy.
       const enemyContacts = [
         ...Array.from(ctx.db.ship.matchId.filter(match.id)).map(row => ({
           id: row.id, faction: row.ownerSlot, entityType: "ship" as const,
@@ -145,24 +135,56 @@ export const advanceBots = spacetimedb.reducer(
           }, alive: row.hp > 0 && row.complete,
         })),
       ];
-      const visibleEnemies = detectBotEnemies(
-        bot.slot, nowUs, sensors, enemyContacts, terrain, world.mapCells,
+      const visibleEnemies = detectOpenBattlefieldEnemies(
+        bot.slot, nowUs, enemyContacts,
       );
-      const sensorSees = (x: number, y: number): boolean => sensors.some(sensor =>
-        withinRange(sensor.position, { x, y }, sensor.radius) &&
-        terrainLineOfSight(sensor.position, { x, y }, terrain, world.mapCells),
-      );
-      const knownDeposits = visibleResources(
-        Array.from(ctx.db.salvageNode.matchId.filter(match.id)),
-        sensors,
-        (from,to) => terrainLineOfSight(from,to,terrain,world.mapCells),
-      );
+      const knownDeposits = Array.from(ctx.db.salvageNode.matchId.filter(match.id))
+        .filter(node => node.remaining > 0)
+        .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+        .map(node => ({
+          id: node.id, position: { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+          remaining: node.remaining,
+        }));
+      const knownMaterials = Array.from(ctx.db.materialNode.matchId.filter(match.id))
+        .filter(node => node.remaining > 0 &&
+          ADVANCED_RESOURCE_KINDS.includes(node.kind as AdvancedResourceKind))
+        .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+        .map(node => ({
+          id: node.id, kind: node.kind as AdvancedResourceKind,
+          position: { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+          remaining: node.remaining,
+        }));
+      const balances = Array.from(ctx.db.materialBalance.matchId.filter(match.id))
+        .filter(row => row.ownerSlot === bot.slot);
+      const currentWallet: ResourceWallet = {
+        iron: faction.salvage,
+        oil: balances.find(row => row.kind === "oil")?.amount ?? 0,
+        alloy: balances.find(row => row.kind === "alloy")?.amount ?? 0,
+        isotope: balances.find(row => row.kind === "isotope")?.amount ?? 0,
+      };
+      const legalRefits: LegalRefitCandidate[] = [];
+      for (const workshop of ownStructures.filter(row => row.kind === "workshop")) {
+        for (const vessel of ownShips) {
+          if (ctx.db.harvestOrder.shipId.find(vessel.id) ||
+              ctx.db.materialHarvestOrder.shipId.find(vessel.id) ||
+              ctx.db.attackOrder.shipId.find(vessel.id)) continue;
+          if (validateRefitStation(
+            match.id, bot.slot, workshop, vessel,
+            Boolean(ctx.db.shipRoute.shipId.find(vessel.id)),
+          ) !== null) continue;
+          const current = ctx.db.shipRefit.shipId.find(vessel.id);
+          const installed: ShipRefitState = current ?? NO_SHIP_REFITS;
+          for (const kind of ["high_output_engine", "reinforced_hull"] as const)
+            if (!alreadyInstalled(installed, kind))
+              legalRefits.push({ workshopId: workshop.id, shipId: vessel.id, kind });
+        }
+      }
 
       // Candidate locations come only from our own explored connected territory.
       // Each one is validated against the SAME physical construction rules as
       // a human build command. Search is capped per kind per strategic tick.
       const legalBuildCandidates: BotObservation["legalBuildCandidates"][number][] = [];
-      for (const kind of ["shipyard","salvage_rig","cannon","platform"] as const) {
+      for (const kind of ["shipyard","salvage_rig","workshop","cannon","platform"] as const) {
         let checked = 0;
         const candidates = orderedBuildOrigins(ownStructures,world.mapCells,kind !== "platform");
         for (const point of candidates) {
@@ -173,7 +195,10 @@ export const advanceBots = spacetimedb.reducer(
       }
       const frontiers = new Map<string, { x: number; y: number }>();
       for (const ship of ownShips) {
-        if (ctx.db.shipRoute.shipId.find(ship.id) || ctx.db.harvestOrder.shipId.find(ship.id))
+        if (ctx.db.shipRoute.shipId.find(ship.id) ||
+            ctx.db.harvestOrder.shipId.find(ship.id) ||
+            ctx.db.materialHarvestOrder.shipId.find(ship.id) ||
+            ctx.db.attackOrder.shipId.find(ship.id))
           continue;
         const env = pathEnvironment();
         const directions = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
@@ -183,7 +208,6 @@ export const advanceBots = spacetimedb.reducer(
           const x = Math.floor(ship.x + dx! * 4), y = Math.floor(ship.y + dy! * 4);
           if (x <= 0 || y <= 0 || x >= world.mapCells - 1 || y >= world.mapCells - 1) continue;
           if (isNavigationCellBlocked(x, y, ship.radiusCells, env, ship.id)) continue;
-          if (!sensorSees(x + 0.5, y + 0.5)) continue;
           frontiers.set(x + ":" + y, { x: x + 0.5, y: y + 0.5 });
         }
       }
@@ -194,7 +218,9 @@ export const advanceBots = spacetimedb.reducer(
           id: row.id, kind: row.kind as ShipKind, hp: row.hp,
           position: { x: row.x, y: row.y }, turretAngleDeg: row.turretAngleDeg,
           busy: Boolean(ctx.db.shipRoute.shipId.find(row.id) ||
-            ctx.db.harvestOrder.shipId.find(row.id)),
+            ctx.db.harvestOrder.shipId.find(row.id) ||
+            ctx.db.materialHarvestOrder.shipId.find(row.id) ||
+            ctx.db.attackOrder.shipId.find(row.id)),
         })),
         structures: ownStructures.map(row => ({
           id: row.id, kind: row.kind,
@@ -202,7 +228,8 @@ export const advanceBots = spacetimedb.reducer(
           complete: row.complete, connected: row.connected,
           queueLength: Array.from(ctx.db.productionOrder.yardId.filter(row.id)).length,
         })),
-        visibleEnemies, knownDeposits, legalBuildCandidates,
+        visibleEnemies, knownDeposits, knownMaterials,
+        wallet: currentWallet, legalRefits, legalBuildCandidates,
         explorationFrontiers: [...frontiers.values()].sort((a,b) => a.y - b.y || a.x - b.x),
       };
       const result = decideBot(observation, difficulty);
@@ -245,7 +272,7 @@ export const advanceBots = spacetimedb.reducer(
               eliminated: faction.eliminated },
             ship: vessel, destination: intent.destination,
             environment: pathEnvironment(),
-            destinationVisible: sensorSees(intent.destination.x, intent.destination.y),
+            destinationVisible: true, // Open Battlefield, same rules as player
           }, {
             cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
             setRoute: order => {
