@@ -17,7 +17,7 @@ import { dispatchMaterialHarvest } from "./sim/material-harvest-command.ts";
 import { ADVANCED_RESOURCE_KINDS, type AdvancedResourceKind,
   type ResourceWallet } from "./sim/materials.ts";
 import { purchaseShipRefit, alreadyInstalled, NO_SHIP_REFITS,
-  type ShipRefitState } from "./sim/ship-refits.ts";
+  SHIP_REFIT_RULES, type ShipRefitState } from "./sim/ship-refits.ts";
 import { validateRefitStation } from "./sim/ship-refit-station.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
 import { dispatchAim, dispatchFire, type WeaponSource } from "./sim/combat-command-dispatch.ts";
@@ -100,8 +100,8 @@ export const advanceBots = spacetimedb.reducer(
         hulls: currentHulls(),
       }) === null;
 
-    // A bot has no access to opponents' private rows until a sensor projects
-    // that contact. Construct this observation anew every due strategic tick.
+    // Observe public battlefield locations and bot-owned data only.
+    // Opponent wallets, queues, identities and upgrades never enter policy.
     for (const bot of bots) {
       if (bot.nextDecisionUs > nowUs) continue;
       const faction = Array.from(ctx.db.factionState.matchId.filter(match.id))
@@ -278,8 +278,10 @@ export const advanceBots = spacetimedb.reducer(
           const node = ctx.db.materialNode.id.find(order.nodeId);
           const balancesNow = Array.from(ctx.db.materialBalance.matchId.filter(match.id))
             .filter(row => row.ownerSlot === bot.slot);
-          const required = node?.kind === "oil" ? 45 :
-            node?.kind === "alloy" ? 35 : null;
+          const required = node?.kind === "oil" ?
+            SHIP_REFIT_RULES.high_output_engine.cost.oil :
+            node?.kind === "alloy" ?
+              SHIP_REFIT_RULES.reinforced_hull.cost.alloy : null;
           const wallet = node
             ? balancesNow.find(row => row.kind === node.kind)?.amount ?? 0 : 0;
           if (required === null || wallet < required) continue;
