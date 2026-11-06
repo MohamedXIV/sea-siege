@@ -249,7 +249,13 @@ export const advanceBots = spacetimedb.reducer(
             faction: { matchId: match.id, slot: bot.slot, controller: "bot",
               eliminated: faction.eliminated },
             ship: vessel ?? null, node: node ?? null, nowUs,
-            observable: knownDeposits.some(seen => seen.id === intent.nodeId),
+            observable: Boolean(vessel && node &&
+              knownDeposits.some(seen => seen.id === intent.nodeId) &&
+              terrainLineOfSight(
+                { x: vessel.x, y: vessel.y },
+                { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+                terrain, world.mapCells,
+              )),
           }, {
             clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
             upsertOrder: order => {
