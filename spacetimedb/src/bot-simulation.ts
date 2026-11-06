@@ -263,10 +263,100 @@ export const advanceBots = spacetimedb.reducer(
             },
           });
           if (!result.ok) continue;
+          ctx.db.materialHarvestOrder.shipId.delete(intent.shipId);
+          ctx.db.attackOrder.shipId.delete(intent.shipId);
+        } else if (intent.type === "harvest_material") {
+          const vessel = ctx.db.ship.id.find(intent.shipId);
+          const node = ctx.db.materialNode.id.find(intent.nodeId);
+          // Same exact physical conditions and task replacement as human
+          // orderMaterialHarvest; no direct material credit or fabricated node.
+          if (!node || node.kind !== intent.kind ||
+              !knownMaterials.some(known => known.id === intent.nodeId &&
+                known.kind === intent.kind)) continue;
+          const result = dispatchMaterialHarvest({
+            faction: { matchId: match.id, slot: bot.slot, controller: "bot",
+              eliminated: faction.eliminated },
+            ship: vessel ?? null, node, nowUs,
+            lineOfSight: Boolean(vessel && terrainLineOfSight(
+              { x: vessel.x, y: vessel.y },
+              { x: node.gridX + 0.5, y: node.gridY + 0.5 },
+              terrain, world.mapCells,
+            )),
+          }, {
+            clearRoute: id => { ctx.db.shipRoute.shipId.delete(id); },
+            clearIronHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+            clearAttack: id => { ctx.db.attackOrder.shipId.delete(id); },
+            upsertMaterial: order => {
+              const current = ctx.db.materialHarvestOrder.shipId.find(order.shipId);
+              if (current) ctx.db.materialHarvestOrder.shipId.update({ ...current, ...order });
+              else ctx.db.materialHarvestOrder.insert(order);
+            },
+            stopShip: (_, revision) => {
+              if (!vessel) throw new Error("Material harvest ship disappeared");
+              ctx.db.ship.id.update({
+                ...vessel, velocityX: 0, velocityY: 0,
+                targetX: vessel.x, targetY: vessel.y,
+                revision, updatedAt: ctx.timestamp,
+              });
+            },
+          });
+          if (!result.ok) continue;
+        } else if (intent.type === "refit") {
+          const vessel = ctx.db.ship.id.find(intent.shipId);
+          const workshop = ctx.db.structure.id.find(intent.workshopId);
+          const factionNow = ctx.db.factionState.id.find(faction.id);
+          if (!factionNow || factionNow.eliminated ||
+              !legalRefits.some(row => row.shipId === intent.shipId &&
+                row.workshopId === intent.workshopId && row.kind === intent.kind)) continue;
+          const error = validateRefitStation(
+            match.id, bot.slot, workshop, vessel,
+            Boolean(ctx.db.shipRoute.shipId.find(intent.shipId)),
+          );
+          if (error || !vessel) continue;
+          const balancesNow = Array.from(ctx.db.materialBalance.matchId.filter(match.id))
+            .filter(row => row.ownerSlot === bot.slot);
+          const wallet: ResourceWallet = {
+            iron: factionNow.salvage,
+            oil: balancesNow.find(row => row.kind === "oil")?.amount ?? 0,
+            alloy: balancesNow.find(row => row.kind === "alloy")?.amount ?? 0,
+            isotope: balancesNow.find(row => row.kind === "isotope")?.amount ?? 0,
+          };
+          const current = ctx.db.shipRefit.shipId.find(vessel.id);
+          const installed: ShipRefitState = current ?? NO_SHIP_REFITS;
+          let purchase: ReturnType<typeof purchaseShipRefit>;
+          try {
+            purchase = purchaseShipRefit(wallet, installed, intent.kind);
+          } catch {
+            continue; // Not affordable, already fitted or policy went stale.
+          }
+          // All three mutations below commit in the same database reducer
+          // transaction and share the human refit recipe and HP effect.
+          ctx.db.factionState.id.update({
+            ...factionNow, salvage: purchase.wallet.iron,
+          });
+          for (const balance of balancesNow) {
+            const kind = balance.kind as AdvancedResourceKind;
+            if (purchase.wallet[kind] !== balance.amount)
+              ctx.db.materialBalance.id.update({
+                ...balance, amount: purchase.wallet[kind],
+              });
+          }
+          if (current) ctx.db.shipRefit.shipId.update({
+            ...current, ...purchase.state,
+          });
+          else ctx.db.shipRefit.insert({
+            shipId: vessel.id, matchId: match.id, ...purchase.state,
+          });
+          if (purchase.hpBonus > 0) ctx.db.ship.id.update({
+            ...vessel, hp: vessel.hp + purchase.hpBonus,
+            updatedAt: ctx.timestamp,
+          });
         } else if (intent.type === "move") {
           const vessel = ctx.db.ship.id.find(intent.shipId);
           if (!vessel || ctx.db.shipRoute.shipId.find(vessel.id) ||
-              ctx.db.harvestOrder.shipId.find(vessel.id)) continue;
+              ctx.db.harvestOrder.shipId.find(vessel.id) ||
+              ctx.db.materialHarvestOrder.shipId.find(vessel.id) ||
+              ctx.db.attackOrder.shipId.find(vessel.id)) continue;
           const result = dispatchMovement({
             faction: { matchId: match.id, slot: bot.slot, controller: "bot",
               eliminated: faction.eliminated },
@@ -274,7 +364,11 @@ export const advanceBots = spacetimedb.reducer(
             environment: pathEnvironment(),
             destinationVisible: true, // Open Battlefield, same rules as player
           }, {
-            cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+            cancelHarvest: id => {
+              ctx.db.harvestOrder.shipId.delete(id);
+              ctx.db.materialHarvestOrder.shipId.delete(id);
+              ctx.db.attackOrder.shipId.delete(id);
+            },
             setRoute: order => {
               const existing = ctx.db.shipRoute.shipId.find(vessel.id);
               if (!order) {
