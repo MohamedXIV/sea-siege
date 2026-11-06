@@ -43,3 +43,29 @@ export function detectBotEnemies(
   }
   return result;
 }
+
+
+/**
+ * Approved Open Battlefield semantics: players and Bots both know EVERY
+ * living enemy ship and complete building location. This grants no access
+ * to private wallets, hidden routes, bot seeds, reload or production queues.
+ * Firing still checks real range, line-of-sight, aim and server cooldown.
+ * The older sensor-filter helper remains available for legacy regression
+ * cases, but it is not used to hide opponents during the actual match.
+ */
+export function detectOpenBattlefieldEnemies(
+  ownSlot: number, nowUs: bigint, allContacts: readonly EnemyContact[],
+): readonly VisibleEnemy[] {
+  if (!Number.isSafeInteger(ownSlot) || ownSlot < 0 || nowUs < 0n ||
+      allContacts.some(c => !Number.isSafeInteger(c.faction) || c.faction < 0 ||
+        !Number.isFinite(c.position.x) || !Number.isFinite(c.position.y)))
+    throw new RangeError('Invalid open battlefield contacts');
+  return allContacts
+    .filter(contact => contact.alive && contact.faction !== ownSlot)
+    .sort((a, b) => a.entityType.localeCompare(b.entityType) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map(contact => ({
+      id: contact.id, entityType: contact.entityType,
+      position: contact.position, observedAtUs: nowUs,
+    }));
+}
