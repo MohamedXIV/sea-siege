@@ -218,7 +218,7 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     if (!canAdd()) break;
     if (usedShips.has(ship.id) || ship.busy || ECONOMY_RULES.ships[ship.kind].harvestPerSecond === 0)
       continue;
-    if (obs.salvage < 150 || materials.length === 0) continue;
+    if (obs.salvage < CONSTRUCTION_RULES.definitions.shipyard.cost || materials.length === 0) continue;
     const goals = materials.filter(n =>
       (n.kind === 'oil' && wantedMaterial.oil) ||
       (n.kind === 'alloy' && wantedMaterial.alloy));
