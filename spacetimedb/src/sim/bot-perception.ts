@@ -62,8 +62,8 @@ export function detectOpenBattlefieldEnemies(
     throw new RangeError('Invalid open battlefield contacts');
   return allContacts
     .filter(contact => contact.alive && contact.faction !== ownSlot)
-    .sort((a, b) => a.entityType.localeCompare(b.entityType) ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) ||
+      a.entityType.localeCompare(b.entityType))
     .map(contact => ({
       id: contact.id, entityType: contact.entityType,
       position: contact.position, observedAtUs: nowUs,
