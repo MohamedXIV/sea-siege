@@ -8,6 +8,8 @@ import { ECONOMY_RULES, type ShipKind } from './economy.ts';
 import { CONSTRUCTION_RULES } from './construction.ts';
 import { COMBAT_RULES, type WeaponKind } from './combat.ts';
 import { desiredBearing, turretAligned } from './turret-aim.ts';
+import { type ResourceWallet, type AdvancedResourceKind, canAffordResources } from './materials.ts';
+import { SHIP_REFIT_RULES, type ShipRefitKind } from './ship-refits.ts';
 
 export const BOT_RULES = {
   strategicTickUs: 1_000_000n,
@@ -30,7 +32,11 @@ export type BotStructure = Readonly<{ id: bigint; kind: string; position: Positi
 export type VisibleEnemy = Readonly<{ id: bigint; entityType: 'ship' | 'structure';
   position: Position; observedAtUs: bigint }>;
 export type KnownDeposit = Readonly<{ id: bigint; position: Position; remaining: number }>;
-export type LegalBuildCandidate = Readonly<{ kind: 'platform' | 'shipyard' | 'salvage_rig' | 'cannon';
+export type KnownAdvancedDeposit = Readonly<{ id: bigint; kind: AdvancedResourceKind;
+  position: Position; remaining: number }>;
+export type LegalRefitCandidate = Readonly<{ workshopId: bigint; shipId: bigint;
+  kind: ShipRefitKind }>;
+export type LegalBuildCandidate = Readonly<{ kind: 'platform' | 'shipyard' | 'salvage_rig' | 'cannon' | 'workshop';
   gridX: number; gridY: number }>;
 export type BotObservation = Readonly<{
   slot: number;
@@ -43,6 +49,12 @@ export type BotObservation = Readonly<{
   visibleEnemies: readonly VisibleEnemy[];
   /** ONLY discovered resource nodes, not all deposits in the database. */
   knownDeposits: readonly KnownDeposit[];
+  /** Physical nodes publicly visible on the approved open battlefield. */
+  knownMaterials?: readonly KnownAdvancedDeposit[];
+  /** Actual faction balances. Iron is mirrored from salvage, not duplicated. */
+  wallet?: ResourceWallet;
+  /** Verified potential Workshop operations; the adapter must recheck them. */
+  legalRefits?: readonly LegalRefitCandidate[];
   /** ONLY legal candidates generated from server-authorized local knowledge. */
   legalBuildCandidates: readonly LegalBuildCandidate[];
   /** Explorable frontier centers, never secret enemy positions. */
@@ -53,6 +65,8 @@ export type BotIntent =
   | Readonly<{ type: 'fire'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
   | Readonly<{ type: 'attack'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
   | Readonly<{ type: 'harvest'; shipId: bigint; nodeId: bigint }>
+  | Readonly<{ type: 'harvest_material'; shipId: bigint; nodeId: bigint; kind: AdvancedResourceKind }>
+  | Readonly<{ type: 'refit'; workshopId: bigint; shipId: bigint; kind: ShipRefitKind }>
   | Readonly<{ type: 'move'; shipId: bigint; destination: Position }>
   | Readonly<{ type: 'build'; kind: LegalBuildCandidate['kind']; gridX: number; gridY: number }>
   | Readonly<{ type: 'enqueue'; yardId: bigint; shipKind: ShipKind }>;
@@ -76,6 +90,15 @@ function validateObservation(obs: BotObservation): void {
       !obs.structures.every(s => validPosition(s.position) && Number.isSafeInteger(s.queueLength) && s.queueLength >= 0) ||
       !obs.visibleEnemies.every(e => validPosition(e.position) && e.observedAtUs <= obs.nowUs) ||
       !obs.knownDeposits.every(n => validPosition(n.position) && Number.isSafeInteger(n.remaining) && n.remaining >= 0) ||
+      !(obs.knownMaterials ?? []).every(n =>
+        validPosition(n.position) && Number.isSafeInteger(n.remaining) && n.remaining >= 0 &&
+        (n.kind === 'oil' || n.kind === 'alloy' || n.kind === 'isotope')) ||
+      (obs.wallet !== undefined && (
+        Object.values(obs.wallet).some(n => !Number.isSafeInteger(n) || n < 0) ||
+        obs.wallet.iron !== obs.salvage
+      )) ||
+      !(obs.legalRefits ?? []).every(r => r.workshopId >= 0n && r.shipId >= 0n &&
+        (r.kind === 'reinforced_hull' || r.kind === 'high_output_engine')) ||
       !obs.explorationFrontiers.every(validPosition)) {
     throw new RangeError('Invalid bot observation');
   }
@@ -101,6 +124,15 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
   ).sort((a, b) => sortBigint(a.id, b.id));
   const deposits = obs.knownDeposits.filter(n => n.remaining > 0)
     .sort((a, b) => sortBigint(a.id, b.id));
+  const wallet = obs.wallet ?? { iron: obs.salvage, oil: 0, alloy: 0, isotope: 0 };
+  const materials = (obs.knownMaterials ?? []).filter(n => n.remaining > 0)
+    .sort((a, b) => sortBigint(a.id, b.id));
+  // A first optional engine/hull is a meaningful goal, not a mandatory tech
+  // gate. Other ship production may continue entirely on Iron.
+  const wantedMaterial = {
+    oil: wallet.oil < SHIP_REFIT_RULES.high_output_engine.cost.oil,
+    alloy: wallet.alloy < SHIP_REFIT_RULES.reinforced_hull.cost.alloy,
+  };
   const yards = obs.structures.filter(s => s.kind === 'shipyard' && s.complete && s.connected)
     .sort((a, b) => sortBigint(a.id, b.id));
   const canAdd = (): boolean => intents.length < rule.maxOrders;
@@ -144,7 +176,48 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     }
   }
 
-  // Harvest opportunities use discovered nodes only and cannot create resources.
+  // Buy an affordable optional specialization before spending its Iron on
+  // expansion. Candidates are built from the current owned, idle and
+  // in-range Workshop snapshot and validated AGAIN by the server adapter.
+  for (const candidate of [...(obs.legalRefits ?? [])].sort((a, b) =>
+    sortBigint(a.shipId, b.shipId) || sortBigint(a.workshopId, b.workshopId) ||
+    a.kind.localeCompare(b.kind))) {
+    if (!canAdd()) break;
+    if (usedShips.has(candidate.shipId)) continue;
+    const recipe = SHIP_REFIT_RULES[candidate.kind].cost;
+    if (!canAffordResources({ ...wallet, iron: wallet.iron - reservedSalvage }, recipe))
+      continue;
+    emit({ type: 'refit', ...candidate }, candidate.shipId);
+    reservedSalvage += recipe.iron;
+    break; // one refit per decision: no double spending on advanced stock
+  }
+
+  // Hybrid harvesting is deliberately a choice between Oil/Alloy and Iron.
+  // When Iron is scarce, return to the original salvage economy so advanced
+  // chasing cannot bankrupt every hull or prevent shipyards being built.
+  for (const ship of ships) {
+    if (!canAdd()) break;
+    if (usedShips.has(ship.id) || ship.busy || ECONOMY_RULES.ships[ship.kind].harvestPerSecond === 0)
+      continue;
+    if (obs.salvage < 150 || materials.length === 0) continue;
+    const goals = materials.filter(n =>
+      (n.kind === 'oil' && wantedMaterial.oil) ||
+      (n.kind === 'alloy' && wantedMaterial.alloy));
+    if (!goals.length) continue;
+    const targeted = goals.filter(n => !occupiedTargets.has(n.id))
+      .sort((a, b) => distance(ship.position, a.position) -
+        distance(ship.position, b.position) || sortBigint(a.id, b.id))[0];
+    if (!targeted) continue;
+    occupiedTargets.add(targeted.id);
+    if (distance(ship.position, targeted.position) <= ECONOMY_RULES.harvestRangeCells) {
+      emit({ type: 'harvest_material', shipId: ship.id,
+        nodeId: targeted.id, kind: targeted.kind }, ship.id);
+    } else {
+      emit({ type: 'move', shipId: ship.id, destination: targeted.position }, ship.id);
+    }
+  }
+
+  // Iron collection remains fully viable, and ships keep their weapons.
   for (const ship of ships) {
     if (!canAdd()) break;
     if (usedShips.has(ship.id) || ship.busy || ECONOMY_RULES.ships[ship.kind].harvestPerSecond === 0) continue;
@@ -163,9 +236,13 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
   // queue duplicate shipyards/rigs while its first project is still building.
   const shipyards = obs.structures.filter(s => s.kind === 'shipyard');
   const rigs = obs.structures.filter(s => s.kind === 'salvage_rig');
+  const workshops = obs.structures.filter(s => s.kind === 'workshop');
+  const preparingRefits = wallet.oil > 0 || wallet.alloy > 0;
   const preference: LegalBuildCandidate['kind'][] =
     shipyards.length === 0 ? ['shipyard', 'platform'] :
-    rigs.length === 0 ? ['salvage_rig', 'platform', 'cannon'] : ['cannon', 'platform'];
+    rigs.length === 0 ? ['salvage_rig', 'platform', 'cannon'] :
+    workshops.length === 0 && preparingRefits ?
+      ['workshop', 'platform', 'cannon'] : ['cannon', 'platform'];
   for (const kind of preference) {
     if (!canAdd()) break;
     const cost = CONSTRUCTION_RULES.definitions[kind].cost;
