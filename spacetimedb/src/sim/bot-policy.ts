@@ -26,7 +26,8 @@ export const BOT_RULES = {
 export type BotDifficulty = keyof typeof BOT_RULES.difficulties;
 export type Position = Readonly<{ x: number; y: number }>;
 export type BotShip = Readonly<{ id: bigint; kind: ShipKind; position: Position;
-  hp: number; turretAngleDeg: number; busy: boolean }>;
+  hp: number; turretAngleDeg: number; busy: boolean;
+  harvestingMaterial?: AdvancedResourceKind }>;
 export type BotStructure = Readonly<{ id: bigint; kind: string; position: Position;
   complete: boolean; connected: boolean; queueLength: number }>;
 export type VisibleEnemy = Readonly<{ id: bigint; entityType: 'ship' | 'structure';
@@ -66,6 +67,7 @@ export type BotIntent =
   | Readonly<{ type: 'attack'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
   | Readonly<{ type: 'harvest'; shipId: bigint; nodeId: bigint }>
   | Readonly<{ type: 'harvest_material'; shipId: bigint; nodeId: bigint; kind: AdvancedResourceKind }>
+  | Readonly<{ type: 'release_material'; shipId: bigint }>
   | Readonly<{ type: 'refit'; workshopId: bigint; shipId: bigint; kind: ShipRefitKind }>
   | Readonly<{ type: 'move'; shipId: bigint; destination: Position }>
   | Readonly<{ type: 'build'; kind: LegalBuildCandidate['kind']; gridX: number; gridY: number }>
@@ -86,7 +88,11 @@ function validateObservation(obs: BotObservation): void {
   if (!Number.isInteger(obs.slot) || obs.slot < 0 || !Number.isInteger(obs.seed) ||
       obs.seed < 0 || obs.seed > 0xffffffff || obs.nowUs < 0n ||
       !Number.isSafeInteger(obs.salvage) || obs.salvage < 0 ||
-      !obs.ships.every(s => s.hp > 0 && Number.isFinite(s.turretAngleDeg) && validPosition(s.position)) ||
+      !obs.ships.every(s => s.hp > 0 && Number.isFinite(s.turretAngleDeg) &&
+        validPosition(s.position) &&
+        (s.harvestingMaterial === undefined ||
+          s.harvestingMaterial === 'oil' || s.harvestingMaterial === 'alloy' ||
+          s.harvestingMaterial === 'isotope')) ||
       !obs.structures.every(s => validPosition(s.position) && Number.isSafeInteger(s.queueLength) && s.queueLength >= 0) ||
       !obs.visibleEnemies.every(e => validPosition(e.position) && e.observedAtUs <= obs.nowUs) ||
       !obs.knownDeposits.every(n => validPosition(n.position) && Number.isSafeInteger(n.remaining) && n.remaining >= 0) ||
@@ -191,6 +197,18 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     emit({ type: 'refit', ...candidate }, candidate.shipId);
     reservedSalvage += recipe.iron;
     break; // one refit per decision: no double spending on advanced stock
+  }
+
+  // Finished the amount needed for a refit? Release a stale material task
+  // instead of camping on Oil forever while Alloys go uncontested. This
+  // consumes a normal strategic order; no free instantaneous reassignment.
+  for (const ship of ships) {
+    if (!canAdd()) break;
+    if (usedShips.has(ship.id)) continue;
+    if ((ship.harvestingMaterial === 'oil' && !wantedMaterial.oil) ||
+        (ship.harvestingMaterial === 'alloy' && !wantedMaterial.alloy)) {
+      emit({ type: 'release_material', shipId: ship.id }, ship.id);
+    }
   }
 
   // Hybrid harvesting is deliberately a choice between Oil/Alloy and Iron.
