@@ -1,7 +1,7 @@
 /**
  * Pure strategic policy for server-owned Sea Siege factions.
- * The observation is an explicit, visibility-filtered capability: this file
- * must NEVER import database tables, full world chunks or hidden enemy rows.
+ * The observation is an explicit public-world plus own-faction capability:
+ * no direct DB tables, other-match rows, enemy wallets or secret orders.
  * An authoritative adapter must revalidate EVERY returned intent before use.
  */
 import { ECONOMY_RULES, type ShipKind } from './economy.ts';
@@ -46,9 +46,9 @@ export type BotObservation = Readonly<{
   salvage: number;
   ships: readonly BotShip[];
   structures: readonly BotStructure[];
-  /** ONLY actively detected enemies, not full hidden-world state. */
+  /** Public enemy locations on our No-Fog open battlefield. */
   visibleEnemies: readonly VisibleEnemy[];
-  /** ONLY discovered resource nodes, not all deposits in the database. */
+  /** Public Iron deposits in this match, never another match's rows. */
   knownDeposits: readonly KnownDeposit[];
   /** Physical nodes publicly visible on the approved open battlefield. */
   knownMaterials?: readonly KnownAdvancedDeposit[];
@@ -149,7 +149,7 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
     if (shipId !== undefined) usedShips.add(shipId);
   };
 
-  // Defense/attack actions: only observable hostiles, never global enemy rows.
+  // Defense/attack actions: only living public hostiles from this match.
   for (const ship of ships) {
     if (!canAdd()) break;
     const weapon = COMBAT_RULES.weapons[ship.kind as WeaponKind];
