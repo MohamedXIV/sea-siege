@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Anchor, RotateCcw, Trophy, XCircle, Scale, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-client";
@@ -24,6 +24,36 @@ export function MatchResultOverlay({
   const match = state.activeMatch;
   const [pending, setPending] = useState<"ai" | "lobby" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  const keepFocusInDialog = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    ) ?? []).filter(element => element.getClientRects().length > 0);
+    if (!controls.length) { event.preventDefault(); return; }
+    const first = controls[0]!;
+    const last = controls[controls.length - 1]!;
+    if (event.shiftKey && (document.activeElement === first ||
+      document.activeElement === dialogRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last ||
+      document.activeElement === dialogRef.current)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   if (!match) return null;
 
   const finished = match.phase === "finished";
@@ -76,7 +106,8 @@ export function MatchResultOverlay({
   return (
     <div data-game-ui="true"
       className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#030912]/85 p-3 text-slate-100 backdrop-blur-sm sm:p-6">
-      <section role="dialog" aria-modal="true" aria-labelledby="match-result-heading"
+      <section ref={dialogRef} tabIndex={-1} onKeyDown={keepFocusInDialog}
+        role="dialog" aria-modal="true" aria-labelledby="match-result-heading"
         className="pointer-events-auto my-auto w-full max-w-3xl space-y-4 rounded-xl border border-sky-800/60 bg-slate-950/95 p-4 shadow-2xl sm:p-6">
         <header className="space-y-2 border-b border-slate-800 pb-4 text-center">
           <div className="flex justify-center">
