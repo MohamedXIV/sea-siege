@@ -797,7 +797,8 @@ it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", (
   const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
   expect(impact.kind).toBe("hit");
   expect(impact.x).toBeGreaterThan(own.x);
-  expect(impact.x).toBeLessThan(enemy.x);
+  // `enemy` is the pre-teleport snapshot; compare with the live target position.
+  expect(impact.x).toBeLessThan(test.db.ship.id.find(enemy.id)!.x);
   expect(test.db.combatSchedule.count()).toBe(1n);
   test.clock.advance(TimeDuration.fromMillis(900));
   const expiry = [...test.db.combatSchedule.iter()][0]!;
@@ -1193,7 +1194,7 @@ it("one active match with bots gets one bounded internal strategic timer and no 
   )).toThrow("Cannot command another");
 });
 
-it("the bot sensor filters hidden enemies before autonomous aiming or firing", () => {
+it("Open Battlefield bots still cannot fire out-of-range weapons", () => {
   const test = createModuleTestHarness(spacetimedb, moduleExports);
   const alice = auth("alice", 1n);
   test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
@@ -1209,12 +1210,120 @@ it("the bot sensor filters hidden enemies before autonomous aiming or firing", (
   test.withReducerTx(TestAuth.internal(), ctx =>
     moduleExports.advanceBots(ctx, { arg: timer })
   );
-  // Bot has no visibility of the deliberately relocated far-away human ship.
+  // Both factions are visible, but the bot has no weapon range to fire this far.
   expect(test.db.projectile.count()).toBe(0n);
   expect([...test.db.turretAim.matchId.filter(matchId)]
     .filter(row => row.sourceType === "ship" &&
       [...test.db.ship.matchId.filter(matchId)].some(ship =>
         ship.ownerSlot === 1 && ship.id === row.sourceId))).toHaveLength(0);
+});
+
+it("a real server-owned Bot collects advanced Oil without free credits or a human socket", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("bot-oil-host", 2201n);
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx => moduleExports.addBot(ctx, {
+    matchId, difficulty: "normal",
+  }));
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const botShip = [...test.db.ship.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1)!;
+  let nodeId = 0n;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    // A test-only finite node directly under the Bot's already-authorized
+    // ship. All other advanced deposits start empty for a deterministic goal.
+    for (const node of Array.from(ctx.db.materialNode.matchId.filter(matchId)))
+      ctx.db.materialNode.id.update({ ...node, remaining: 0, regenPerSec: 0 });
+    const node = ctx.db.materialNode.insert({
+      id: 0n, matchId, kind: "oil", gridX: Math.floor(botShip.x),
+      gridY: Math.floor(botShip.y), remaining: 50, capacity: 50,
+      regenPerSec: 0, contested: false,
+    });
+    nodeId = node.id;
+  });
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+  const originalOil = [...test.db.materialBalance.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1 && row.kind === "oil")!;
+  expect(originalOil.amount).toBe(0);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const botTimer = [...test.db.botSchedule.matchId.filter(matchId)][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceBots(ctx, { arg: botTimer })
+  );
+  const assignment = test.db.materialHarvestOrder.shipId.find(botShip.id);
+  expect(assignment?.nodeId).toBe(nodeId);
+  expect([...test.db.materialBalance.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1 && row.kind === "oil")?.amount).toBe(0);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const economyTimer = [...test.db.economySchedule.matchId.filter(matchId)][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: economyTimer })
+  );
+  const creditedOil = [...test.db.materialBalance.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1 && row.kind === "oil")!;
+  expect(creditedOil.amount).toBe(7);
+  expect(creditedOil.totalGathered).toBe(7n);
+  expect(test.db.materialNode.id.find(nodeId)?.remaining).toBe(43);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+});
+
+it("a Bot buys authentic optional engine and reinforced hull refits without impersonating a player", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("bot-refit-host", 2211n);
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx => moduleExports.addBot(ctx, {
+    matchId, difficulty: "easy",
+  }));
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const faction = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.controller === "bot")!;
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === faction.slot && row.kind === "command_core")!;
+  const vessel = [...test.db.ship.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === faction.slot)!;
+  const firstIron = faction.salvage;
+  // Fixture matches the real completed 2x2 starting platform support.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.structure.insert({
+      id: 0n, matchId, ownerSlot: faction.slot, kind: "workshop",
+      channel: "superstructure", gridX: core.gridX, gridY: core.gridY + 3,
+      width: 2, height: 2, hp: 680, lastFiredAtUs: -1n,
+      turretAngleDeg: 0, level: 1, upgradeRemainingUs: 0n,
+      upgradeStartedAtUs: 0n, complete: true, connected: true, completeAtUs: 0n,
+    });
+    ctx.db.ship.id.update({
+      ...vessel, x: core.gridX + 2.5, y: core.gridY + 5.5,
+      velocityX: 0, velocityY: 0,
+    });
+    for (const row of Array.from(ctx.db.materialBalance.matchId.filter(matchId)))
+      if (row.ownerSlot === faction.slot &&
+          (row.kind === "oil" || row.kind === "alloy"))
+        ctx.db.materialBalance.id.update({ ...row, amount: 100 });
+  });
+  const tick = () => {
+    const timer = [...test.db.botSchedule.matchId.filter(matchId)][0]!;
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceBots(ctx, { arg: timer }));
+  };
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  tick();
+  const engine = test.db.shipRefit.shipId.find(vessel.id);
+  expect(engine?.highOutputEngine).toBe(true);
+  expect(engine?.reinforcedHull).toBe(false);
+  expect(test.db.factionState.id.find(faction.id)?.salvage).toBe(firstIron - 75);
+  expect([...test.db.materialBalance.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === faction.slot && row.kind === "oil")?.amount).toBe(55);
+  test.clock.advance(TimeDuration.fromMillis(4000));
+  tick();
+  const upgraded = test.db.shipRefit.shipId.find(vessel.id);
+  expect(upgraded?.reinforcedHull).toBe(true);
+  expect(test.db.ship.id.find(vessel.id)?.hp).toBe(330);
+  expect(test.db.factionState.id.find(faction.id)?.salvage).toBe(firstIron - 135);
+  expect([...test.db.materialBalance.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === faction.slot && row.kind === "alloy")?.amount).toBe(65);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
 });
 
 it("finalizing the match cancels all strategic bots and preserves the outcome", () => {

@@ -1,8 +1,7 @@
 import { t, SenderError } from "spacetimedb/server";
 import spacetimedb from "./schema.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
-import { withinWorkshopRange } from "./sim/workshop.ts";
-import { shipDefinition } from "./sim/economy.ts";
+import { validateRefitStation } from "./sim/ship-refit-station.ts";
 import {
   materialBalanceKey,
   type AdvancedResourceKind,
@@ -38,25 +37,13 @@ export const refitShip = spacetimedb.reducer(
       ? Array.from(ctx.db.factionState.matchId.filter(matchId))
           .find(row => row.slot === membership.slot && row.controller === "human")
       : undefined;
-    if (!faction || faction.eliminated ||
-        vessel.ownerSlot !== faction.slot || workshop.ownerSlot !== faction.slot)
+    if (!faction || faction.eliminated)
       throw new SenderError("Refit requires your own ship and Workshop");
-    if (workshop.kind !== "workshop" || !workshop.complete ||
-        !workshop.connected || workshop.hp === 0 ||
-        workshop.upgradeRemainingUs > 0n)
-      throw new SenderError("Workshop offline or upgrading");
-    if (!shipDefinition(vessel.kind) || vessel.hp === 0)
-      throw new SenderError("Ship unavailable for refit");
-    const center = {
-      x: workshop.gridX + workshop.width / 2,
-      y: workshop.gridY + workshop.height / 2,
-    };
-    if (!withinWorkshopRange(center, { x: vessel.x, y: vessel.y }, workshop.level))
-      throw new SenderError("Bring the ship within Workshop range");
-    if (ctx.db.shipRoute.shipId.find(shipId) ||
-        Math.hypot(vessel.velocityX, vessel.velocityY) > 0.01)
-      throw new SenderError("Stop the ship before refitting");
-
+    const stationError = validateRefitStation(
+      matchId, faction.slot, workshop, vessel,
+      Boolean(ctx.db.shipRoute.shipId.find(shipId)),
+    );
+    if (stationError) throw new SenderError(stationError);
     const current = ctx.db.shipRefit.shipId.find(shipId);
     const refits: ShipRefitState = current
       ? { reinforcedHull: current.reinforcedHull, highOutputEngine: current.highOutputEngine }
