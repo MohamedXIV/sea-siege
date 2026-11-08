@@ -141,7 +141,8 @@ export function MatchResultOverlay({
                 for this older match.
               </p>
             ) : (
-              <div className="overflow-x-auto rounded border border-slate-700">
+              <div role="region" tabIndex={0} aria-label="Scrollable final fleet standings"
+                className="overflow-x-auto rounded border border-slate-700">
                 <table className="w-full min-w-[540px] text-left text-xs">
                   <thead className="bg-slate-900/90 text-[10px] uppercase tracking-wide text-slate-400">
                     <tr>
