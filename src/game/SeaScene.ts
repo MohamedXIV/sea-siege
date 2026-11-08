@@ -675,9 +675,16 @@ export class SeaScene extends Phaser.Scene {
         );
       })).then(results => {
         const failures = results.filter(r => r.status === "rejected");
-        if (failures.length) this.reportOrderError(
-          `${failures.length} of ${ids.length} move orders were rejected`
-        );
+        if (failures.length) {
+          this.reportOrderError(`${failures.length} of ${ids.length} move orders were rejected`);
+        } else {
+          window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
+            detail: {
+              message: `Move ${ids.length === 1 ? "order" : "orders"} submitted for ${ids.length} ${ids.length === 1 ? "ship" : "ships"}`,
+              success: true,
+            },
+          }));
+        }
       });
     }
   }
