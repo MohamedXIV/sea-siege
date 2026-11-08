@@ -259,8 +259,7 @@ export class SeaScene extends Phaser.Scene {
     window.addEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.addEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     window.addEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
-    this.input.keyboard?.on("keydown-E", this.focusEnemy);
-    this.input.keyboard?.on("keydown-H", this.focusHome);
+    window.addEventListener("keydown", this.onNavigationHotkey);
     window.addEventListener("keydown", this.onEscape);
     window.addEventListener("contextmenu", this.onContextMenu, { capture: true });
     this.scale.on(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
@@ -278,9 +277,8 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.removeEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
-    this.input.keyboard?.off("keydown-E", this.focusEnemy);
-    this.input.keyboard?.off("keydown-H", this.focusHome);
     this.scale.off(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
+    window.removeEventListener("keydown", this.onNavigationHotkey);
     window.removeEventListener("keydown", this.onEscape);
     window.removeEventListener("contextmenu", this.onContextMenu, { capture: true });
     this.clearEntities();
@@ -358,12 +356,38 @@ export class SeaScene extends Phaser.Scene {
     }));
   };
 
+  /** Menu and text fields own their keys; the world never steals typing. */
+  private canUseWorldHotkey(event: KeyboardEvent): boolean {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (!document.querySelector('[data-game-hud="true"]')) return false;
+    const target = event.target;
+    if (target instanceof Element && target.closest(
+      '[data-game-ui="true"], input, textarea, select, [contenteditable="true"]'
+    )) return false;
+    return true;
+  }
+
+  private onNavigationHotkey = (event: KeyboardEvent): void => {
+    if (event.repeat || !this.canUseWorldHotkey(event)) return;
+    if (event.code === "KeyH") this.focusHome();
+    else if (event.code === "KeyE") this.focusEnemy();
+    else return;
+    event.preventDefault();
+  };
+
   private onEscape = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape") return;
+    if (event.key !== "Escape" || event.defaultPrevented ||
+        !document.querySelector('[data-game-hud="true"]')) return;
+    const target = event.target;
+    // Escape must cancel build immediately, even while its toolbar button
+    // remains focused; never intercept typing or other modal interactions.
+    if (target instanceof Element && target.closest(
+      'input, textarea, select, [contenteditable="true"]'
+    )) return;
     if (this.buildKind) {
       event.preventDefault();
       this.cancelBuilding();
-    } else {
+    } else if (this.canUseWorldHotkey(event)) {
       this.selectShips([]);
     }
   };
@@ -651,9 +675,16 @@ export class SeaScene extends Phaser.Scene {
         );
       })).then(results => {
         const failures = results.filter(r => r.status === "rejected");
-        if (failures.length) this.reportOrderError(
-          `${failures.length} of ${ids.length} move orders were rejected`
-        );
+        if (failures.length) {
+          this.reportOrderError(`${failures.length} of ${ids.length} move orders were rejected`);
+        } else {
+          window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, {
+            detail: {
+              message: `Move ${ids.length === 1 ? "order" : "orders"} submitted for ${ids.length} ${ids.length === 1 ? "ship" : "ships"}`,
+              success: true,
+            },
+          }));
+        }
       });
     }
   }
