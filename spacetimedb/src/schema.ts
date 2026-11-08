@@ -82,6 +82,21 @@ export const ship = table(
 );
 
 
+/**
+ * Additive upgrade state; the original ship schema is unchanged so already
+ * persisted matches do not require a destructive SpacetimeDB migration.
+ * Refits are private to the owning human seat; effects remain authoritative.
+ */
+export const shipRefit = table(
+  { name: "ship_refit" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    reinforcedHull: t.bool(),
+    highOutputEngine: t.bool(),
+  },
+);
+
 /** Secret generation parameters: public match rows must NEVER expose the world seed. */
 const worldConfig = table(
   { name: "world_config" },
@@ -131,6 +146,51 @@ const salvageNode = table(
   },
 );
 
+
+/**
+ * Additive resource-economy migration: existing faction_state.salvage and
+ * salvage_node remain authoritative for ordinary Iron/legacy Salvage. Older
+ * matches continue working unmodified; new matches gain typed advanced nodes.
+ * All three tables below are PRIVATE. Publish views, never raw tables.
+ */
+export const materialNode = table(
+  { name: "material_node" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    kind: t.string(), // oil | alloy | isotope
+    gridX: t.u32(),
+    gridY: t.u32(),
+    capacity: t.u32(),
+    remaining: t.u32(),
+    regenPerSec: t.u32(),
+    contested: t.bool(),
+  },
+);
+
+export const materialBalance = table(
+  { name: "material_balance" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    ownerSlot: t.u32(),
+    materialKey: t.string().unique(), // matchId:slot:kind
+    kind: t.string(),
+    amount: t.u32(),
+    totalGathered: t.u64(),
+  },
+);
+
+/** One advanced-material target per ship; ordinary Iron harvest stays intact. */
+export const materialHarvestOrder = table(
+  { name: "material_harvest_order" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    nodeId: t.u64(),
+    assignedAtUs: t.i64(),
+  },
+);
 
 /** Each ship can harvest one server-authorized salvage node at a time. */
 const harvestOrder = table(
@@ -252,6 +312,24 @@ const projectile = table(
   },
 );
 
+/**
+ * Short-lived authoritative impact locations for VFX. This is a PRIVATE
+ * presentation event ledger; actual damage is still resolved from projectile
+ * collision in advanceCombat. Match members see it through a scoped view.
+ */
+export const combatImpact = table(
+  { name: "combat_impact" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    projectileId: t.u64(),
+    kind: t.string(), // "hit" | "splash"
+    x: t.f64(),
+    y: t.f64(),
+    createdAtUs: t.i64(),
+  },
+);
+
 /** One lazy timer per active combat match, never one per projectile. */
 export const combatSchedule = table(
   { name: "combat_schedule" },
@@ -263,6 +341,25 @@ export const combatSchedule = table(
   },
 );
 
+
+/**
+ * Persistent server-owned Attack Target order. The combat scheduler re-reads
+ * the live target every tick, approaches when required, aims, and fires only
+ * through the same weapon rules as a manual Fire command. One order per ship;
+ * Move, Stop, Harvest or a new Attack replace it atomically.
+ */
+export const attackOrder = table(
+  { name: "attack_order" },
+  {
+    shipId: t.u64().primaryKey(),
+    matchId: t.u64().index("btree"),
+    targetType: t.string(),
+    targetId: t.u64(),
+    issuedAtUs: t.i64(),
+    /** Rate limit for chase re-pathing; never a client-controlled timestamp. */
+    nextChaseAtUs: t.i64(),
+  },
+);
 
 /** Ephemeral but persisted rotation intentions. No client-supplied transform updates. */
 const turretAim = table(
@@ -276,6 +373,28 @@ const turretAim = table(
   },
 );
 
+
+/**
+ * Final match-only scoreboard snapshot. Private raw rows are projected to
+ * authenticated participants, not publicly dumped with match metadata.
+ * Additive storage retains compatibility with already completed matches.
+ */
+export const matchFinalStanding = table(
+  { name: "match_final_standing" },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    matchId: t.u64().index("btree"),
+    slot: t.u32(),
+    controller: t.string(),
+    eliminated: t.bool(),
+    coreHp: t.u32(),
+    structures: t.u32(),
+    ships: t.u32(),
+    ironGathered: t.u64(),
+    advancedGathered: t.u64(),
+    score5: t.u64(),
+  },
+);
 
 /** Single one-shot, 12-minute match deadline; never one timer per player. */
 export const matchDeadline = table(
@@ -299,9 +418,11 @@ export const botSchedule = table(
 );
 
 const spacetimedb = schema({
-  match, matchMember, factionState, botController, ship, shipRoute, motionSchedule,
-  worldConfig, worldSpawn, worldChunk, salvageNode, structure, constructionSchedule,
-  harvestOrder, productionOrder, economySchedule, projectile, combatSchedule, turretAim,
-  matchDeadline, botSchedule,
+  match, matchMember, factionState, botController, ship, shipRefit, shipRoute, motionSchedule,
+  worldConfig, worldSpawn, worldChunk, salvageNode,
+  materialNode, materialBalance, materialHarvestOrder,
+  structure, constructionSchedule,
+  harvestOrder, productionOrder, economySchedule, projectile, combatImpact, combatSchedule, turretAim,
+  attackOrder, matchFinalStanding, matchDeadline, botSchedule,
 });
 export default spacetimedb;

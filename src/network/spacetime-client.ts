@@ -9,6 +9,18 @@ import type {
   Ship,
   Structure,
   DetectedEnemyContact,
+  GeminiKnownChunk,
+  GeminiKnownSalvage,
+  GeminiBattleShip,
+  GeminiBattleStructure,
+  KnownMaterialDeposit,
+  OwnedMaterialBalance,
+  OwnedShipRefit,
+  OwnedProductionJob,
+  OwnedAttackOrder,
+  BattleProjectile,
+  AuthoritativeCombatImpact,
+  CompletedFactionStanding,
 } from "../module_bindings/types";
 
 export type ConnectionStatus =
@@ -37,6 +49,18 @@ export interface SpacetimeClientState {
   myShips: Ship[];
   myStructures: Structure[];
   visibleEnemies: DetectedEnemyContact[];
+  worldChunks: GeminiKnownChunk[];
+  salvageNodes: GeminiKnownSalvage[];
+  battleShips: GeminiBattleShip[];
+  battleStructures: GeminiBattleStructure[];
+  materialDeposits: KnownMaterialDeposit[];
+  materialBalances: OwnedMaterialBalance[];
+  shipRefits: OwnedShipRefit[];
+  productionJobs: OwnedProductionJob[];
+  attackOrders: OwnedAttackOrder[];
+  battleProjectiles: BattleProjectile[];
+  battleImpacts: AuthoritativeCombatImpact[];
+  finalStandings: CompletedFactionStanding[];
 }
 
 export type StateListener = (state: SpacetimeClientState) => void;
@@ -73,6 +97,7 @@ export class SpacetimeClient {
   private connectionGeneration = 0;
   private tableCallbacksBoundConnection: DbConnection | null = null;
   private pendingCreateMatch = false;
+  private quickPlayPending = false;
 
   readonly host: string;
   readonly database: string;
@@ -162,6 +187,18 @@ export class SpacetimeClient {
     let myMemberships: MatchMember[] = [];
     let myFactionStates: FactionState[] = [];
     let visibleEnemies: DetectedEnemyContact[] = [];
+    let worldChunks: GeminiKnownChunk[] = [];
+    let salvageNodes: GeminiKnownSalvage[] = [];
+    let battleShips: GeminiBattleShip[] = [];
+    let battleStructures: GeminiBattleStructure[] = [];
+    let materialDeposits: KnownMaterialDeposit[] = [];
+    let materialBalances: OwnedMaterialBalance[] = [];
+    let shipRefits: OwnedShipRefit[] = [];
+    let productionJobs: OwnedProductionJob[] = [];
+    let attackOrders: OwnedAttackOrder[] = [];
+    let battleProjectiles: BattleProjectile[] = [];
+    let battleImpacts: AuthoritativeCombatImpact[] = [];
+    let finalStandings: CompletedFactionStanding[] = [];
 
     if (conn && this.status === "connected") {
       try {
@@ -171,6 +208,18 @@ export class SpacetimeClient {
         myMemberships = Array.from(conn.db.myMemberships.iter());
         myFactionStates = Array.from(conn.db.myFactionStates.iter());
         visibleEnemies = Array.from(conn.db.myVisibleEnemies.iter());
+        worldChunks = Array.from(conn.db.myGeminiWorldChunks.iter());
+        salvageNodes = Array.from(conn.db.myGeminiSalvage.iter());
+        battleShips = Array.from(conn.db.myGeminiShips.iter());
+        battleStructures = Array.from(conn.db.myGeminiStructures.iter());
+        materialDeposits = Array.from(conn.db.myMaterialDeposits.iter());
+        materialBalances = Array.from(conn.db.myMaterialBalances.iter());
+        shipRefits = Array.from(conn.db.myShipRefits.iter());
+        productionJobs = Array.from(conn.db.myProductionJobs.iter());
+        attackOrders = Array.from(conn.db.myAttackOrders.iter());
+        battleProjectiles = Array.from(conn.db.myBattleProjectiles.iter());
+        battleImpacts = Array.from(conn.db.myBattleImpacts.iter());
+        finalStandings = Array.from(conn.db.myCompletedStandings.iter());
       } catch {
         // Cache during transition
       }
@@ -232,6 +281,18 @@ export class SpacetimeClient {
       myShips: filteredShips,
       myStructures: filteredStructures,
       visibleEnemies: filteredEnemies,
+      worldChunks: activeMatchId === null ? [] : worldChunks.filter(row => row.matchId === activeMatchId),
+      salvageNodes: activeMatchId === null ? [] : salvageNodes.filter(row => row.matchId === activeMatchId),
+      battleShips: activeMatchId === null ? [] : battleShips.filter(row => row.matchId === activeMatchId),
+      battleStructures: activeMatchId === null ? [] : battleStructures.filter(row => row.matchId === activeMatchId),
+      materialDeposits: activeMatchId === null ? [] : materialDeposits.filter(row => row.matchId === activeMatchId),
+      materialBalances: activeMatchId === null ? [] : materialBalances.filter(row => row.matchId === activeMatchId),
+      shipRefits: activeMatchId === null ? [] : shipRefits.filter(row => row.matchId === activeMatchId),
+      productionJobs: activeMatchId === null ? [] : productionJobs.filter(row => row.matchId === activeMatchId),
+      attackOrders: activeMatchId === null ? [] : attackOrders.filter(row => row.matchId === activeMatchId),
+      battleProjectiles: activeMatchId === null ? [] : battleProjectiles.filter(row => row.matchId === activeMatchId),
+      battleImpacts: activeMatchId === null ? [] : battleImpacts.filter(row => row.matchId === activeMatchId),
+      finalStandings: activeMatchId === null ? [] : finalStandings.filter(row => row.matchId === activeMatchId),
     };
   }
 
@@ -410,6 +471,17 @@ export class SpacetimeClient {
     conn.db.myVisibleEnemies.onInsert(notifyChange);
     conn.db.myVisibleEnemies.onUpdate(notifyChange);
     conn.db.myVisibleEnemies.onDelete(notifyChange);
+
+    for (const table of [conn.db.myGeminiWorldChunks, conn.db.myGeminiSalvage,
+      conn.db.myGeminiShips, conn.db.myGeminiStructures,
+      conn.db.myMaterialDeposits, conn.db.myMaterialBalances,
+      conn.db.myShipRefits, conn.db.myProductionJobs,
+      conn.db.myAttackOrders, conn.db.myBattleProjectiles, conn.db.myBattleImpacts,
+      conn.db.myCompletedStandings]) {
+      table.onInsert(notifyChange);
+      table.onUpdate(notifyChange);
+      table.onDelete(notifyChange);
+    }
   }
 
   private applySubscriptions(conn: DbConnection, generation: number): void {
@@ -446,6 +518,18 @@ export class SpacetimeClient {
         "SELECT * FROM my_structures",
         "SELECT * FROM my_faction_states",
         "SELECT * FROM my_visible_enemies",
+        "SELECT * FROM my_gemini_world_chunks",
+        "SELECT * FROM my_gemini_salvage",
+        "SELECT * FROM my_gemini_ships",
+        "SELECT * FROM my_gemini_structures",
+        "SELECT * FROM my_material_deposits",
+        "SELECT * FROM my_material_balances",
+        "SELECT * FROM my_ship_refits",
+        "SELECT * FROM my_production_jobs",
+        "SELECT * FROM my_attack_orders",
+        "SELECT * FROM my_battle_projectiles",
+        "SELECT * FROM my_battle_impacts",
+        "SELECT * FROM my_completed_standings",
       ]);
   }
 
@@ -539,6 +623,167 @@ export class SpacetimeClient {
     }
   }
 
+  /**
+   * A real single-human skirmish: create a new server-owned match, provision a
+   * server-owned bot seat, then start it. Never impersonate a second client.
+   * Phase changes and membership arrive through authorized subscriptions.
+   */
+  async quickPlay(): Promise<bigint> {
+    if (this.quickPlayPending) {
+      throw new Error("Quick Play is already starting");
+    }
+    const conn = this.conn;
+    if (!conn || this.status !== "connected" || this.subscriptionStatus !== "applied") {
+      throw new Error("Quick Play requires an active SpacetimeDB subscription");
+    }
+    const generation = this.connectionGeneration;
+    const previousMatchIds = new Set(
+      Array.from(conn.db.myMemberships.iter()).map((row) => row.matchId)
+    );
+    this.quickPlayPending = true;
+    try {
+      await this.createMatch(2);
+      const matchId = await new Promise<bigint>((resolve, reject) => {
+        let settled = false;
+        let unsubscribe: () => void = () => {};
+        const finish = (id: bigint | null, reason?: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          unsubscribe();
+          if (id !== null) resolve(id);
+          else reject(reason || new Error("Could not identify the new Quick Play match"));
+        };
+        const timeout = setTimeout(
+          () => finish(null, new Error("Timed out waiting for the new match membership")),
+          10000
+        );
+        const check = () => {
+          if (this.connectionGeneration !== generation || this.conn !== conn ||
+              this.status !== "connected") {
+            finish(null, new Error("Connection changed during Quick Play"));
+            return;
+          }
+          const membership = Array.from(conn.db.myMemberships.iter())
+            .find((row) => !previousMatchIds.has(row.matchId));
+          if (membership) finish(membership.matchId);
+        };
+        // subscribe() invokes the listener synchronously; handle immediate resolution.
+        unsubscribe = this.subscribe(check);
+        if (settled) unsubscribe();
+      });
+
+      if (this.connectionGeneration !== generation || this.conn !== conn ||
+          this.status !== "connected") {
+        throw new Error("Connection changed during Quick Play");
+      }
+      await conn.reducers.addBot({ matchId, difficulty: "normal" });
+      await conn.reducers.startMatch({ matchId });
+      this.setActiveMatchId(matchId);
+      return matchId;
+    } finally {
+      this.quickPlayPending = false;
+    }
+  }
+
+  /** Gemini gameplay actions, all authorized and validated by SpacetimeDB. */
+  async placeStructure(kind: string, gridX: number, gridY: number): Promise<void> {
+    const matchId = this.getState().activeMatchId;
+    if (!this.conn || this.status !== "connected" || matchId === null)
+      throw new Error("No connected match for construction");
+    await this.conn.reducers.placeStructure({ matchId, kind, gridX, gridY });
+  }
+
+  /** Single atomic transaction for an entire validated build rectangle. */
+  async placeStructuresBox(
+    kind: string,
+    startX: number, startY: number,
+    endX: number, endY: number,
+  ): Promise<void> {
+    const matchId = this.getState().activeMatchId;
+    if (!this.conn || this.status !== "connected" || matchId === null)
+      throw new Error("No connected match for box construction");
+    await this.conn.reducers.placeStructuresBox({
+      matchId, kind, startX, startY, endX, endY,
+    });
+  }
+
+  async orderHarvest(shipId: bigint, nodeId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for salvage harvesting");
+    await this.conn.reducers.orderHarvest({ shipId, nodeId });
+  }
+
+  async orderMaterialHarvest(shipId: bigint, nodeId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for material collection");
+    await this.conn.reducers.orderMaterialHarvest({ shipId, nodeId });
+  }
+
+  async refitShip(
+    workshopId: bigint,
+    shipId: bigint,
+    kind: "reinforced_hull" | "high_output_engine",
+  ): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop refit");
+    await this.conn.reducers.refitShip({ workshopId, shipId, kind });
+  }
+
+  async enqueueShip(shipyardId: bigint, kind: string): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for ship production");
+    await this.conn.reducers.enqueueShip({ shipyardId, kind });
+  }
+
+  async repairShip(workshopId: bigint, shipId: bigint, requestedHp: number): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop repairs");
+    await this.conn.reducers.repairShip({ workshopId, shipId, requestedHp });
+  }
+
+  async repairStructure(workshopId: bigint, structureId: bigint, requestedHp: number): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop repairs");
+    await this.conn.reducers.repairStructure({ workshopId, structureId, requestedHp });
+  }
+
+  async upgradeWorkshop(workshopId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for Workshop upgrade");
+    await this.conn.reducers.upgradeWorkshop({ workshopId });
+  }
+
+  async cancelShipProduction(orderId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for shipyard production");
+    await this.conn.reducers.cancelShipProduction({ orderId });
+  }
+
+  async stopShip(shipId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for ship controls");
+    await this.conn.reducers.stopShip({ shipId });
+  }
+
+  async aimWeapon(sourceId: bigint, targetX: number, targetY: number): Promise<void> {
+    const ownShip = this.getState().myShips.find(ship => ship.id === sourceId);
+    if (!this.conn || this.status !== "connected" || !ownShip)
+      throw new Error("Select an owned ship to aim");
+    const desiredAngleDeg = Math.atan2(targetY - ownShip.y, targetX - ownShip.x) * 180 / Math.PI;
+    await this.conn.reducers.aimWeapon({
+      sourceType: "ship", sourceId, desiredAngleDeg,
+    });
+  }
+
+  async fireWeapon(sourceId: bigint, targetType: "ship" | "structure", targetId: bigint): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for combat");
+    await this.conn.reducers.fireWeapon({
+      sourceType: "ship", sourceId, targetType, targetId,
+    });
+  }
+
   async joinMatch(matchId: bigint): Promise<void> {
     if (!this.conn || this.status !== "connected") {
       throw new Error("Cannot join match: not connected to SpacetimeDB");
@@ -573,6 +818,20 @@ export class SpacetimeClient {
       targetX,
       targetY,
     });
+  }
+
+  /**
+   * Persistent, server-authoritative attack order. The server owns approach,
+   * turret aiming, cooldown and impact; the client only names the target once.
+   */
+  async issueAttackOrder(
+    shipId: bigint,
+    targetType: "ship" | "structure",
+    targetId: bigint,
+  ): Promise<void> {
+    if (!this.conn || this.status !== "connected")
+      throw new Error("Not connected for naval combat");
+    await this.conn.reducers.issueAttackOrder({ shipId, targetType, targetId });
   }
 
   getConnection(): DbConnection | null {

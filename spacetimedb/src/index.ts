@@ -1,20 +1,26 @@
 import { ScheduleAt } from "spacetimedb";
 import { t, SenderError } from "spacetimedb/server";
 import spacetimedb, {
-  motionSchedule, constructionSchedule, economySchedule,
+  motionSchedule, constructionSchedule, economySchedule, combatSchedule,
   ship, matchMember, factionState,
 } from "./schema.ts";
 import { deadlineMicroseconds } from "./sim/match-outcome.ts";
 import { factionKey, mayControlFaction } from "./sim/faction-ownership.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 export default spacetimedb;
+export { myMaterialDeposits, myMaterialBalances } from "./material-views.ts";
 import { generateDeterministicWorld } from "./sim/worldgen.ts";
+import { generateMaterialNodes } from "./sim/material-world.ts";
+import { ADVANCED_RESOURCE_KINDS, materialBalanceKey } from "./sim/materials.ts";
 import { ECONOMY_RULES, creditSalvage, shipDefinition } from "./sim/economy.ts";
 import { BOT_RULES } from "./sim/bot-policy.ts";
+import { COMBAT_RULES } from "./sim/combat.ts";
 import { dispatchMovement, dispatchConstruction } from "./sim/world-command-dispatch.ts";
+import { planBoxConstruction } from "./sim/box-construction.ts";
 import { nextWorkshopUpgrade } from "./sim/workshop.ts";
 import { decodeTerrainChunks, findTerrainPath } from "./sim/navigation.ts";
 import { advanceShipOnRoute, boundedDeltaSeconds, SHIP_MOTION_RULES } from "./sim/ship-motion.ts";
+import { shipSpeedMultiplier, NO_SHIP_REFITS } from "./sim/ship-refits.ts";
 import {
   CONSTRUCTION_RULES, initialStructures, structureDefinition, structureOnline,
   type StructureKind, type StructureShape,
@@ -75,6 +81,16 @@ export const createMatch = spacetimedb.reducer(
         regenPerSec: node.regenPerSec, contested: node.contested,
       });
     }
+    // Advanced materials live alongside the legacy Salvage/Iron nodes. This
+    // is additive: old persisted matches and currencies remain valid.
+    for (const node of generateMaterialNodes(world)) {
+      ctx.db.materialNode.insert({
+        id: 0n, matchId: created.id, kind: node.kind,
+        gridX: node.gridX, gridY: node.gridY,
+        capacity: node.capacity, remaining: node.capacity,
+        regenPerSec: node.regenPerSec, contested: node.contested,
+      });
+    }
     ctx.db.matchMember.insert({
       id: 0n, matchId: created.id, identity: ctx.sender, slot: 0,
       factionKey: factionKey(created.id, 0),
@@ -85,6 +101,13 @@ export const createMatch = spacetimedb.reducer(
       salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId: created.id, ownerSlot: 0,
+        materialKey: materialBalanceKey(created.id, 0, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
     const initial = world.spawns[0]!;
     for (const base of initialStructures(0, initial.gridX, initial.gridY)) {
       const definition = CONSTRUCTION_RULES.definitions[base.kind];
@@ -144,6 +167,13 @@ export const joinMatch = spacetimedb.reducer(
       controller: "human", salvage: CONSTRUCTION_RULES.startingSalvage,
       totalSalvageGathered: 0n, eliminated: false,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId, ownerSlot: slot,
+        materialKey: materialBalanceKey(matchId, slot, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
     const spawn = Array.from(ctx.db.worldSpawn.matchId.filter(matchId)).find(row => row.slot === slot);
     if (!spawn) throw new SenderError("Missing server-owned spawn assignment");
     for (const base of initialStructures(slot, spawn.gridX, spawn.gridY)) {
@@ -246,7 +276,10 @@ export const issueShipOrder = spacetimedb.reducer(
       ship: current, destination: { x: targetX, y: targetY },
       environment: env, destinationVisible: true,
     }, {
-      cancelHarvest: id => { ctx.db.harvestOrder.shipId.delete(id); },
+      cancelHarvest: id => {
+        ctx.db.harvestOrder.shipId.delete(id);
+        ctx.db.materialHarvestOrder.shipId.delete(id);
+      },
       setRoute: order => {
         const existing = ctx.db.shipRoute.shipId.find(shipId);
         if (!order) {
@@ -281,6 +314,8 @@ export const issueShipOrder = spacetimedb.reducer(
       },
     });
     if (!result.ok) throw new SenderError(result.reason);
+    // A successful move order replaces any persistent Attack Target order.
+    ctx.db.attackOrder.shipId.delete(shipId);
   },
 );
 
@@ -327,6 +362,9 @@ export const stopShip = spacetimedb.reducer(
     if (!lobby || !matchStillActive(lobby.phase, lobby.startedAtUs, ctx.timestamp.microsSinceUnixEpoch)) throw new SenderError("Match is not active");
     ctx.db.shipRoute.shipId.delete(shipId);
     ctx.db.harvestOrder.shipId.delete(shipId);
+    ctx.db.materialHarvestOrder.shipId.delete(shipId);
+    // Stop also cancels an active Attack Target order.
+    ctx.db.attackOrder.shipId.delete(shipId);
     ctx.db.ship.id.update({
       ...current,
       velocityX: 0, velocityY: 0,
@@ -395,6 +433,7 @@ export const advanceMatchSimulation = spacetimedb.reducer(
           hullAngleDeg: vessel.hullAngleDeg,
         },
         route.cellPath, route.cursor, world.mapCells, seconds,
+        shipSpeedMultiplier(ctx.db.shipRefit.shipId.find(vessel.id) ?? NO_SHIP_REFITS),
       );
 
       // Validate EACH actual travelled leg. A single start/end chord is not
@@ -498,8 +537,12 @@ export const placeStructure = spacetimedb.reducer(
         salvage: faction.salvage, mapCells: world.mapCells, terrain,
         structures: Array.from(ctx.db.structure.matchId.filter(matchId))
           .map(row => ({ ...row, kind: row.kind as StructureKind })),
-        deposits: Array.from(ctx.db.salvageNode.matchId.filter(matchId))
-          .map(row => ({ x: row.gridX, y: row.gridY })),
+        deposits: [
+          ...Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+          ...Array.from(ctx.db.materialNode.matchId.filter(matchId))
+            .map(row => ({ x: row.gridX, y: row.gridY })),
+        ],
         hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
           .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
       },
@@ -520,6 +563,108 @@ export const placeStructure = spacetimedb.reducer(
       },
     });
     if (!result.ok) throw new SenderError(result.reason);
+  },
+);
+
+/**
+ * Atomic box construction for the Gemini drag-to-build workflow.
+ * The ENTIRE rectangle is validated before the first debit/insert. Normal
+ * construction validators and schedules still apply to every individual
+ * structure, with temporary connected virtual platform footprints enabling
+ * construction beyond one cell from the originally completed base.
+ *
+ * Throwing SenderError aborts the whole SpacetimeDB transaction; there is
+ * never a partially paid / partially built rectangle.
+ */
+export const placeStructuresBox = spacetimedb.reducer(
+  {
+    matchId: t.u64(), kind: t.string(),
+    startX: t.u32(), startY: t.u32(), endX: t.u32(), endY: t.u32(),
+  },
+  (ctx, { matchId, kind, startX, startY, endX, endY }) => {
+    const match = ctx.db.match.id.find(matchId);
+    if (!match || !matchStillActive(match.phase, match.startedAtUs,
+      ctx.timestamp.microsSinceUnixEpoch))
+      throw new SenderError("Match is not active");
+    const member = Array.from(ctx.db.matchMember.matchId.filter(matchId))
+      .find(row => row.identity.isEqual(ctx.sender));
+    const faction = member ? Array.from(ctx.db.factionState.matchId.filter(matchId))
+      .find(row => row.slot === member.slot && row.controller === "human") : undefined;
+    if (!faction || faction.eliminated)
+      throw new SenderError("Cannot construct in another player's match");
+    const definition = structureDefinition(kind);
+    if (!definition || kind === "command_core")
+      throw new SenderError("Unknown or protected structure kind");
+    const world = ctx.db.worldConfig.matchId.find(matchId);
+    if (!world) throw new SenderError("Missing authoritative world");
+    const terrain = decodeTerrainChunks(
+      world.mapCells, Array.from(ctx.db.worldChunk.matchId.filter(matchId)),
+    );
+    const originalStructures = Array.from(ctx.db.structure.matchId.filter(matchId))
+      .map(row => ({ ...row, kind: row.kind as StructureKind }));
+    const base = {
+      kind: kind as StructureKind,
+      ownerSlot: faction.slot,
+      gridX: startX, gridY: startY,
+      salvage: faction.salvage,
+      mapCells: world.mapCells,
+      terrain, structures: originalStructures,
+      deposits: [
+        ...Array.from(ctx.db.salvageNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+        ...Array.from(ctx.db.materialNode.matchId.filter(matchId))
+          .map(row => ({ x: row.gridX, y: row.gridY })),
+      ],
+      hulls: Array.from(ctx.db.ship.matchId.filter(matchId))
+        .map(row => ({ x: row.x, y: row.y, radius: row.radiusCells })),
+    };
+    const plan = planBoxConstruction(base, endX, endY);
+    if (plan.reason) throw new SenderError(plan.reason);
+
+    // Reuse dispatchConstruction (debit, validation, timers) for each member
+    // of the plan; prior batch-only footprints are virtually connected but
+    // actual DB platforms remain incomplete until their completion events.
+    const virtual: StructureShape[] = [];
+    let remainingSalvage = faction.salvage;
+    for (const [index, cell] of plan.cells.entries()) {
+      const result = dispatchConstruction({
+        faction: {
+          matchId, slot: faction.slot, controller: "human",
+          eliminated: faction.eliminated,
+        },
+        request: {
+          ...base, gridX: cell.gridX, gridY: cell.gridY,
+          salvage: remainingSalvage,
+          structures: [...originalStructures, ...virtual],
+        },
+        nowUs: ctx.timestamp.microsSinceUnixEpoch,
+        locationAllowed: true,
+      }, {
+        setBalance: salvage => {
+          remainingSalvage = salvage;
+          ctx.db.factionState.id.update({ ...faction, salvage });
+        },
+        insertStructure: row => ctx.db.structure.insert({
+          id: 0n, ...row, lastFiredAtUs: -1n, turretAngleDeg: 0,
+          level: 1, upgradeRemainingUs: 0n, upgradeStartedAtUs: 0n,
+          complete: false,
+        }).id,
+        scheduleCompletion: (structureId, dueAtUs) => {
+          ctx.db.constructionSchedule.insert({
+            scheduledId: 0n, structureId,
+            scheduledAt: ScheduleAt.time(dueAtUs),
+          });
+        },
+      });
+      if (!result.ok) throw new SenderError(result.reason);
+      virtual.push({
+        id: -BigInt(index + 1), kind: kind as StructureKind,
+        ownerSlot: faction.slot,
+        gridX: cell.gridX, gridY: cell.gridY,
+        width: definition.width, height: definition.height,
+        complete: true,
+      });
+    }
   },
 );
 
@@ -636,25 +781,42 @@ export const completeConstruction = spacetimedb.reducer(
       const connected = structureOnline({ ...row, kind: row.kind as StructureKind }, shapes, world.mapCells);
       if (row.connected !== connected) ctx.db.structure.id.update({ ...row, connected });
     }
+    // A completed Cannon must defend even without a nearby human-issued
+    // attack. Keep one 10Hz combat scheduler for all cannons in the match;
+    // it sleeps again once no live cannon/attack/projectile remains.
+    if (target.kind === "cannon" &&
+        !Array.from(ctx.db.combatSchedule.matchId.filter(target.matchId)).length) {
+      ctx.db.combatSchedule.insert({
+        scheduledId: 0n, matchId: target.matchId,
+        scheduledAt: ScheduleAt.interval(COMBAT_RULES.tickMicroseconds),
+        lastTickAt: ctx.timestamp,
+      });
+    }
   },
 );
 
 
 /** Reducers are exported by the module entrypoint for generated bindings and tests. */
 export {
-  orderHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
+  orderHarvest, orderMaterialHarvest, enqueueShip, cancelShipProduction, advanceEconomy,
 } from "./economy-reducers.ts";
 
 export {
   repairStructure, repairShip, upgradeWorkshop,
 } from "./workshop-reducers.ts";
 
-export { aimWeapon, fireWeapon, advanceCombat } from "./combat-reducers.ts";
+export { aimWeapon, fireWeapon, issueAttackOrder, advanceCombat } from "./combat-reducers.ts";
+export { myAttackOrders, myBattleProjectiles, myBattleImpacts } from "./combat-views.ts";
 
 export { finishMatchAtDeadline } from "./match-reducers.ts";
+export { myCompletedStandings } from "./match-result-views.ts";
+export { refitShip } from "./ship-refit-reducers.ts";
+export { myShipRefits } from "./ship-refit-views.ts";
+export { myProductionJobs } from "./production-views.ts";
 
 export { addBot, removeBot } from "./bot-reducers.ts";
 
 export { advanceBots } from "./bot-simulation.ts";
 
 export { myVisibleEnemies, myStructures } from "./visibility-views.ts";
+export { myGeminiWorldChunks, myGeminiSalvage, myGeminiShips, myGeminiStructures } from "./gemini-world-views.ts";

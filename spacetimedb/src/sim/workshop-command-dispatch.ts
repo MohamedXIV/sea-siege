@@ -17,6 +17,8 @@ type RepairTarget = Readonly<{
   id: bigint; matchId: bigint; ownerSlot: number;
   type: "ship" | "structure"; kind: string; hp: number; level: number;
   complete: boolean; connected: boolean; x: number; y: number;
+  /** Server-derived installed hull-refit maximum HP bonus (ship only). */
+  maxHpBonus?: number;
 }>;
 const deny = (reason: string): CommandResult => ({ ok: false, reason });
 function workshopValid(faction: FactionCapability, workshop: Workshop | null): boolean {
@@ -52,8 +54,9 @@ export function dispatchWorkshopRepair(
   };
   if (!withinWorkshopRange(workshopCenter,{x:target.x,y:target.y},workshop!.level))
     return deny("Repair target out of range");
-  const maxHp = target.type === "ship" ? definition.hp :
-    maximumStructureHp(definition.hp,target.level,target.kind);
+  const maxHp = target.type === "ship"
+    ? definition.hp + (target.maxHpBonus ?? 0)
+    : maximumStructureHp(definition.hp,target.level,target.kind);
   // Catch malformed client requests as rejected command, not a partial write.
   if (!Number.isSafeInteger(params.requestedHp) || params.requestedHp <= 0)
     return deny("Invalid requested repair HP");

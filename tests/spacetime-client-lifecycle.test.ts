@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { SpacetimeClient } from "../src/network/spacetime-client";
 import { validateMatchIdInput, U64_MAX } from "../src/network/match-id-validation";
 import { DbConnection } from "../src/module_bindings";
+import { createServer } from "vite";
 
 function waitFor(predicate: () => boolean, timeoutMs = 10000, intervalMs = 50): Promise<void> {
   const start = Date.now();
@@ -407,20 +408,39 @@ describe("P0 Stabilization Verification Suite", () => {
 
   // 7. Codespaces Browser Preview Same-Origin Proxy
   describe("Codespaces Browser Preview Same-Origin Proxy", () => {
-    it("connects and applies subscriptions through the Vite dev proxy on port 5173", async () => {
-      const client = new SpacetimeClient("http://127.0.0.1:5173", "sea-siege-dev");
-      client.clearStoredToken();
+    it("connects and applies subscriptions through an isolated Vite dev proxy", async () => {
+      // Boot the actual Vite config on an OS-assigned port. The previous test
+      // assumed a separate 'npm run dev' was already listening on :5173:
+      // that made a healthy local SpacetimeDB look broken on Windows.
+      // This retains a real WS/proxy handshake assertion, not a mocked proxy.
+      const vite = await createServer({
+        server: { host: "127.0.0.1", port: 0, strictPort: true },
+        // This test exercises /v1 WebSocket proxying, not app module transforms.
+        // Prevent Vite's background HTML dep crawl from racing with vite.close()
+        // and logging esbuild "server is being restarted or closed" warnings.
+        optimizeDeps: { noDiscovery: true, include: [] },
+      });
+      let client: SpacetimeClient | null = null;
+      try {
+        await vite.listen();
+        const address = vite.httpServer?.address();
+        if (!address || typeof address === "string")
+          throw new Error("Vite did not bind an HTTP port");
 
-      client.connect();
-      await waitFor(() => client.getState().status === "connected", 8000);
-      await waitFor(() => client.getState().subscriptionStatus === "applied", 8000);
+        client = new SpacetimeClient(`http://127.0.0.1:${address.port}`, "sea-siege-dev");
+        client.clearStoredToken();
+        client.connect();
+        await waitFor(() =>
+          client!.getState().status === "connected" &&
+          client!.getState().subscriptionStatus === "applied", 12000
+        );
 
-      expect(client.getState().status).toBe("connected");
-      expect(client.getState().subscriptionStatus).toBe("applied");
-      expect(client.getState().identity).toBeTruthy();
-
-      client.disconnect();
-    }, 10000);
+        expect(client.getState().identity).toBeTruthy();
+      } finally {
+        client?.disconnect();
+        await vite.close();
+      }
+    }, 30000);
 
     it("resolves same-origin host in browser environment when accessing remote Codespaces hostname", () => {
       const originalWindow = globalThis.window;
@@ -537,4 +557,64 @@ describe("P0 Stabilization Verification Suite", () => {
       }
     });
   });
+});
+
+describe("Playable Parity: Quick Play", () => {
+  it("starts a genuine one-human versus server-bot match using the live backend", async () => {
+    const client = new SpacetimeClient(
+      "http://127.0.0.1:3000", "sea-siege-dev", "test:token:quick-play"
+    );
+    client.clearStoredToken();
+    try {
+      client.connect();
+      await waitFor(() =>
+        client.getState().status === "connected" &&
+        client.getState().subscriptionStatus === "applied", 8000
+      );
+
+      const launch = client.quickPlay();
+      await expect(client.quickPlay()).rejects.toThrow("already starting");
+      const matchId = await launch;
+
+      await waitFor(() =>
+        client.getState().activeMatchId === matchId &&
+        client.getState().activeMatch?.phase === "active" &&
+        client.getState().myShips.some(row => row.matchId === matchId), 10000
+      );
+
+      const state = client.getState();
+      expect(state.activeMatch?.maxSlots).toBe(2);
+      expect(state.myMembership?.matchId).toBe(matchId);
+      expect(state.myMembership?.slot).toBe(0);
+      expect(state.myFaction?.controller).toBe("human");
+      expect(state.myShips.every(ship => ship.ownerSlot === 0)).toBe(true);
+      // Open-battlefield visibility: the distant enemy is present at match
+      // start, even though no allied sensor could detect its spawn.
+      await waitFor(() => {
+        const enemies = client.getState().visibleEnemies;
+        return enemies.some(row => row.entityType === "ship") &&
+          enemies.some(row => row.entityType === "structure");
+      }, 8000);
+      expect(client.getState().visibleEnemies.every(row => row.matchId === matchId))
+        .toBe(true);
+      await waitFor(() => {
+        const world = client.getState();
+        return world.worldChunks.length > 0 && world.salvageNodes.length > 0 &&
+          world.battleShips.length >= 2 && world.battleStructures.length >= 14;
+      }, 8000);
+      const battlefield = client.getState();
+      expect(battlefield.worldChunks.every(row => row.matchId === matchId)).toBe(true);
+      expect(battlefield.salvageNodes.every(row => row.matchId === matchId)).toBe(true);
+      expect(battlefield.battleShips.map(row => row.ownerSlot).sort()).toEqual([0, 1]);
+      expect(battlefield.battleStructures.some(row =>
+        row.ownerSlot === 1 && row.kind === "command_core")).toBe(true);
+      expect(state.status).toBe("connected");
+      expect(state.subscriptionStatus).toBe("applied");
+      // StartMatch requires >=2 real server factions. The only client-side
+      // identity is the host; successful launch proves the bot seat was added.
+    } finally {
+      client.disconnect();
+      client.clearStoredToken();
+    }
+  }, 35000);
 });

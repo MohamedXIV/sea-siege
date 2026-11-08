@@ -14,7 +14,11 @@
 - [Playable Parity Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23) and implementation issues [#24–#29](https://github.com/MohamedXIV/sea-siege/issues/24)
 - [Long-term roadmap](./ROADMAP.md), [master Epic #1](https://github.com/MohamedXIV/sea-siege/issues/1), and [implementation snapshot](./docs/STATUS.md)
 
-**Default design decision for this recovery phase:** full *static terrain map* visible from the start; **no new persistent exploration Fog of War**. Existing tactical enemy contact authorization and private server information must remain secure.
+**Gameplay decision (3 Nov 2026): NO Fog of War.** All terrain, resource locations, rival bases and enemy ship positions are visible to authenticated match participants. Server-owned commands, credentials and other matches remain protected. [Open Battlefield #25](https://github.com/MohamedXIV/sea-siege/issues/25) implements this visible, Gemini-first RTS direction.
+
+> **Art/gameplay source-of-truth decision (3 Nov 2026):** discard the new project's independent ocean, ship, structure, map and RTS interaction visuals. Rebuild these **from the preserved Gemini prototype** in actual Phaser 4 and SpacetimeDB. Current progress, exact mapping and missing parity items are tracked in [Gemini Source of Truth](./docs/GEMINI_SOURCE_OF_TRUTH.md). This supersedes the earlier idea that Gemini was only loose inspiration. Existing real server authority, networking and tested validation remain.
+
+> **New economy direction (4 Nov 2026):** Keep combat-harvest hybrid ships and stationary Extractors, but add distinct Iron, Oil, Alloys and Radioisotopes, with richer location and recipe choices. [Resource Economy design and phased implementation](./docs/RESOURCE_ECONOMY.md). The additive first slice can collect advanced materials, but advanced upgrades are **not yet active**, and older matches retain their legacy Salvage balances.
 
 ## Primary gameplay reference
 
