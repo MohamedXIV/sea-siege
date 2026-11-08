@@ -29,7 +29,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
     state.status === "connected" && state.subscriptionStatus === "applied";
 
   return (
-    <div data-game-ui="true" className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between text-slate-100">
+    <div data-game-ui="true" data-game-hud="true" className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between text-slate-100">
       <header className="flex flex-wrap items-start justify-between gap-3 p-3 sm:p-4">
         <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-cyan-800/60 bg-slate-950/85 px-3 py-2 shadow-lg backdrop-blur-md">
           <Anchor className="size-5 text-cyan-300" />
