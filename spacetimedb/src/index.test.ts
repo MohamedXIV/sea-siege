@@ -797,7 +797,8 @@ it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", (
   const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
   expect(impact.kind).toBe("hit");
   expect(impact.x).toBeGreaterThan(own.x);
-  expect(impact.x).toBeLessThan(enemy.x);
+  // `enemy` is the pre-teleport snapshot; compare with the live target position.
+  expect(impact.x).toBeLessThan(test.db.ship.id.find(enemy.id)!.x);
   expect(test.db.combatSchedule.count()).toBe(1n);
   test.clock.advance(TimeDuration.fromMillis(900));
   const expiry = [...test.db.combatSchedule.iter()][0]!;
