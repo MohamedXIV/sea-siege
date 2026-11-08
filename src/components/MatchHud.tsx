@@ -1,10 +1,12 @@
-import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed } from "lucide-react";
+import { useState } from "react";
+import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed, SlidersHorizontal } from "lucide-react";
 import { FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT } from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
 import { TacticalOverview } from "@/components/TacticalOverview";
 import { GeminiCommandDock } from "@/components/GeminiCommandDock";
 import { MaterialInventory } from "@/components/MaterialInventory";
 import { MatchClock } from "@/components/MatchClock";
+import { CommandFeedback } from "@/components/CommandFeedback";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
 
 interface MatchHudProps {
@@ -18,6 +20,8 @@ interface MatchHudProps {
  * will be wired in their own vertical slices; don't display fake controls.
  */
 export function MatchHud({ state, onMenu }: MatchHudProps) {
+  // Keep the full desktop command dock; give small screens their battlefield back.
+  const [mobileCommandsOpen, setMobileCommandsOpen] = useState(false);
   const match = state.activeMatch;
   if (!match) return null;
 
@@ -38,6 +42,14 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
         </div>
         <div className="pointer-events-auto flex flex-wrap items-center gap-2">
           <MatchClock match={match} />
+          <Button size="sm" variant="outline" type="button"
+            className="border-sky-700 bg-slate-950/90 text-sky-200 sm:hidden"
+            aria-controls="sea-command-dock"
+            aria-expanded={mobileCommandsOpen}
+            onClick={() => setMobileCommandsOpen(open => !open)}>
+            <SlidersHorizontal className="size-4" aria-hidden="true" />
+            {mobileCommandsOpen ? "Hide commands" : "Commands"}
+          </Button>
           <div
             role="status"
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-semibold backdrop-blur-md ${
@@ -60,6 +72,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
         </div>
       </header>
 
+      <CommandFeedback />
       <TacticalOverview state={state} />
 
       <div className="flex flex-col items-start justify-end gap-2 p-3 sm:p-4">
@@ -69,7 +82,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
           </p>
         )}
 
-        <div className="pointer-events-auto w-full max-w-2xl rounded-lg border border-slate-700/70 bg-slate-950/85 p-3 shadow-xl backdrop-blur-md">
+        <div className="pointer-events-auto max-h-[min(65svh,38rem)] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-700/70 bg-slate-950/90 p-3 shadow-xl backdrop-blur-md">
           <MaterialInventory state={state} />
           <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div>
@@ -97,7 +110,9 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
               <div className="font-mono text-lg font-bold text-rose-300">{state.visibleEnemies.length}</div>
             </div>
           </div>
-          <GeminiCommandDock state={state} />
+          <div id="sea-command-dock" role="region" aria-label="Fleet and construction commands"
+            className={mobileCommandsOpen ? "block" : "hidden sm:block"}>
+            <GeminiCommandDock state={state} />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
             <div className="space-y-1">
               <span className="flex items-center gap-1">
@@ -124,6 +139,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
                 <LocateFixed className="size-3" /> Find Enemy
               </Button>
             </div>
+          </div>
           </div>
         </div>
       </div>
