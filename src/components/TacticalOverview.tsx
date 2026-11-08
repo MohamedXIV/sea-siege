@@ -10,9 +10,9 @@ interface TacticalOverviewProps { state: SpacetimeClientState }
 /** Gemini's 168px minimap: actual known terrain, salvage and *all* fleets. */
 export function TacticalOverview({ state }: TacticalOverviewProps) {
   const match = state.activeMatch;
-  if (!match) return null;
-  const cells = state.worldChunks[0]?.mapCells ?? cellsForSlots(match.maxSlots);
+  const cells = state.worldChunks[0]?.mapCells ?? cellsForSlots(match?.maxSlots ?? 2);
   const [focusCell, setFocusCell] = useState({ x: cells / 2, y: cells / 2 });
+  if (!match) return null;
   const panTo = (x: number, y: number) => {
     const target = {
       x: Math.max(0, Math.min(cells, x)),
