@@ -376,11 +376,18 @@ export class SeaScene extends Phaser.Scene {
   };
 
   private onEscape = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || !this.canUseWorldHotkey(event)) return;
+    if (event.key !== "Escape" || event.defaultPrevented ||
+        !document.querySelector('[data-game-hud="true"]')) return;
+    const target = event.target;
+    // Escape must cancel build immediately, even while its toolbar button
+    // remains focused; never intercept typing or other modal interactions.
+    if (target instanceof Element && target.closest(
+      'input, textarea, select, [contenteditable="true"]'
+    )) return;
     if (this.buildKind) {
       event.preventDefault();
       this.cancelBuilding();
-    } else {
+    } else if (this.canUseWorldHotkey(event)) {
       this.selectShips([]);
     }
   };
