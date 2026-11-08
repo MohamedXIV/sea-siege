@@ -84,13 +84,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
 
         <div className="pointer-events-auto max-h-[min(65svh,38rem)] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-700/70 bg-slate-950/90 p-3 shadow-xl backdrop-blur-md">
           <MaterialInventory state={state} />
-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-slate-400">Iron (legacy)</div>
-              <div className="font-mono text-lg font-bold text-amber-300">
-                {state.myFaction?.salvage ?? "—"}
-              </div>
-            </div>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
             <div>
               <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-400">
                 <Ship className="size-3" /> Fleet
