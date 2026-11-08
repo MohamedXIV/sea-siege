@@ -21,6 +21,10 @@ export default function App() {
   const menuOpen = menuOpenedForMatch === activeMatch?.id;
   const showResults = (finished || eliminated) && !menuOpen;
   const ready = status === "connected" && subscriptionStatus === "applied";
+  const connectionLabel = ready ? "Online"
+    : status === "error" || subscriptionStatus === "error" ? "Connection error"
+    : status === "disconnected" ? "Offline"
+    : status === "reconnecting" ? "Reconnecting" : "Connecting";
 
   return (
     <main className="relative min-h-svh overflow-hidden bg-[#040d17] text-slate-100">
@@ -40,9 +44,9 @@ export default function App() {
           <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(90deg,rgba(4,13,23,.97),rgba(4,13,23,.87)_64%,rgba(4,13,23,.72))]" />
           <div data-game-ui="true" className="pointer-events-none relative z-10 flex min-h-svh flex-col justify-between p-4 md:p-8">
             <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 border-b border-sky-500/20 pb-3">
-              <div className="flex items-center gap-3 font-mono text-xs uppercase tracking-wider text-sky-300">
-                <span className={`size-3 rounded-full ${ready ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
-                SpacetimeDB Authority Engine // {ready ? "Online" : "Connecting"}
+              <div role="status" className="flex items-center gap-3 font-mono text-xs uppercase tracking-wider text-sky-300">
+                <span aria-hidden="true" className={`size-3 rounded-full ${ready ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
+                Sea Siege · {connectionLabel}
               </div>
               <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
                 Client Identity:
@@ -99,7 +103,7 @@ export default function App() {
 
             <footer className="pointer-events-auto flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 pt-3 font-mono text-xs text-slate-500">
               <span className="flex items-center gap-1.5">
-                <Anchor className="size-3.5" /> SEA SIEGE // Gemini Pixel-Art Reference · Real Phaser 4 + SpacetimeDB
+                <Anchor className="size-3.5" /> SEA SIEGE · Naval skirmish
               </span>
               <span>LMB Select/Build · RMB Move · Scroll Zoom · E Enemy · H Home</span>
             </footer>
