@@ -32,7 +32,6 @@ If the module has not been published to this local instance, in another terminal
 
 ```powershell
 spacetime publish sea-siege-dev --server local --module-path ./spacetimedb
-npm run db:generate
 ```
 
 Allow **TCP port 3000 inbound on Windows' Private network profile only** if Windows Defender Firewall blocks the phone. Don't enable Public profiles or router port forwarding.
@@ -55,7 +54,10 @@ git switch --track origin/feat/capacitor-android-lan-prototype
 npm install
 npm install @capacitor/core@^8 @capacitor/android@^8
 npm install --save-dev @capacitor/cli@^8
-Copy-Item .env.mobile.example .env.mobile.local
+npm run db:generate
+if (-not (Test-Path .env.mobile.local)) {
+  Copy-Item .env.mobile.example .env.mobile.local
+}
 notepad .env.mobile.local
 ```
 
