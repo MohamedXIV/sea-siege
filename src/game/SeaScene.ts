@@ -30,6 +30,10 @@ export const GEMINI_BUILD_MODE_EVENT = "sea-siege:gemini-build-mode";
 export const GEMINI_SELECTION_EVENT = "sea-siege:gemini-selection";
 export const GEMINI_FEEDBACK_EVENT = "sea-siege:gemini-feedback";
 export const GEMINI_BUILD_PREVIEW_EVENT = "sea-siege:gemini-build-preview";
+export const MOBILE_ORDER_MODE_EVENT = "sea-siege:mobile-order-mode";
+export const MOBILE_ORDER_MODE_CHANGED_EVENT = "sea-siege:mobile-order-mode-changed";
+export const MOBILE_ZOOM_EVENT = "sea-siege:mobile-zoom";
+const MOBILE_ZOOM_FACTOR = 1.2;
 
 interface VesselArt {
   container: Phaser.GameObjects.Container;
@@ -112,6 +116,7 @@ export class SeaScene extends Phaser.Scene {
   private leftDrag: LeftDrag | null = null;
   private suppressRightUp = false;
   private suppressLeftUp = false;
+  private mobileOrderArmed = false;
   private buildKind: string | null = null;
   private buildPreview!: Phaser.GameObjects.Graphics;
   private cursorCell: { x: number; y: number } | null = null;
@@ -148,7 +153,17 @@ export class SeaScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (!this.isWorldPointer(pointer)) return;
-      const button = (pointer.event as MouseEvent).button;
+      // One finger drags the camera; a tap selects or performs one armed order.
+      // Construction still uses the existing cell and box-placement rules.
+      if (pointer.wasTouch && !this.buildKind) {
+        this.drag = {
+          x: pointer.x, y: pointer.y,
+          scrollX: this.cameras.main.scrollX,
+          scrollY: this.cameras.main.scrollY, moved: false,
+        };
+        return;
+      }
+      const button = pointer.wasTouch ? 0 : (pointer.event as MouseEvent).button;
       if (button === 2 && this.buildKind) {
         this.suppressRightUp = true;
         this.cancelBuilding();
@@ -220,13 +235,28 @@ export class SeaScene extends Phaser.Scene {
       );
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      const button = (pointer.event as MouseEvent).button;
+      const button = pointer.wasTouch ? 0 : (pointer.event as MouseEvent).button;
       const isWorld = this.isWorldPointer(pointer);
       const pan = this.drag;
       const left = this.leftDrag;
       this.drag = null;
       this.leftDrag = null;
       this.selectionGraphics.clear();
+      if (pointer.wasTouch) {
+        if (this.suppressLeftUp) { this.suppressLeftUp = false; return; }
+        if (!isWorld) return;
+        if (this.buildKind) {
+          if (!left) return;
+          if (left.moved) this.finishBoxBuild(left);
+          else this.pointerCommand(pointer, 0);
+          return;
+        }
+        if (!pan || pan.moved) return;
+        const order = this.mobileOrderArmed;
+        if (order) this.setMobileOrderArmed(false);
+        this.pointerCommand(pointer, order ? 2 : 0);
+        return;
+      }
       if (button === 2 && this.suppressRightUp) {
         this.suppressRightUp = false;
         return;
@@ -259,6 +289,8 @@ export class SeaScene extends Phaser.Scene {
     window.addEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.addEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     window.addEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
+    window.addEventListener(MOBILE_ORDER_MODE_EVENT, this.onMobileOrderMode);
+    window.addEventListener(MOBILE_ZOOM_EVENT, this.onMobileZoom);
     window.addEventListener("keydown", this.onNavigationHotkey);
     window.addEventListener("keydown", this.onEscape);
     window.addEventListener("contextmenu", this.onContextMenu, { capture: true });
@@ -277,6 +309,8 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(FOCUS_HOME_EVENT, this.focusHome);
     window.removeEventListener(FOCUS_MAP_CELL_EVENT, this.focusMapCell);
     window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
+    window.removeEventListener(MOBILE_ORDER_MODE_EVENT, this.onMobileOrderMode);
+    window.removeEventListener(MOBILE_ZOOM_EVENT, this.onMobileZoom);
     this.scale.off(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
     window.removeEventListener("keydown", this.onNavigationHotkey);
     window.removeEventListener("keydown", this.onEscape);
@@ -554,6 +588,27 @@ export class SeaScene extends Phaser.Scene {
     }
   }
 
+  private setMobileOrderArmed(armed: boolean): void {
+    this.mobileOrderArmed = armed;
+    window.dispatchEvent(new CustomEvent(MOBILE_ORDER_MODE_CHANGED_EVENT, {
+      detail: { armed },
+    }));
+  }
+
+  private onMobileOrderMode = (event: Event): void => {
+    const armed = (event as CustomEvent<{ armed?: boolean }>).detail?.armed === true;
+    this.setMobileOrderArmed(armed);
+  };
+
+  private onMobileZoom = (event: Event): void => {
+    const direction = (event as CustomEvent<{ direction?: "in" | "out" }>).detail?.direction;
+    if (direction !== "in" && direction !== "out") return;
+    this.cameras.main.setZoom(Phaser.Math.Clamp(
+      this.cameras.main.zoom * (direction === "in" ? MOBILE_ZOOM_FACTOR : 1 / MOBILE_ZOOM_FACTOR),
+      0.45, 2.4,
+    ));
+  };
+
   private reportOrderError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     window.dispatchEvent(new CustomEvent(GEMINI_FEEDBACK_EVENT, { detail: { message } }));
@@ -566,12 +621,15 @@ export class SeaScene extends Phaser.Scene {
    * the actual game canvas is a valid world command.
    */
   private isWorldPointer(pointer: Phaser.Input.Pointer): boolean {
-    const event = pointer.event as MouseEvent | undefined;
+    const event = pointer.event as MouseEvent | TouchEvent | undefined;
     if (!event || event.target !== this.game.canvas) return false;
-    return document.elementFromPoint(event.clientX, event.clientY) === this.game.canvas;
+    // TouchEvent stores viewport coordinates on changedTouches, not the event.
+    const point = "changedTouches" in event ? event.changedTouches[0] : event;
+    if (!point) return false;
+    return document.elementFromPoint(point.clientX, point.clientY) === this.game.canvas;
   }
 
-  private pointerCommand(pointer: Phaser.Input.Pointer): void {
+  private pointerCommand(pointer: Phaser.Input.Pointer, buttonOverride?: number): void {
     if (!this.isWorldPointer(pointer)) return;
     const state = spacetimeClient.getState();
     if (state.activeMatch?.phase !== "active") return;
@@ -579,7 +637,7 @@ export class SeaScene extends Phaser.Scene {
     const x = world.x / TILE, y = world.y / TILE;
     // Use the native released mouse button. Phaser's "leftButtonReleased"
     // reflects aggregate button state and can misinterpret pointer-up input.
-    const button = (pointer.event as MouseEvent).button;
+    const button = buttonOverride ?? (pointer.event as MouseEvent).button;
     if (this.buildKind) {
       if (button !== 0) return;
       const gridX = Math.floor(x), gridY = Math.floor(y);
