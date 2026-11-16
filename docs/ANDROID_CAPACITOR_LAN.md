@@ -1,6 +1,6 @@
 # Sea Siege Android — Capacitor LAN prototype
 
-> **Development-only prototype.** Native APK compilation and on-device validation must be done on Windows with Android SDK. This branch adds the shared web code, Capacitor configuration and helper scripts; the generated `android/` directory and `@capacitor/*` npm dependencies will be created/installed locally in the steps below. Do not merge this draft as release-ready until the generated project, dependency lockfile and device tests have been reviewed.
+> **Development-only prototype.** The Android project and Capacitor dependencies are tracked. The APK is for local testing, not a release. Physical-device and LAN validation remain required.
 
 ## Why this arrangement?
 
@@ -52,36 +52,15 @@ Use the feature branch, and keep work confined to this branch:
 git fetch origin
 git switch --track origin/feat/capacitor-android-lan-prototype
 npm install
-npm install @capacitor/core@^8 @capacitor/android@^8
-npm install --save-dev @capacitor/cli@^8
 npm run db:generate
-if (-not (Test-Path .env.mobile.local)) {
-  Copy-Item .env.mobile.example .env.mobile.local
-}
-notepad .env.mobile.local
-```
-
-Edit the local file (already ignored by Git) to match **your actual PC**:
-
-```dotenv
-VITE_SPACETIME_HOST=http://192.168.1.50:3000
-VITE_SPACETIME_DATABASE=sea-siege-dev
-```
-
-Keep the port consistent with the server and avoid committing local IPs.
-
-Build the production Vite bundle in `mobile` mode (there is a preflight check that rejects missing/loopback URLs):
-
-```powershell
 npm run mobile:build
 ```
 
-A regular `npm run build` still uses the web configuration and is unaffected.
+On Android, enter your PC’s actual Wi-Fi URL and database name in the server settings screen. The settings are saved on the device; changing them reloads the app. No LAN IP is embedded in the build. `npm run mobile:build` builds the bundled assets without a server address.
 
 ## 3. Generate the real native project and run on your phone
 
 ```powershell
-npx cap add android
 npm run mobile:android:prepare
 npx cap sync android
 npx cap open android
@@ -96,7 +75,7 @@ In Android Studio:
 3. Press **Run ▶**. Sea Siege should install and launch landscape.
 4. To produce a shareable debug APK instead, use **Build → Build Bundle(s) / APK(s) → Build APK(s)**. The conventional output is `android/app/build/outputs/apk/debug/app-debug.apk`. It is a **debug APK**, not a signed distribution release.
 
-If you changed the web code or your Wi-Fi IP, rebuild and re-sync before hitting Run again:
+If you changed the web code, rebuild and re-sync before hitting Run again. A new Wi-Fi IP can be entered in the app without rebuilding:
 
 ```powershell
 npm run mobile:android:sync
@@ -120,10 +99,10 @@ npm run mobile:android:sync
 | Symptom | Check |
 |---|---|
 | App shows only Connecting | Wrong LAN IPv4/port, database name, Windows Private firewall, server bound to loopback, or Wi-Fi client isolation |
-| It connects on Windows but not phone | Remember `localhost` on the phone is the phone itself. `VITE_SPACETIME_HOST` is compiled at build time: edit `.env.mobile.local`, rebuild and sync |
+| It connects on Windows but not phone | Remember `localhost` on the phone is the phone itself. Open Server settings in the app and enter the actual PC address |
 | Black or blank screen | Inspect Android Studio Logcat / WebView console; ensure `npm run mobile:build` produced `dist/index.html` before sync |
 | Build cannot find Android SDK | Configure Android Studio SDK Manager and Gradle JDK; allow its initial SDK downloads |
-| HTML works, but realtime fails | Confirm WebSocket access to port 3000 and that the local server's database name matches `VITE_SPACETIME_DATABASE` |
+| HTML works, but realtime fails | Confirm WebSocket access to port 3000 and that the database name matches the app’s server settings |
 | On WSL2/Docker | Expose the service to the Windows host/LAN; `0.0.0.0` inside a container alone may not be enough |
 | Android reports cleartext blocked | Re-run `npx cap sync android` after checking the **development-only** `server.cleartext` and scheme in `capacitor.config.json` |
 
@@ -131,6 +110,6 @@ npm run mobile:android:sync
 
 The local server has no TLS and the bundle uses HTTP. It's for a trusted home network and testing only, not use over public Wi-Fi or the Internet. Don't forward the SpacetimeDB port on your router. Revisit auth, HTTPS/WSS, Android network policy and logging before any real release.
 
-### Branch completion after local verification
+### Source and build outputs
 
-The native Android project and npm dependency changes are intentionally generated on the developer's machine (an Android SDK/executor isn't available in the remote authoring environment). After the initial device test, commit the resulting `android/` source/Gradle wrapper files, `package.json` and `package-lock.json` to this **same feature branch**, while excluding `android/local.properties`, native build outputs and `.env.mobile.local`. Review generated .gitignore before staging. Do not merge #41–#44 automatically.
+The native project and Gradle wrapper are tracked. Local SDK paths, build outputs, APKs and signing keys must remain untracked. Run `npm run mobile:android:sync` before `cd android && ./gradlew assembleDebug`. Retrieve the debug APK from `android/app/build/outputs/apk/debug/app-debug.apk`.

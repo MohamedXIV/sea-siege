@@ -1,3 +1,4 @@
+import { readAndroidServerConfig } from "./android-server-config";
 import {
   DbConnection,
   type SubscriptionHandle,
@@ -104,9 +105,12 @@ export class SpacetimeClient {
   private customTokenKey?: string;
 
   constructor(host?: string, database?: string, customTokenKey?: string) {
+    const androidConfig = readAndroidServerConfig();
     let resolvedHost: string;
     if (host) {
       resolvedHost = host;
+    } else if (androidConfig) {
+      resolvedHost = androidConfig.host;
     } else if (
       typeof import.meta !== "undefined" &&
       import.meta.env?.VITE_SPACETIME_HOST
@@ -137,6 +141,7 @@ export class SpacetimeClient {
     this.host = resolvedHost;
     this.database =
       database ||
+      androidConfig?.database ||
       (typeof import.meta !== "undefined" &&
         import.meta.env?.VITE_SPACETIME_DATABASE) ||
       "sea-siege-dev";
