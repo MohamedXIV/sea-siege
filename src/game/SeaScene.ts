@@ -345,6 +345,7 @@ export class SeaScene extends Phaser.Scene {
     this.selectEntity(null);
     this.cursorCell = null;
     this.buildKind = null;
+    if (this.mobileOrderArmed) this.setMobileOrderArmed(false);
     this.buildPreview?.clear();
   }
 
