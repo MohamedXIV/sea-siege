@@ -375,6 +375,7 @@ export class SeaScene extends Phaser.Scene {
   private onBuildMode = (event: Event): void => {
     const kind = (event as CustomEvent<{ kind: string | null }>).detail?.kind ?? null;
     this.buildKind = kind;
+    if (kind && this.mobileOrderArmed) this.setMobileOrderArmed(false);
     this.leftDrag = null;
     this.cursorCell = null;
     this.selectionGraphics.clear();
