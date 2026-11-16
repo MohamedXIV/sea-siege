@@ -15,7 +15,11 @@
     "db:build": "spacetime build --module-path ./spacetimedb",
     "db:generate": "spacetime generate --lang typescript --module-path ./spacetimedb --out-dir ./src/module_bindings",
     "db:typecheck": "npm --prefix spacetimedb run typecheck",
-    "db:test": "npm --prefix spacetimedb test"
+    "db:test": "npm --prefix spacetimedb test",
+    "mobile:build": "node scripts/check-mobile-env.mjs && npm run typecheck && vite build --mode mobile",
+    "mobile:android:prepare": "node scripts/prepare-android-native.mjs",
+    "mobile:android:sync": "npm run mobile:build && npx cap sync android",
+    "mobile:android:open": "npx cap open android"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
