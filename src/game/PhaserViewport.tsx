@@ -34,7 +34,7 @@ export function PhaserViewport() {
       role="region"
       onPointerDown={() => holder.current?.focus({ preventScroll: true })}
       className="absolute inset-0 touch-none focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-cyan-300"
-      aria-label="Sea Siege battlefield. Use the mouse to select and command ships; H focuses home, E focuses the enemy and Escape cancels building."
+      aria-label="Sea Siege battlefield. On touch screens tap to select, drag to pan, or press Order and tap a target. With a mouse, left-click selects and right-click commands. H focuses home and E focuses the enemy."
     />
   );
 }
