@@ -16,6 +16,8 @@ import { shipsInSelectionBox } from "./input/selection-box";
 import { selectStructureAt } from "./input/structure-selection";
 import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
+import { resolveWorldShortcut } from "./input/keyboard-shortcuts";
+import { gameSettingsStore } from "../settings/settings-store";
 import { shipWakeSegments } from "./vfx/ship-wake";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
 import {
@@ -404,26 +406,31 @@ export class SeaScene extends Phaser.Scene {
   }
 
   private onNavigationHotkey = (event: KeyboardEvent): void => {
-    if (event.repeat || !this.canUseWorldHotkey(event)) return;
-    if (event.code === "KeyH") this.focusHome();
-    else if (event.code === "KeyE") this.focusEnemy();
-    else return;
+    const action = resolveWorldShortcut(event, gameSettingsStore.getSnapshot(), this.canUseWorldHotkey(event));
+    if (action === "focusHome") this.focusHome();
+    else if (action === "focusEnemy") this.focusEnemy();
+    else return; // Cancel is owned by onEscape, so it never dispatches twice.
     event.preventDefault();
   };
 
   private onEscape = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || event.defaultPrevented ||
-        !document.querySelector('[data-game-hud="true"]')) return;
+    if (!document.querySelector('[data-game-hud="true"]')) return;
     const target = event.target;
-    // Escape must cancel build immediately, even while its toolbar button
-    // remains focused; never intercept typing or other modal interactions.
-    if (target instanceof Element && target.closest(
-      'input, textarea, select, [contenteditable="true"]'
-    )) return;
+    const inModalOrText = target instanceof Element && !!target.closest(
+      '[role="dialog"], [aria-modal="true"], input, textarea, select, [contenteditable="true"]'
+    );
+    if (inModalOrText) return;
+    // Preserve Escape cancellation while a construction toolbar button is focused.
+    const hudBuildCancel = this.buildKind !== null && target instanceof Element &&
+      !!target.closest('[data-game-hud="true"]');
+    const action = resolveWorldShortcut(event, gameSettingsStore.getSnapshot(),
+      this.canUseWorldHotkey(event) || hudBuildCancel);
+    if (action !== "cancelWorldAction") return;
     if (this.buildKind) {
       event.preventDefault();
       this.cancelBuilding();
-    } else if (this.canUseWorldHotkey(event)) {
+    } else {
+      event.preventDefault();
       this.selectShips([]);
     }
   };

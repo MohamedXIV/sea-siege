@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed, SlidersHorizontal, Crosshair, Plus, Minus } from "lucide-react";
+import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed, SlidersHorizontal, Crosshair, Plus, Minus, Settings2 } from "lucide-react";
 import {
   FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT,
   MOBILE_ORDER_MODE_EVENT, MOBILE_ORDER_MODE_CHANGED_EVENT, MOBILE_ZOOM_EVENT,
@@ -11,10 +11,13 @@ import { MaterialInventory } from "@/components/MaterialInventory";
 import { MatchClock } from "@/components/MatchClock";
 import { CommandFeedback } from "@/components/CommandFeedback";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
+import { useGameSettings } from "@/settings/use-game-settings";
+import { formatKeyBinding } from "@/settings/keybindings";
 
 interface MatchHudProps {
   state: SpacetimeClientState;
   onMenu: () => void;
+  onSettings: (opener: HTMLElement) => void;
 }
 
 /**
@@ -22,7 +25,8 @@ interface MatchHudProps {
  * Gameplay controls stay in Phaser. Construction, production and combat tools
  * will be wired in their own vertical slices; don't display fake controls.
  */
-export function MatchHud({ state, onMenu }: MatchHudProps) {
+export function MatchHud({ state, onMenu, onSettings }: MatchHudProps) {
+  const settings = useGameSettings();
   // Keep the full desktop command dock; give small screens their battlefield back.
   const [mobileCommandsOpen, setMobileCommandsOpen] = useState(false);
   const [mobileOrderArmed, setMobileOrderArmed] = useState(false);
@@ -102,6 +106,11 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
             <span className={`size-2 rounded-full ${connected ? "bg-emerald-400" : "bg-amber-400"}`} />
             {connected ? "Live match" : "Reconnecting"}
           </div>
+          <Button size="sm" variant="outline" type="button" data-game-settings-trigger="true"
+            className="border-slate-700 bg-slate-950/85 backdrop-blur-md"
+            onClick={event => onSettings(event.currentTarget)}>
+            <Settings2 className="size-4" aria-hidden="true" /> Settings
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -155,7 +164,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
                 <span className="hidden lg:inline">LMB select / drag to box-select · RMB move · RMB enemy attack</span>
                 <span className="lg:hidden">Tap ship to select · Order then tap target · Drag sea to pan</span>
               </span>
-              <div>Drag empty sea to deselect · Esc/RMB cancel build · E enemy · H home</div>
+              <div>Drag empty sea to deselect · {formatKeyBinding(settings.controls.keybindings.cancelWorldAction)}{settings.controls.keybindings.cancelWorldAction.code === "Escape" ? "" : "/Esc"}/RMB cancel build · {formatKeyBinding(settings.controls.keybindings.focusEnemy)} enemy · {formatKeyBinding(settings.controls.keybindings.focusHome)} home</div>
             </div>
             <div className="flex items-center gap-1">
               <Button
