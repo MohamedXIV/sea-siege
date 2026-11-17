@@ -36,7 +36,7 @@ export function CommandFeedback() {
   }, [notice]);
 
   return (
-    <div className="pointer-events-none absolute left-1/2 top-20 z-20 w-[min(90vw,26rem)] -translate-x-1/2" data-command-feedback>
+    <div className="pointer-events-none absolute left-1/2 top-2 z-20 w-[min(90vw,26rem)] -translate-x-1/2" data-command-feedback>
       {notice && (
         <div key={notice.id} role={notice.success ? "status" : "alert"}
           className={`game-feedback-enter flex items-start gap-2 rounded-lg border px-3 py-2 text-sm shadow-xl backdrop-blur-md ${

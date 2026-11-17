@@ -21,6 +21,12 @@
   --input: #2a4450;
   --ring: #5cbbc0;
   --radius: 0.625rem;
+  --sea-hud-surface: rgb(4 18 29 / 95%);
+  --sea-hud-inset: rgb(12 34 46 / 94%);
+  --sea-hud-border: #416474;
+  --sea-hud-border-muted: #294452;
+  --sea-hud-focus: #91e1e1;
+  --sea-hud-min-touch: 44px;
 }
 
 @theme inline {
@@ -51,6 +57,117 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--background); color: var(--foreground); font-family: Inter, system-ui, sans-serif; }
 button { cursor: pointer; }
+
+/* Compact command instrumentation: flat pixel edges, no game-art dependencies. */
+.sea-hud-root {
+  font-variant-numeric: tabular-nums;
+}
+
+.sea-hud-panel,
+.sea-hud-overview {
+  background: var(--sea-hud-surface);
+  border: 1px solid var(--sea-hud-border);
+  border-radius: 0.25rem;
+  box-shadow: 0 3px 0 rgb(0 8 15 / 85%), inset 0 1px rgb(190 238 237 / 12%);
+}
+
+.sea-safe-side {
+  padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}
+
+.sea-hud-glance {
+  width: min(100%, 65rem);
+}
+
+.sea-hud-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 0.375rem;
+  padding: 0.375rem;
+}
+
+.sea-hud-resource,
+.sea-hud-count {
+  border: 1px solid var(--sea-hud-border-muted);
+  background: var(--sea-hud-inset);
+  padding: 0.3rem 0.45rem;
+}
+
+.sea-hud-command-panel {
+  max-height: min(52svh, 30rem);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.sea-hud-root [data-slot="button"] {
+  border-radius: 0.25rem;
+}
+
+.sea-hud-root :where(button, [tabindex]):focus-visible {
+  outline-color: var(--sea-hud-focus);
+}
+
+@media (max-width: 1023px) {
+  .sea-hud-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sea-hud-counts {
+    border-top: 1px solid var(--sea-hud-border-muted);
+    padding-top: 0.3rem;
+  }
+
+  .sea-hud-touch-button,
+  .sea-hud-command-panel button {
+    min-height: var(--sea-hud-min-touch);
+    min-width: var(--sea-hud-min-touch);
+  }
+
+  .sea-hud-command-panel {
+    max-height: min(58svh, 22rem);
+  }
+}
+
+@media (max-height: 520px) and (max-width: 1023px) {
+  .sea-hud-header {
+    gap: 0.3rem;
+  }
+
+  .sea-hud-header [role="timer"] > span:last-child {
+    display: none;
+  }
+
+  .sea-hud-overview {
+    padding: 0.25rem;
+  }
+
+  .sea-hud-command-panel {
+    max-width: min(28rem, calc(100vw - 9rem));
+    max-height: min(52svh, 17rem);
+  }
+
+  .sea-hud-minimap {
+    width: 7rem;
+    padding: 0.375rem;
+  }
+
+  .sea-hud-resource,
+  .sea-hud-count {
+    padding: 0.2rem 0.4rem;
+  }
+}
+
+@media (min-width: 760px) and (max-width: 1023px) and (max-height: 520px) {
+  .sea-hud-overview {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+
+  .sea-hud-counts {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
 
 /* Readable focus for native controls that are not wrapped by shadcn Button. */
 :where(button, input, select, textarea, [tabindex]):focus-visible {

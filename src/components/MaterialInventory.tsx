@@ -1,34 +1,29 @@
-import type { SpacetimeClientState } from "@/network/spacetime-client";
-import {
-  RESOURCE_TYPES, type ResourceKind, type ResourceWallet,
-} from "../../spacetimedb/src/sim/materials";
+import { RESOURCE_TYPES, type ResourceKind } from "../../spacetimedb/src/sim/materials";
+import type { HudSummary } from "@/components/hud/hud-view-model";
 
 const kinds: readonly ResourceKind[] = ["iron", "oil", "alloy", "isotope"];
 
-/**
- * Live, owned wallet. Legacy Salvage is deliberately shown as Iron Scrap
- * during migration; other resources come from the new private typed ledger.
- */
-export function MaterialInventory({ state }: { state: SpacetimeClientState }) {
-  const wallet: ResourceWallet = {
-    iron: state.myFaction?.salvage ?? 0,
-    oil: state.materialBalances.find(row => row.kind === "oil")?.amount ?? 0,
-    alloy: state.materialBalances.find(row => row.kind === "alloy")?.amount ?? 0,
-    isotope: state.materialBalances.find(row => row.kind === "isotope")?.amount ?? 0,
-  };
+/** Only amounts exposed by the authenticated match subscription appear here. */
+export function MaterialInventory({ summary }: { summary: HudSummary }) {
   return (
-    <div className="grid grid-cols-4 gap-1.5 border-b border-slate-700/60 pb-2.5">
-      {kinds.map(kind => (
-        <div key={kind} className="min-w-0 rounded border border-slate-800/70 bg-slate-900/50 px-2 py-1.5">
-          <div className="flex items-center gap-1 text-[10px] text-slate-400">
-            <span className="size-2 shrink-0 rounded-sm" style={{ backgroundColor: RESOURCE_TYPES[kind].color }} />
-            <span className="truncate">{RESOURCE_TYPES[kind].name}</span>
+    <section aria-label="Owned material balances" className="sea-hud-resources grid grid-cols-4 gap-1.5">
+      {kinds.map(kind => {
+        const amount = summary.materials[kind];
+        const resource = RESOURCE_TYPES[kind];
+        return (
+          <div key={kind} className="sea-hud-resource min-w-0" title={resource.name}
+            aria-label={`${resource.name}: ${amount === null ? "Unavailable" : amount.toLocaleString("en-US")}`}>
+            <div className="flex min-w-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+              <span className="size-2 shrink-0 border border-white/25" style={{ backgroundColor: resource.color }} aria-hidden="true" />
+              <span className="truncate">{resource.name}</span>
+            </div>
+            <div data-resource-amount={amount ?? "unknown"}
+              className="mt-0.5 truncate font-mono text-sm font-bold tabular-nums text-slate-50">
+              {amount === null ? "—" : amount.toLocaleString("en-US")}
+            </div>
           </div>
-          <div className="font-mono text-sm font-bold" style={{ color: RESOURCE_TYPES[kind].color }}>
-            {wallet[kind].toLocaleString()}
-          </div>
-        </div>
-      ))}
-    </div>
+        );
+      })}
+    </section>
   );
 }
