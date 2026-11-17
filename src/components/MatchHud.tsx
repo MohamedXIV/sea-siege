@@ -1,6 +1,9 @@
-import { useState } from "react";
-import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed, SlidersHorizontal } from "lucide-react";
-import { FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT } from "@/game/SeaScene";
+import { useEffect, useState } from "react";
+import { Anchor, Compass, Menu, Radio, Ship, Waves, LocateFixed, SlidersHorizontal, Crosshair, Plus, Minus } from "lucide-react";
+import {
+  FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT,
+  MOBILE_ORDER_MODE_EVENT, MOBILE_ORDER_MODE_CHANGED_EVENT, MOBILE_ZOOM_EVENT,
+} from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
 import { TacticalOverview } from "@/components/TacticalOverview";
 import { GeminiCommandDock } from "@/components/GeminiCommandDock";
@@ -22,6 +25,16 @@ interface MatchHudProps {
 export function MatchHud({ state, onMenu }: MatchHudProps) {
   // Keep the full desktop command dock; give small screens their battlefield back.
   const [mobileCommandsOpen, setMobileCommandsOpen] = useState(false);
+  const [mobileOrderArmed, setMobileOrderArmed] = useState(false);
+  useEffect(() => {
+    const onChanged = (event: Event) => {
+      setMobileOrderArmed(
+        (event as CustomEvent<{ armed?: boolean }>).detail?.armed === true
+      );
+    };
+    window.addEventListener(MOBILE_ORDER_MODE_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(MOBILE_ORDER_MODE_CHANGED_EVENT, onChanged);
+  }, []);
   const match = state.activeMatch;
   if (!match) return null;
 
@@ -30,7 +43,7 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
 
   return (
     <div data-game-ui="true" data-game-hud="true" className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between text-slate-100">
-      <header className="flex flex-wrap items-start justify-between gap-3 p-3 sm:p-4">
+      <header className="sea-safe-top flex flex-wrap items-start justify-between gap-3 p-3 sm:p-4">
         <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-cyan-800/60 bg-slate-950/85 px-3 py-2 shadow-lg backdrop-blur-md">
           <Anchor className="size-5 text-cyan-300" />
           <div>
@@ -43,7 +56,35 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
         <div className="pointer-events-auto flex flex-wrap items-center gap-2">
           <MatchClock match={match} />
           <Button size="sm" variant="outline" type="button"
-            className="border-sky-700 bg-slate-950/90 text-sky-200 sm:hidden"
+            aria-pressed={mobileOrderArmed}
+            aria-label={mobileOrderArmed ? "Cancel target order" : "Order selected ships: then tap a destination or enemy"}
+            className={`lg:hidden ${mobileOrderArmed
+              ? "border-amber-500 bg-amber-950/95 text-amber-200"
+              : "border-sky-700 bg-slate-950/90 text-sky-200"}`}
+            onClick={() => window.dispatchEvent(new CustomEvent(MOBILE_ORDER_MODE_EVENT, {
+              detail: { armed: !mobileOrderArmed },
+            }))}>
+            <Crosshair className="size-4" aria-hidden="true" />
+            {mobileOrderArmed ? "Tap target" : "Order"}
+          </Button>
+          <Button size="sm" variant="outline" type="button"
+            aria-label="Zoom out"
+            className="lg:hidden border-sky-700 bg-slate-950/90 text-sky-200"
+            onClick={() => window.dispatchEvent(new CustomEvent(MOBILE_ZOOM_EVENT, {
+              detail: { direction: "out" },
+            }))}>
+            <Minus className="size-4" aria-hidden="true" />
+          </Button>
+          <Button size="sm" variant="outline" type="button"
+            aria-label="Zoom in"
+            className="lg:hidden border-sky-700 bg-slate-950/90 text-sky-200"
+            onClick={() => window.dispatchEvent(new CustomEvent(MOBILE_ZOOM_EVENT, {
+              detail: { direction: "in" },
+            }))}>
+            <Plus className="size-4" aria-hidden="true" />
+          </Button>
+          <Button size="sm" variant="outline" type="button"
+            className="border-sky-700 bg-slate-950/90 text-sky-200 lg:hidden"
             aria-controls="sea-command-dock"
             aria-expanded={mobileCommandsOpen}
             onClick={() => setMobileCommandsOpen(open => !open)}>
@@ -105,12 +146,14 @@ export function MatchHud({ state, onMenu }: MatchHudProps) {
             </div>
           </div>
           <div id="sea-command-dock" role="region" aria-label="Fleet and construction commands"
-            className={mobileCommandsOpen ? "block" : "hidden sm:block"}>
+            className={mobileCommandsOpen ? "block" : "hidden lg:block"}>
             <GeminiCommandDock state={state} />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-700/60 pt-2 text-[11px] text-slate-300">
             <div className="space-y-1">
               <span className="flex items-center gap-1">
-                <Compass className="size-3 text-cyan-300" /> LMB select / drag to box-select · RMB move · RMB enemy attack
+                <Compass className="size-3 text-cyan-300" />
+                <span className="hidden lg:inline">LMB select / drag to box-select · RMB move · RMB enemy attack</span>
+                <span className="lg:hidden">Tap ship to select · Order then tap target · Drag sea to pan</span>
               </span>
               <div>Drag empty sea to deselect · Esc/RMB cancel build · E enemy · H home</div>
             </div>

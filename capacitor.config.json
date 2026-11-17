@@ -1,0 +1,10 @@
+{
+  "appId": "com.mohamedxiv.seasiege",
+  "appName": "Sea Siege",
+  "webDir": "dist",
+  "backgroundColor": "#07121b",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  }
+}

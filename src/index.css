@@ -67,6 +67,12 @@ button { cursor: pointer; }
   animation: game-feedback-appear 180ms ease-out both;
 }
 
+.sea-safe-top {
+  padding-top: max(0.75rem, env(safe-area-inset-top, 0px));
+  padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
+}
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after {

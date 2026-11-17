@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sea Siege</string>
+    <string name="title_activity_main">Sea Siege</string>
+    <string name="package_name">com.mohamedxiv.seasiege</string>
+    <string name="custom_url_scheme">com.mohamedxiv.seasiege</string>
+</resources>
