@@ -15,9 +15,11 @@ interface GameSettingsDialogProps {
 }
 
 /** Controlled dialogs without DialogTrigger need explicit keyboard-focus restoration. */
-export function restoreSettingsOpenerFocus(opener: HTMLElement | null, fallback: HTMLElement | null): void {
+export function restoreSettingsOpenerFocus(opener: HTMLElement | null, fallback: HTMLElement | null,
+  resultsDialog: HTMLElement | null = null): void {
   if (opener?.isConnected) opener.focus();
   else if (fallback?.isConnected) fallback.focus();
+  else if (resultsDialog?.isConnected) resultsDialog.focus();
 }
 
 export function GameSettingsDialog({ open, onOpenChange, returnFocusTo }: GameSettingsDialogProps) {
@@ -39,7 +41,8 @@ export function GameSettingsDialog({ open, onOpenChange, returnFocusTo }: GameSe
       onCloseAutoFocus={event => {
         event.preventDefault();
         restoreSettingsOpenerFocus(returnFocusTo,
-          document.querySelector<HTMLElement>('[data-game-settings-trigger="true"]'));
+          document.querySelector<HTMLElement>('[data-game-settings-trigger="true"]'),
+          document.querySelector<HTMLElement>('[role="dialog"][aria-labelledby="match-result-heading"]'));
       }}>
       <DialogHeader>
         <DialogTitle>Game Settings</DialogTitle>

@@ -1,6 +1,12 @@
 import type { GameSettingsV1 } from "../../settings/game-settings";
 import { GAME_ACTION_IDS, type GameActionId } from "../../settings/input-actions";
 
+/** Only Escape may bypass a focused HUD button to cancel construction. */
+export function allowHudBuildCancel(event: Pick<KeyboardEvent, "code">,
+  hasActiveBuild: boolean, targetInHud: boolean): boolean {
+  return event.code === "Escape" && hasActiveBuild && targetInHud;
+}
+
 /** World input is owned by Phaser only when React controls do not have focus. */
 export function resolveWorldShortcut(event: KeyboardEvent, settings: GameSettingsV1,
   worldHotkeysAllowed: boolean): GameActionId | null {

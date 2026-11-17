@@ -19,15 +19,17 @@ The typed schema reserves zoom sensitivity, UI scale, contrast and reduced-motio
 
 | Gate | Status |
 | --- | --- |
-| Focused settings, keybinding, routing, store and SSR/focus-helper tests | **PASS** — 28 tests |
+| Focused settings, keybinding, routing, store and SSR/focus-helper tests | **PASS** — 30 tests |
 | Simulation unit tests (`npm run test:unit`) | **PASS** — 178 tests |
-| Full client tests (`npm run test:client`) | **BLOCKED overall:** 52 collected tests pass; two preexisting suites fail before collection without generated `src/module_bindings` |
+| Full client tests (`npm run test:client`) | **BLOCKED overall:** 54 collected tests pass; two preexisting suites fail before collection without generated `src/module_bindings` |
 | Project TypeScript and build (`npm run typecheck`, `npm run build`) | **BLOCKED** by absent SpacetimeDB generated bindings and cascading dependent types |
 | Isolated strict TypeScript over new pure Settings modules | **PASS** |
 | Live desktop browser, focus trap, refresh, in-match remapping | **NOT RUN**; app needs generated bindings/runtime |
 | Android device/WebView smoke | **NOT RUN** |
 
 `src/module_bindings` is git-ignored/generated and absent in the fresh clone; this blocker existed before work started. No stubs or backend changes were introduced to hide it.
+
+Independent final review also verified two additional cases: only universal Escape may cancel build from a focused HUD button (remapped keys must not steal Space/Enter activation); and if a match ends while Settings is open, focus can return to the match-result dialog when the opener has unmounted. Pure regressions cover these rules; live browser verification is still required.
 
 ## Acceptance before merging
 

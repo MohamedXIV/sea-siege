@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GAME_SETTINGS, sanitizeGameSettings } from "../src/settings/game-settings";
 import { rebindAction } from "../src/settings/keybindings";
-import { resolveWorldShortcut } from "../src/game/input/keyboard-shortcuts";
+import { resolveWorldShortcut, allowHudBuildCancel } from "../src/game/input/keyboard-shortcuts";
 
 function key(code: string, changes: Record<string, unknown> = {}): KeyboardEvent {
   return { code, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
@@ -36,5 +36,12 @@ describe("live world keyboard routing", () => {
       { repeat: true }, { defaultPrevented: true }, { isComposing: true }]) {
       expect(resolveWorldShortcut(key("KeyH", change), defaults, true)).toBeNull();
     }
+  });
+  it("allows only the universal Escape fallback from a focused construction HUD button", () => {
+    expect(allowHudBuildCancel({ code: "Escape" }, true, true)).toBe(true);
+    expect(allowHudBuildCancel({ code: "Space" }, true, true)).toBe(false);
+    expect(allowHudBuildCancel({ code: "KeyQ" }, true, true)).toBe(false);
+    expect(allowHudBuildCancel({ code: "Escape" }, false, true)).toBe(false);
+    expect(allowHudBuildCancel({ code: "Escape" }, true, false)).toBe(false);
   });
 });

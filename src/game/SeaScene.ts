@@ -16,7 +16,7 @@ import { shipsInSelectionBox } from "./input/selection-box";
 import { selectStructureAt } from "./input/structure-selection";
 import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
-import { resolveWorldShortcut } from "./input/keyboard-shortcuts";
+import { allowHudBuildCancel, resolveWorldShortcut } from "./input/keyboard-shortcuts";
 import { gameSettingsStore } from "../settings/settings-store";
 import { shipWakeSegments } from "./vfx/ship-wake";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
@@ -421,8 +421,8 @@ export class SeaScene extends Phaser.Scene {
     );
     if (inModalOrText) return;
     // Preserve Escape cancellation while a construction toolbar button is focused.
-    const hudBuildCancel = this.buildKind !== null && target instanceof Element &&
-      !!target.closest('[data-game-hud="true"]');
+    const hudBuildCancel = allowHudBuildCancel(event, this.buildKind !== null,
+      target instanceof Element && !!target.closest('[data-game-hud="true"]'));
     const action = resolveWorldShortcut(event, gameSettingsStore.getSnapshot(),
       this.canUseWorldHotkey(event) || hudBuildCancel);
     if (action !== "cancelWorldAction") return;

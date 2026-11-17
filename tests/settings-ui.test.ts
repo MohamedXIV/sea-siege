@@ -37,4 +37,11 @@ describe("player-facing controls settings", () => {
     expect(focus).not.toHaveBeenCalled();
     expect(fallbackFocus).toHaveBeenCalledOnce();
   });
+  it("returns focus to match results when a match ends under Settings", () => {
+    const resultFocus = vi.fn();
+    const gone = { isConnected: false, focus: vi.fn() } as unknown as HTMLElement;
+    const results = { isConnected: true, focus: resultFocus } as unknown as HTMLElement;
+    restoreSettingsOpenerFocus(gone, null, results);
+    expect(resultFocus).toHaveBeenCalledOnce();
+  });
 });
