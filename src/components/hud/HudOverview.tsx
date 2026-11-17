@@ -11,7 +11,7 @@ const counts = [
 /** A persistent, display-only glance at the current authorized match. */
 export function HudOverview({ summary, selectionLabel }: { summary: HudSummary; selectionLabel?: string }) {
   return (
-    <div role="group" aria-label="Match overview" className="sea-hud-overview min-w-0">
+    <div role="group" aria-label="Match overview" className="sea-hud-overview pointer-events-auto min-w-0">
       {!summary.connected && (
         <div role="status" className="px-2 pb-1 text-[11px] text-amber-200">
           Waiting for match data

@@ -13,17 +13,18 @@ export type HudSummary = Readonly<{
 /** Derived presentation only: no cached, simulated or client-owned match facts. */
 export function getHudSummary(state: SpacetimeClientState): HudSummary {
   const connected = state.status === "connected" && state.subscriptionStatus === "applied";
-  const owned = connected && state.myFaction !== null;
+  const owned = connected && state.myMembership != null;
+  const faction = owned ? state.myFaction : null;
   const amountOf = (kind: Exclude<HudResource, "iron">): number | null =>
-    owned ? state.materialBalances.find(balance => balance.kind === kind)?.amount ?? null : null;
+    faction ? state.materialBalances.find(balance => balance.kind === kind)?.amount ?? null : null;
 
   return {
     connected,
-    fleetCount: connected ? state.myShips.length : null,
-    structureCount: connected ? state.myStructures.length : null,
-    enemyAssetCount: connected ? state.visibleEnemies.length : null,
+    fleetCount: owned ? state.myShips.length : null,
+    structureCount: owned ? state.myStructures.length : null,
+    enemyAssetCount: owned ? state.visibleEnemies.length : null,
     materials: {
-      iron: owned ? state.myFaction!.salvage : null,
+      iron: faction?.salvage ?? null,
       oil: amountOf("oil"),
       alloy: amountOf("alloy"),
       isotope: amountOf("isotope"),

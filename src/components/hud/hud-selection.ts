@@ -11,7 +11,8 @@ function displayKind(kind: string): string {
 
 /** Resolve selection against current authorized rows, not an event's old snapshot. */
 export function getHudSelectionLabel(selection: HudSelection, state: SpacetimeClientState): string {
-  if (state.status !== "connected" || state.subscriptionStatus !== "applied") return "No selection";
+  if (state.status !== "connected" || state.subscriptionStatus !== "applied" ||
+      !state.myMembership) return "No selection";
   if (selection?.type === "ship") {
     const ids = new Set(selection.shipIds ?? [selection.id]);
     const ships = state.myShips.filter(ship => ids.has(ship.id));

@@ -49,4 +49,12 @@ describe("compact selection status", () => {
     });
     expect(getHudSelectionLabel({ type: "ship", id: 3n }, state)).toBe("No selection");
   });
+
+  it("does not classify structures as enemies when the player's slot is unknown", () => {
+    const state = stateWith({
+      myMembership: null,
+      battleStructures: [{ id: 22n, kind: "shipyard", ownerSlot: 1, hp: 100 }] as SpacetimeClientState["battleStructures"],
+    });
+    expect(getHudSelectionLabel({ type: "structure", id: 22n }, state)).toBe("No selection");
+  });
 });

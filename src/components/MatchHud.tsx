@@ -3,6 +3,7 @@ import { Anchor, Compass, Menu, LocateFixed, SlidersHorizontal, Crosshair, Plus,
 import {
   FOCUS_ENEMY_EVENT, FOCUS_HOME_EVENT,
   GEMINI_SELECTION_EVENT,
+  GEMINI_BUILD_MODE_EVENT, HUD_RESET_INTERACTION_EVENT,
   MOBILE_ORDER_MODE_EVENT, MOBILE_ORDER_MODE_CHANGED_EVENT, MOBILE_ZOOM_EVENT,
 } from "@/game/SeaScene";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { GeminiCommandDock } from "@/components/GeminiCommandDock";
 import { HudOverview } from "@/components/hud/HudOverview";
 import { getHudSummary } from "@/components/hud/hud-view-model";
 import { getHudSelectionLabel, type HudSelection } from "@/components/hud/hud-selection";
+import { canArmMobileOrder } from "@/game/input/mobile-order-eligibility";
 import { MatchClock } from "@/components/MatchClock";
 import { CommandFeedback } from "@/components/CommandFeedback";
 import type { SpacetimeClientState } from "@/network/spacetime-client";
@@ -29,6 +31,7 @@ export function MatchHud({ state, onMenu, onSettings }: MatchHudProps) {
   // Keep the full desktop command dock; give small screens their battlefield back.
   const [mobileCommandsOpen, setMobileCommandsOpen] = useState(false);
   const [mobileOrderArmed, setMobileOrderArmed] = useState(false);
+  const [buildKindActive, setBuildKindActive] = useState(false);
   const [selected, setSelected] = useState<HudSelection>(null);
   useEffect(() => {
     const onSelection = (event: Event) => {
@@ -38,6 +41,13 @@ export function MatchHud({ state, onMenu, onSettings }: MatchHudProps) {
     return () => window.removeEventListener(GEMINI_SELECTION_EVENT, onSelection);
   }, []);
   useEffect(() => { setSelected(null); }, [state.activeMatchId]);
+  useEffect(() => {
+    const onBuild = (event: Event) => {
+      setBuildKindActive((event as CustomEvent<{ kind?: string | null }>).detail?.kind != null);
+    };
+    window.addEventListener(GEMINI_BUILD_MODE_EVENT, onBuild);
+    return () => window.removeEventListener(GEMINI_BUILD_MODE_EVENT, onBuild);
+  }, []);
   useEffect(() => {
     const onChanged = (event: Event) => {
       setMobileOrderArmed(
@@ -51,6 +61,8 @@ export function MatchHud({ state, onMenu, onSettings }: MatchHudProps) {
   if (!match) return null;
 
   const summary = getHudSummary(state);
+  const selectedShipIds = selected?.type === "ship" ? selected.shipIds ?? [selected.id] : [];
+  const canOrder = canArmMobileOrder(selectedShipIds, state, buildKindActive);
   const connected = summary.connected;
   const connectionLabel = connected ? "Live match" :
     state.status === "error" || state.subscriptionStatus === "error" ? "Connection error" :
@@ -73,11 +85,12 @@ export function MatchHud({ state, onMenu, onSettings }: MatchHudProps) {
           <Button size="sm" variant="outline" type="button"
             aria-pressed={mobileOrderArmed}
             aria-label={mobileOrderArmed ? "Cancel target order" : "Order selected ships: then tap a destination or enemy"}
+            disabled={!canOrder && !mobileOrderArmed}
             className={`sea-hud-touch-button lg:hidden ${mobileOrderArmed
               ? "border-amber-500 bg-amber-950/95 text-amber-200"
               : "border-sky-700 bg-slate-950/90 text-sky-200"}`}
             onClick={() => window.dispatchEvent(new CustomEvent(MOBILE_ORDER_MODE_EVENT, {
-              detail: { armed: !mobileOrderArmed },
+              detail: { armed: !mobileOrderArmed && canOrder },
             }))}>
             <Crosshair className="size-4" aria-hidden="true" />
             {mobileOrderArmed ? "Tap target" : "Order"}
@@ -126,7 +139,10 @@ export function MatchHud({ state, onMenu, onSettings }: MatchHudProps) {
           <Button
             size="sm"
             variant="outline"
-            onClick={onMenu}
+            onClick={() => {
+              window.dispatchEvent(new Event(HUD_RESET_INTERACTION_EVENT));
+              onMenu();
+            }}
             aria-label="Game menu"
             className="sea-hud-touch-button border-slate-700 bg-slate-950/90"
           >

@@ -6,6 +6,7 @@ function stateWith(overrides: Partial<SpacetimeClientState>): SpacetimeClientSta
   return {
     status: "connected",
     subscriptionStatus: "applied",
+    myMembership: { slot: 0 } as SpacetimeClientState["myMembership"],
     myFaction: { salvage: 0 } as SpacetimeClientState["myFaction"],
     materialBalances: [],
     myShips: [],
@@ -67,5 +68,11 @@ describe("authorized HUD summary", () => {
   it("keeps counts unavailable until the authorized subscription is applied", () => {
     const summary = getHudSummary(stateWith({ subscriptionStatus: "subscribing" }));
     expect(summary).toMatchObject({ connected: false, fleetCount: null, structureCount: null, enemyAssetCount: null });
+  });
+
+  it("does not call an empty subscription an owned zero fleet without match membership", () => {
+    const summary = getHudSummary(stateWith({ myMembership: null }));
+    expect(summary).toMatchObject({ connected: true, fleetCount: null, structureCount: null, enemyAssetCount: null });
+    expect(summary.materials).toEqual({ iron: null, oil: null, alloy: null, isotope: null });
   });
 });
