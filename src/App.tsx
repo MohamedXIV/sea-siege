@@ -1,11 +1,14 @@
-import { useState } from "react";
-import { Anchor, Waves } from "lucide-react";
+import { useRef, useState } from "react";
+import { Anchor, Settings2, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GameSettingsDialog } from "@/components/GameSettingsDialog";
 import { PhaserViewport } from "@/game/PhaserViewport";
 import { DevControls } from "@/components/DevControls";
 import { MatchHud } from "@/components/MatchHud";
 import { MatchResultOverlay } from "@/components/MatchResultOverlay";
 import { useSpacetime } from "@/network/useSpacetime";
+import { useGameSettings } from "@/settings/use-game-settings";
+import { formatKeyBinding } from "@/settings/keybindings";
 
 /**
  * Gemini's original Tactical Deployment screen and Battlefield overlay.
@@ -15,6 +18,13 @@ export default function App() {
   const gameState = useSpacetime();
   const { status, subscriptionStatus, identity, activeMatch } = gameState;
   const [menuOpenedForMatch, setMenuOpenedForMatch] = useState<bigint | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpener = useRef<HTMLElement | null>(null);
+  const settings = useGameSettings();
+  const openSettingsFrom = (opener: HTMLElement) => {
+    settingsOpener.current = opener;
+    setSettingsOpen(true);
+  };
   const isPlaying = activeMatch?.phase === "active";
   const finished = activeMatch?.phase === "finished";
   const eliminated = isPlaying && gameState.myFaction?.eliminated === true;
@@ -38,7 +48,8 @@ export default function App() {
           onDeployment={() => setMenuOpenedForMatch(activeMatch?.id ?? null)}
         />
       ) : isPlaying && !menuOpen ? (
-        <MatchHud state={gameState} onMenu={() => setMenuOpenedForMatch(activeMatch?.id ?? null)} />
+        <MatchHud state={gameState} onMenu={() => setMenuOpenedForMatch(activeMatch?.id ?? null)}
+          onSettings={openSettingsFrom} />
       ) : (
         <>
           <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(90deg,rgba(4,13,23,.97),rgba(4,13,23,.87)_64%,rgba(4,13,23,.72))]" />
@@ -48,11 +59,15 @@ export default function App() {
                 <span aria-hidden="true" className={`size-3 rounded-full ${ready ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
                 Sea Siege · {connectionLabel}
               </div>
-              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
-                Client Identity:
+              <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-slate-400">
+                <span>Client Identity:</span>
                 <span className="rounded border border-amber-500/30 bg-slate-900/90 px-2 py-0.5 text-amber-400">
                   {identity ? `${identity.slice(0, 9)}...${identity.slice(-6)}` : "Not connected"}
                 </span>
+                <Button type="button" size="sm" variant="outline" data-game-settings-trigger="true"
+                  onClick={event => openSettingsFrom(event.currentTarget)}>
+                  <Settings2 className="size-4" aria-hidden="true" /> Settings
+                </Button>
               </div>
             </header>
 
@@ -105,11 +120,13 @@ export default function App() {
               <span className="flex items-center gap-1.5">
                 <Anchor className="size-3.5" /> SEA SIEGE · Naval skirmish
               </span>
-              <span>LMB Select/Build · RMB Move · Scroll Zoom · E Enemy · H Home</span>
+              <span>LMB Select/Build · RMB Order · Scroll Zoom · {formatKeyBinding(settings.controls.keybindings.focusEnemy)} Enemy · {formatKeyBinding(settings.controls.keybindings.focusHome)} Home</span>
             </footer>
           </div>
         </>
       )}
+      <GameSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}
+        returnFocusTo={settingsOpener.current} />
     </main>
   );
 }
