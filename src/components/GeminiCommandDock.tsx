@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { Hammer, Crosshair, CircleStop, Pickaxe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  GEMINI_BUILD_MODE_EVENT, GEMINI_SELECTION_EVENT, GEMINI_FEEDBACK_EVENT,
+  GEMINI_BUILD_MODE_EVENT, GEMINI_FEEDBACK_EVENT,
   GEMINI_BUILD_PREVIEW_EVENT,
 } from "@/game/SeaScene";
+import type { HudSelection } from "@/components/hud/hud-selection";
 import { spacetimeClient, type SpacetimeClientState } from "@/network/spacetime-client";
 import { CONSTRUCTION_RULES } from "../../spacetimedb/src/sim/construction";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
@@ -12,10 +13,6 @@ import { RESOURCE_TYPES, type ResourceKind } from "../../spacetimedb/src/sim/mat
 import { ShipRefitPanel } from "@/components/ShipRefitPanel";
 import { BuildingInspector } from "@/components/BuildingInspector";
 
-type Selection =
-  | { type: "ship"; id: bigint; shipIds?: bigint[] }
-  | { type: "structure"; id: bigint }
-  | null;
 type BuildKind = "platform" | "shipyard" | "workshop" | "cannon" | "salvage_rig";
 const BUILD_TYPES: { kind: BuildKind; label: string }[] = [
   { kind: "platform", label: "Floating Platform" },
@@ -29,8 +26,7 @@ const BUILD_TYPES: { kind: BuildKind; label: string }[] = [
  * Minimal functional version of Gemini's Construction Dock + Selection Panel.
  * The server remains authoritative; all buttons invoke real reducers.
  */
-export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
-  const [selected, setSelected] = useState<Selection>(null);
+export function GeminiCommandDock({ state, selected }: { state: SpacetimeClientState; selected: HudSelection }) {
   const [buildKind, setBuildKind] = useState<BuildKind | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,11 +37,6 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
   } | null>(null);
 
   useEffect(() => {
-    const listener = (event: Event) => {
-      const detail = (event as CustomEvent<Selection>).detail;
-      setSelected(detail);
-      setError(null);
-    };
     const feedback = (event: Event) => {
       const detail = (event as CustomEvent<{ message: string; success?: boolean }>).detail;
       if (detail?.success) {
@@ -67,11 +58,9 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
       if (kind === null) setPreview(null);
     };
     window.addEventListener(GEMINI_BUILD_MODE_EVENT, buildModeUpdate);
-    window.addEventListener(GEMINI_SELECTION_EVENT, listener);
     window.addEventListener(GEMINI_FEEDBACK_EVENT, feedback);
     window.addEventListener(GEMINI_BUILD_PREVIEW_EVENT, placementPreview);
     return () => {
-      window.removeEventListener(GEMINI_SELECTION_EVENT, listener);
       window.removeEventListener(GEMINI_BUILD_MODE_EVENT, buildModeUpdate);
       window.removeEventListener(GEMINI_FEEDBACK_EVENT, feedback);
       window.removeEventListener(GEMINI_BUILD_PREVIEW_EVENT, placementPreview);
@@ -79,11 +68,12 @@ export function GeminiCommandDock({ state }: { state: SpacetimeClientState }) {
   }, []);
 
   useEffect(() => {
-    setSelected(null);
     setBuildKind(null);
     setPreview(null);
     window.dispatchEvent(new CustomEvent(GEMINI_BUILD_MODE_EVENT, { detail: { kind: null } }));
   }, [state.activeMatchId]);
+
+  useEffect(() => { setError(null); }, [selected]);
 
   const perform = async (job: () => Promise<void>) => {
     if (pending) return;

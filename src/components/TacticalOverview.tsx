@@ -7,7 +7,7 @@ import { RESOURCE_TYPES, type AdvancedResourceKind } from "../../spacetimedb/src
 
 interface TacticalOverviewProps { state: SpacetimeClientState }
 
-/** Gemini's 168px minimap: actual known terrain, salvage and *all* fleets. */
+/** Authorized terrain and fleets remain visible: Sea Siege has no Fog of War. */
 export function TacticalOverview({ state }: TacticalOverviewProps) {
   const match = state.activeMatch;
   const cells = state.worldChunks[0]?.mapCells ?? cellsForSlots(match?.maxSlots ?? 2);
@@ -59,7 +59,7 @@ export function TacticalOverview({ state }: TacticalOverviewProps) {
   };
 
   return (
-    <aside className="pointer-events-auto absolute right-3 top-20 w-40 rounded-lg border border-slate-700 bg-slate-950/90 p-2 text-slate-200 shadow-xl backdrop-blur-sm sm:right-4 sm:w-48">
+    <aside className="sea-hud-panel sea-hud-minimap pointer-events-auto absolute right-2 top-2 w-28 p-2 text-slate-200 sm:right-3 sm:w-36 xl:w-44">
       <div className="mb-1 flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-sky-400">
         <span>Strategic Minimap</span>
         <span className="font-mono text-slate-400">{cells}×{cells}</span>

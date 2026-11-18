@@ -17,6 +17,8 @@ import { selectStructureAt } from "./input/structure-selection";
 import { structureInfluenceRange } from "./buildings/structure-range";
 import { resolveRightClickCommand, type RightClickCommand } from "./input/command-target";
 import { allowHudBuildCancel, resolveWorldShortcut } from "./input/keyboard-shortcuts";
+import { canArmMobileOrder } from "./input/mobile-order-eligibility";
+import { canHandleWorldPointer } from "./input/world-pointer-gate";
 import { gameSettingsStore } from "../settings/settings-store";
 import { shipWakeSegments } from "./vfx/ship-wake";
 import { ECONOMY_RULES } from "../../spacetimedb/src/sim/economy";
@@ -35,6 +37,7 @@ export const GEMINI_BUILD_PREVIEW_EVENT = "sea-siege:gemini-build-preview";
 export const MOBILE_ORDER_MODE_EVENT = "sea-siege:mobile-order-mode";
 export const MOBILE_ORDER_MODE_CHANGED_EVENT = "sea-siege:mobile-order-mode-changed";
 export const MOBILE_ZOOM_EVENT = "sea-siege:mobile-zoom";
+export const HUD_RESET_INTERACTION_EVENT = "sea-siege:hud-reset-interaction";
 const MOBILE_ZOOM_FACTOR = 1.2;
 
 interface VesselArt {
@@ -293,6 +296,7 @@ export class SeaScene extends Phaser.Scene {
     window.addEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     window.addEventListener(MOBILE_ORDER_MODE_EVENT, this.onMobileOrderMode);
     window.addEventListener(MOBILE_ZOOM_EVENT, this.onMobileZoom);
+    window.addEventListener(HUD_RESET_INTERACTION_EVENT, this.resetHudInteraction);
     window.addEventListener("keydown", this.onNavigationHotkey);
     window.addEventListener("keydown", this.onEscape);
     window.addEventListener("contextmenu", this.onContextMenu, { capture: true });
@@ -313,6 +317,7 @@ export class SeaScene extends Phaser.Scene {
     window.removeEventListener(GEMINI_BUILD_MODE_EVENT, this.onBuildMode);
     window.removeEventListener(MOBILE_ORDER_MODE_EVENT, this.onMobileOrderMode);
     window.removeEventListener(MOBILE_ZOOM_EVENT, this.onMobileZoom);
+    window.removeEventListener(HUD_RESET_INTERACTION_EVENT, this.resetHudInteraction);
     this.scale.off(Phaser.Scale.Events.RESIZE, this.redrawOcean, this);
     window.removeEventListener("keydown", this.onNavigationHotkey);
     window.removeEventListener("keydown", this.onEscape);
@@ -436,10 +441,16 @@ export class SeaScene extends Phaser.Scene {
   };
 
   private onContextMenu = (event: MouseEvent): void => {
-    if (this.buildKind) {
+    if (this.buildKind && this.isWorldCanvasEvent(event)) {
       event.preventDefault();
       this.cancelBuilding();
     }
+  };
+
+  private resetHudInteraction = (): void => {
+    this.selectShips([]);
+    if (this.mobileOrderArmed) this.setMobileOrderArmed(false);
+    if (this.buildKind) this.cancelBuilding();
   };
 
   private buildRequest(kind: string, gridX: number, gridY: number): BuildRequest | null {
@@ -574,6 +585,9 @@ export class SeaScene extends Phaser.Scene {
     this.buildingSelectionGraphics?.clear();
     this.selectedShipIds = new Set(ids);
     this.selectedShipId = ids[0] ?? null;
+    if (this.mobileOrderArmed && !canArmMobileOrder(ids, spacetimeClient.getState(), !!this.buildKind)) {
+      this.setMobileOrderArmed(false);
+    }
     window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
       detail: ids.length
         ? { type: "ship", id: ids[0], shipIds: [...ids] }
@@ -589,6 +603,7 @@ export class SeaScene extends Phaser.Scene {
       this.selectedShipId = null;
       this.selectedBuildingId = id;
       this.drawBuildingHighlight();
+      if (this.mobileOrderArmed) this.setMobileOrderArmed(false);
       window.dispatchEvent(new CustomEvent(GEMINI_SELECTION_EVENT, {
         detail: { type: "structure", id },
       }));
@@ -598,9 +613,11 @@ export class SeaScene extends Phaser.Scene {
   }
 
   private setMobileOrderArmed(armed: boolean): void {
-    this.mobileOrderArmed = armed;
+    this.mobileOrderArmed = armed && canArmMobileOrder(
+      [...this.selectedShipIds], spacetimeClient.getState(), !!this.buildKind,
+    );
     window.dispatchEvent(new CustomEvent(MOBILE_ORDER_MODE_CHANGED_EVENT, {
-      detail: { armed },
+      detail: { armed: this.mobileOrderArmed },
     }));
   }
 
@@ -631,11 +648,17 @@ export class SeaScene extends Phaser.Scene {
    */
   private isWorldPointer(pointer: Phaser.Input.Pointer): boolean {
     const event = pointer.event as MouseEvent | TouchEvent | undefined;
-    if (!event || event.target !== this.game.canvas) return false;
+    return !!event && this.isWorldCanvasEvent(event);
+  }
+
+  private isWorldCanvasEvent(event: MouseEvent | TouchEvent): boolean {
     // TouchEvent stores viewport coordinates on changedTouches, not the event.
     const point = "changedTouches" in event ? event.changedTouches[0] : event;
-    if (!point) return false;
-    return document.elementFromPoint(point.clientX, point.clientY) === this.game.canvas;
+    return canHandleWorldPointer(
+      !!document.querySelector('[data-game-hud="true"]'),
+      event.target === this.game.canvas,
+      !!point && document.elementFromPoint(point.clientX, point.clientY) === this.game.canvas,
+    );
   }
 
   private pointerCommand(pointer: Phaser.Input.Pointer, buttonOverride?: number): void {
@@ -809,6 +832,9 @@ export class SeaScene extends Phaser.Scene {
   private sync(): void {
     if (!this.add || !this.sys) return;
     const state = spacetimeClient.getState();
+    if (this.mobileOrderArmed && !canArmMobileOrder([...this.selectedShipIds], state, !!this.buildKind)) {
+      this.setMobileOrderArmed(false);
+    }
     const matchId = state.activeMatch?.id ?? null;
     if (matchId !== this.currentMatch) {
       this.currentMatch = matchId;

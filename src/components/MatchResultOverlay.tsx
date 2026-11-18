@@ -105,7 +105,7 @@ export function MatchResultOverlay({
 
   return (
     <div data-game-ui="true"
-      className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#030912]/85 p-3 text-slate-100 backdrop-blur-sm sm:p-6">
+      className="pointer-events-auto absolute inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#030912]/85 p-3 text-slate-100 backdrop-blur-sm sm:p-6">
       <section ref={dialogRef} tabIndex={-1} onKeyDown={keepFocusInDialog}
         role="dialog" aria-modal="true" aria-labelledby="match-result-heading"
         className="pointer-events-auto my-auto w-full max-w-3xl space-y-4 rounded-xl border border-sky-800/60 bg-slate-950/95 p-4 shadow-2xl sm:p-6">

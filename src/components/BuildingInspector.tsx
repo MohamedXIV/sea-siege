@@ -31,9 +31,10 @@ export function BuildingInspector({
   const ownedRow = own ? state.myStructures.find(row => row.id === building.id) : undefined;
   const online = building.complete && building.connected && building.hp > 0;
   const baseHp = buildingMaxHp(building.kind);
-  const maxHp = baseHp === null ? null :
-    building.kind === "workshop" && ownedRow
-      ? baseHp + (WORKSHOP_RULES.tiers[ownedRow.level as 1 | 2 | 3]?.extraMaxHp ?? 0)
+  const maxHp = baseHp === null || (building.kind === "workshop" && !ownedRow)
+    ? null
+    : building.kind === "workshop"
+      ? baseHp + (WORKSHOP_RULES.tiers[ownedRow!.level as 1 | 2 | 3]?.extraMaxHp ?? 0)
       : baseHp;
 
   const jobs = own && building.kind === "shipyard"
