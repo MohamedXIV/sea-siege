@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --pretty false",
     "ui:add": "shadcn add",
     "test:unit": "node --experimental-strip-types --test tests/*.test.mjs",
-    "test:client": "vitest run tests/*.test.ts",
+    "test:client": "vitest run --config vitest.client.config.ts",
     "p0:preflight": "node scripts/p0-preflight.mjs",
     "db:build": "spacetime build --module-path ./spacetimedb",
     "db:generate": "spacetime generate --lang typescript --module-path ./spacetimedb --out-dir ./src/module_bindings",

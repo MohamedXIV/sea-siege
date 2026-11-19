@@ -2,6 +2,8 @@ import { t, SenderError } from "spacetimedb/server";
 import spacetimedb from "./schema.ts";
 import { matchStillActive } from "./sim/match-outcome.ts";
 import { dispatchWorkshopRepair, dispatchWorkshopUpgrade } from "./sim/workshop-command-dispatch.ts";
+import { refitMaximumShipHp, NO_SHIP_REFITS } from "./sim/ship-refits.ts";
+import { shipDefinition } from "./sim/economy.ts";
 
 /**
  * Repairs are single authoritative transactions: the same transaction checks
@@ -68,6 +70,10 @@ export const repairShip = spacetimedb.reducer(
         id: target.id, matchId: target.matchId, ownerSlot: target.ownerSlot,
         type: "ship", kind: target.kind, hp: target.hp, level: 1,
         complete: true, connected: true, x: target.x, y: target.y,
+        maxHpBonus: refitMaximumShipHp(
+          shipDefinition(target.kind)?.hp ?? target.hp,
+          ctx.db.shipRefit.shipId.find(target.id) ?? NO_SHIP_REFITS,
+        ) - (shipDefinition(target.kind)?.hp ?? target.hp),
       } : null,
       requestedHp, salvage: faction.salvage,
     }, {

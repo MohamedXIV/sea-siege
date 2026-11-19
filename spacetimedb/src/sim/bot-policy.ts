@@ -51,6 +51,7 @@ export type BotObservation = Readonly<{
 export type BotIntent =
   | Readonly<{ type: 'aim'; shipId: bigint; angleDeg: number }>
   | Readonly<{ type: 'fire'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
+  | Readonly<{ type: 'attack'; shipId: bigint; targetType: 'ship' | 'structure'; targetId: bigint }>
   | Readonly<{ type: 'harvest'; shipId: bigint; nodeId: bigint }>
   | Readonly<{ type: 'move'; shipId: bigint; destination: Position }>
   | Readonly<{ type: 'build'; kind: LegalBuildCandidate['kind']; gridX: number; gridY: number }>
@@ -119,7 +120,21 @@ export function decideBot(obs: BotObservation, difficulty: BotDifficulty): BotDe
       Math.min(weapon.range, weapon.vision) * rule.defenseRangeScale)
       .sort((a, b) => distance(ship.position, a.position) - distance(ship.position, b.position) ||
         sortBigint(a.id, b.id))[0];
-    if (!target) continue;
+    if (!target) {
+      // A visible but out-of-range hostile is pursued through the same
+      // persistent attack order as a human right-click (approach + engage).
+      const approach = liveEnemies.filter(e => {
+        const d = distance(ship.position, e.position);
+        return d > Math.min(weapon.range, weapon.vision) * rule.defenseRangeScale &&
+          d <= weapon.range * 3;
+      }).sort((a, b) => distance(ship.position, a.position) - distance(ship.position, b.position) ||
+        sortBigint(a.id, b.id))[0];
+      if (approach) emit({
+        type: 'attack', shipId: ship.id,
+        targetType: approach.entityType, targetId: approach.id,
+      }, ship.id);
+      continue;
+    }
     const desired = desiredBearing(ship.position, target.position);
     if (!turretAligned(ship.turretAngleDeg, desired)) {
       emit({ type: 'aim', shipId: ship.id, angleDeg: desired }, ship.id);

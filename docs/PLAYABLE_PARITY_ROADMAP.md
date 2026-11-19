@@ -2,6 +2,10 @@
 
 > **Active gameplay priority (2 November 2026).** This is the short, player-first recovery plan **on top of** the real Phaser 4 / SpacetimeDB implementation merged in [PR #21](https://github.com/MohamedXIV/sea-siege/pull/21) and [PR #22](https://github.com/MohamedXIV/sea-siege/pull/22). It supplements the long-term [ROADMAP.md](../ROADMAP.md) and [master Epic #1](https://github.com/MohamedXIV/sea-siege/issues/1); it does not erase their future requirements.
 
+> **Owner gameplay decision (3 November 2026): NO FOG OF WAR.** All static terrain, resource locations, rival bases and live enemy unit positions should be visible to every authenticated match participant, as in the direct/open Gemini-style skirmish. No sensor-gated client contacts or narrow-world knowledge. The server still owns combat, movement, production, AI and permissions; complete private DB tables are not made public.
+
+> **Owner source-of-truth update (3 Nov 2026):** **all** new art, map presentation and gameplay controls must be adapted from the preserved Gemini version, not our custom visual/gameplay inventions. Source-to-Phaser matrix and remaining gaps: [Gemini Source of Truth](./GEMINI_SOURCE_OF_TRUTH.md). This does not undo real SpacetimeDB transport, authoritative reducers or tests. The original in-browser fake server stays archived only.
+
 **Active tracking:** [Playable Gemini Parity Epic #23](https://github.com/MohamedXIV/sea-siege/issues/23).
 
 ## The promise — restore the experience, not the fake runtime
@@ -10,7 +14,7 @@ A player chooses **Quick Play**, immediately faces a server-owned bot, sees a co
 
 - Keep actual **Phaser 4** rendering, official **SpacetimeDB 2.x TypeScript** server/SDK and **React/shadcn** UI.
 - Do not port the Gemini HTML's in-memory `SpacetimeAuthorityServer`, fake `DbConnection`, client simulation or Canvas 2D renderer into runtime.
-- Do selectively port/look to its game-feel, timing, color, framing, compact HUD, sound cues and core loop. Treat numeric balance as a starting point, not automatically correct.
+- Treat the reference as the **primary practical player-experience specification**: quick startup, map presentation, camera/minimap, RTS selection/commands, build controls, resources, fleet, bots, combat, sound/VFX, results and rematch. Match these features closely before inventing additional ones. Retain its balance as tuning input, not automatically correct.
 - **Rule: playability wins over infrastructure expansion.** If it doesn't help the next real player action, don't build it now.
 
 ## Frozen primary reference — already in repository
@@ -37,8 +41,8 @@ The user-supplied HTML matches the existing archived file hash **exactly**; this
 
 ## Deliberate simplifications
 
-- **Entire static map visible from match start.** No persistent exploration fog, explored-cell storage, unseen-chunk masks, special discovery state or terrain visibility schedule.
-- **Tactical enemy information stays authorized.** Seeing terrain is not permission to inspect hidden enemy ships, orders, hidden faction balances, private resources or other matches. Serve match-scoped *authorized* static map information, not globally public world tables.
+- **Open battlefield:** the entire static map, known deposits, bases and all live enemy ships/structures are visible from match start. No persistent exploration fog, sensor-limited enemy UI, explored-cell storage, unseen-chunk masks or terrain visibility schedule.
+- **Match membership is the permission boundary.** Participants are entitled to enemy **positions and world-facing appearances**, not foreign control, private action queues, tokens, internals or unrelated matches. Use match-membership-scoped views, **never** globally public raw authoritative tables.
 - A single human vs one bot is the *first* required repeatable match; 2–8 real/bot players remain the long-term game scope.
 - Keep the original focused content: one Salvage resource; Command Core, Platform, Shipyard, Workshop, Cannon, Extractor; Scout, Gunboat, Siege vessel.
 - No extra currencies, unit trees, ranking, matchmaking infrastructure, MMO/open-ocean scale, expensive shaders or optimization project before measurable need.
@@ -50,7 +54,7 @@ The user-supplied HTML matches the existing archived file hash **exactly**; this
 | Slice / issue | What the player gains | Integration to reuse | Exit proof |
 |---|---|---|---|
 | [1 — Quick Play #24](https://github.com/MohamedXIV/sea-siege/issues/24) | Enter 1 human vs 1 real bot in one click | #12 / #14, P0 connection | Actual match is `active` in Codespaces |
-| [2 — Known Sea #25](https://github.com/MohamedXIV/sea-siege/issues/25) | Actual water/ruins/shoals/deposits, minimap | #7, #5, #13 security | Visual map matches server, no private data leak |
+| [2 — Open Battlefield #25](https://github.com/MohamedXIV/sea-siege/issues/25) | Known sea/obstacles/deposits, all rival ships/bases and minimap | #7, #5, authorized participant views | No missing opponents, real map, no unrelated-match disclosure |
 | [3 — Build & Orders #26](https://github.com/MohamedXIV/sea-siege/issues/26) | Select, move, extend platforms, place structures | #8 / #10 / #15 | Legitimate build and command function in live match |
 | [4 — Salvage & Ships #27](https://github.com/MohamedXIV/sea-siege/issues/27) | Gather salvage, construct shipyard, produce vessels | #9 / #10 | Economy changes & new ship happen on real server |
 | [5 — Bots & Battle #28](https://github.com/MohamedXIV/sea-siege/issues/28) | Opponent builds/fights; shots, damage and wrecks | #11 / #12 / #16 | Real human-bot combat and Core destruction work |
@@ -61,21 +65,21 @@ Each step is a **reviewable PR with an in-browser checkpoint**, not a broad isol
 ### Completion checklist for the entire epic
 
 - [ ] Single-click Quick Play runs **without** incognito, manual lobby checkboxes or local fake players.
-- [ ] One full known map renders correctly and is navigable; static map visible, enemy intel still protected.
+- [ ] One full known map renders correctly and is navigable, with **all enemy positions and bases visible** to participants; sensitive server internals and unrelated matches remain private.
 - [ ] Player visibly builds platforms/structures, gathers salvage and queues ships using actual reducers.
 - [ ] A server-owned bot takes meaningful actions and can fight, damage and lose/win.
 - [ ] Player can finish a match and rematch, with a legible HUD, feedback, and no silent errors.
 - [ ] Reconnect restores correct identity, authorized units and current match; invalid actions stay clean SenderErrors.
-- [ ] Owner performs a full **private GitHub Codespaces port 5173** browser acceptance and confirms fun/readability.
+- [ ] Owner performs a full **local Windows (or private Codespaces)** browser acceptance and confirms fun/readability.
 - [ ] Backend privacy and integration tests remain passing; any NOT RUN result is explicit.
 
 ## Working arrangement
 
-1. Branch from **current `main`** for each issue. Keep this `plan/playable-gemini-parity` branch as the *planning/documentation PR*, not the long-running implementation integration branch.
+1. Use focused branches from current `main`. When a prerequisite PR is still draft (e.g. Quick Play #31), a **clearly stacked PR** may target that feature branch; retarget to `main` after its parent merges.
 2. One coherent playable feature per PR; integrate with existing reducers and Phaser, then verify in browser. Do not reintroduce WebSocket mock transports.
-3. For each change: small targeted tests, `npm run typecheck`, `npm run build`, applicable `npm run test:client` / backend tests. Record live Codespaces demo proof separately.
+3. For each change: small targeted tests, `npm run typecheck`, `npm run build`, applicable `npm run test:client` / backend tests. Record **owner local Windows** browser proof separately; include non-destructive local module publish where server views change.
 4. Never auto-merge. Have the owner actually play before declaring a slice accepted.
-5. Only after this core loop is fun should we revisit [Fog #13](https://github.com/MohamedXIV/sea-siege/issues/13), expanded modes/late joining, substantial art/shader work or further optimization.
+5. **Fog #13 is superseded for current gameplay** by the no-FoW decision; do not revive hidden-terrain/enemy mechanics without explicit gameplay reconsideration. Advanced modes/late joining and broad optimization are deferred.
 
 ## What we will not mistake for progress
 
@@ -84,4 +88,4 @@ Each step is a **reviewable PR with an in-browser checkpoint**, not a broad isol
 - New persistent world systems or finely engineered exploration fog before a playable battle.
 - Large renderer/physics/server refactors merely because the original prototype was simulated.
 
-**Next implementation PR:** start with [#24 — One-click Quick Play vs bot](https://github.com/MohamedXIV/sea-siege/issues/24), then #25. The final goal is the **repeatable experience**, not theoretical feature completeness.
+**Current implementation:** [Quick Play PR #31](https://github.com/MohamedXIV/sea-siege/pull/31) passed owner local Windows client/backend tests and launched a match, but is still awaiting merge. Next: [#25 — Open Battlefield](https://github.com/MohamedXIV/sea-siege/issues/25) and working bots. The final goal is the **repeatable experience**, not theoretical feature completeness.

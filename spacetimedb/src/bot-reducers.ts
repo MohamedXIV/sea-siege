@@ -5,6 +5,7 @@ import { firstFreeSlot, deriveBotSeed } from "./sim/bot-seats.ts";
 import { factionKey } from "./sim/faction-ownership.ts";
 import { CONSTRUCTION_RULES, initialStructures } from "./sim/construction.ts";
 import { ECONOMY_RULES } from "./sim/economy.ts";
+import { ADVANCED_RESOURCE_KINDS, materialBalanceKey } from "./sim/materials.ts";
 
 /**
  * Humans may provision server-owned BOT seats in the lobby, without connecting
@@ -38,6 +39,13 @@ export const addBot = spacetimedb.reducer(
       slot, difficulty, seed: deriveBotSeed(world.seed, slot),
       nextDecisionUs: 0n,
     });
+    for (const kind of ADVANCED_RESOURCE_KINDS) {
+      ctx.db.materialBalance.insert({
+        id: 0n, matchId, ownerSlot: slot,
+        materialKey: materialBalanceKey(matchId, slot, kind),
+        kind, amount: 0, totalGathered: 0n,
+      });
+    }
 
     for (const base of initialStructures(slot, spawn.gridX, spawn.gridY)) {
       const definition = CONSTRUCTION_RULES.definitions[base.kind];
@@ -82,6 +90,9 @@ export const removeBot = spacetimedb.reducer(
     }
     for (const bot of Array.from(ctx.db.botController.matchId.filter(matchId))) {
       if (bot.slot === slot) ctx.db.botController.id.delete(bot.id);
+    }
+    for (const balance of Array.from(ctx.db.materialBalance.matchId.filter(matchId))) {
+      if (balance.ownerSlot === slot) ctx.db.materialBalance.id.delete(balance.id);
     }
     ctx.db.factionState.id.delete(faction.id);
   },

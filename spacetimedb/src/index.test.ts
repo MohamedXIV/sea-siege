@@ -760,6 +760,15 @@ it("moving defender dodges the fired trajectory; only internal scheduler can adv
   }
   expect(test.db.ship.id.find(second.id)!.hp).toBe(initial);
   expect(test.db.projectile.count()).toBe(0n);
+  // A true range-expiry splash is kept briefly for clients to receive.
+  expect(test.db.combatImpact.count()).toBe(1n);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(900));
+  const expiry = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: expiry })
+  );
+  expect(test.db.combatImpact.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
 
@@ -785,6 +794,17 @@ it("a resolved projectile inflicts armor-reduced damage and cannot hit twice", (
   }));
   expect(test.db.ship.id.find(enemy.id)!.hp).toBe(210 - 16); // Scout 18 minus Scout armor 2
   expect(test.db.projectile.count()).toBe(0n);
+  const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
+  expect(impact.kind).toBe("hit");
+  expect(impact.x).toBeGreaterThan(own.x);
+  expect(impact.x).toBeLessThan(enemy.x);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(900));
+  const expiry = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: expiry })
+  );
+  expect(test.db.combatImpact.count()).toBe(0n);
   expect(test.db.combatSchedule.count()).toBe(0n);
 });
 
@@ -818,6 +838,12 @@ it("destroying the last hostile Command Core eliminates its faction and ends the
   expect(test.db.match.id.find(matchId)?.phase).toBe("finished");
   expect(test.db.match.id.find(matchId)?.winnerSlot).toBe(0);
   expect([...test.db.factionState.matchId.filter(matchId)].find(row => row.slot === 1)?.eliminated).toBe(true);
+  const resultRows = [...test.db.matchFinalStanding.matchId.filter(matchId)];
+  expect(resultRows).toHaveLength(2);
+  expect(resultRows.find(row => row.slot === 1)?.eliminated).toBe(true);
+  expect(resultRows.find(row => row.slot === 0)?.coreHp).toBeGreaterThan(0);
+  expect(moduleExports.myCompletedStandings(test.viewContext(alice))).toHaveLength(2);
+  expect(moduleExports.myCompletedStandings(test.viewContext(bob))).toHaveLength(2);
 });
 
 it("turrets slew gradually under internal authority; premature fire and foreign aim fail", () => {
@@ -934,6 +960,14 @@ it("match deadline rejects external/early calls and resolves the reference tiebr
   expect(finished.winnerSlot).toBe(1);
   expect(finished.victoryReason).toBe("time_limit");
   expect(finished.winningScore5).toBeGreaterThan(0n);
+  const finalRows = [...test.db.matchFinalStanding.matchId.filter(matchId)];
+  expect(finalRows).toHaveLength(2);
+  expect(finalRows.find(row => row.slot === 1)?.score5).toBe(finished.winningScore5);
+  expect(moduleExports.myCompletedStandings(test.viewContext(alice))).toHaveLength(2);
+  expect(moduleExports.myCompletedStandings(test.viewContext(bob))).toHaveLength(2);
+  expect(moduleExports.myCompletedStandings(test.viewContext(
+    auth("scoreboard-outsider", 909n)
+  ))).toHaveLength(0);
   expect(test.db.economySchedule.count()).toBe(0n);
   expect(() => test.withReducerTx(alice, ctx =>
     moduleExports.startMatch(ctx, { matchId })
@@ -1296,4 +1330,824 @@ it("bot factions never receive a user-visible enemy or allied structure subscrip
     .toHaveLength(0);
   expect(test.runQuery<any>(moduleExports.myFactionStates(test.viewContext(host)))
     .every(row => row.controller === "human")).toBe(true);
+});
+
+it("Quick Play backend contract: one human and one independent server bot can start", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("quick-play-host", 701n);
+  const outsider = auth("quick-play-outsider", 702n);
+
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+
+  // Only the host may create bot seats; all authority and storage stay server-side.
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  )).toThrow("Only the host");
+  expect(test.db.botController.count()).toBe(0n);
+  expect(() => test.withReducerTx(host, ctx =>
+    moduleExports.startMatch(ctx, { matchId })
+  )).toThrow("Need at least two");
+
+  test.withReducerTx(host, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  const factions = [...test.db.factionState.matchId.filter(matchId)];
+  expect(factions).toHaveLength(2);
+  expect(factions.map(row => row.controller).sort()).toEqual(["bot", "human"]);
+  expect([...test.db.matchMember.matchId.filter(matchId)]).toHaveLength(1);
+  const bot = [...test.db.botController.matchId.filter(matchId)];
+  expect(bot).toHaveLength(1);
+  expect(bot[0]!.difficulty).toBe("normal");
+  const botShip = [...test.db.ship.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === bot[0]!.slot);
+  expect(botShip?.kind).toBe("scout");
+  expect([...test.db.structure.matchId.filter(matchId)]
+    .some(row => row.ownerSlot === bot[0]!.slot && row.kind === "command_core"))
+    .toBe(true);
+
+  test.withReducerTx(host, ctx =>
+    moduleExports.startMatch(ctx, { matchId })
+  );
+  expect(test.db.match.id.find(matchId)?.phase).toBe("active");
+  expect([...test.db.botSchedule.matchId.filter(matchId)]).toHaveLength(1);
+  expect([...test.db.economySchedule.matchId.filter(matchId)]).toHaveLength(1);
+
+  // The bot is a server faction, not a second human Identity with private access.
+  const ownedShips = test.runQuery<any>(moduleExports.myShips(test.viewContext(host)));
+  expect(ownedShips.every((ship: { ownerSlot: number }) => ship.ownerSlot === 0)).toBe(true);
+});
+
+it("open battlefield shows all enemy bot ships and structures, but only to match participants", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("open-battle-host", 801n);
+  const outsider = auth("open-battle-outsider", 802n);
+
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  // Keep enemy positions private while the lobby is waiting.
+  expect(moduleExports.myVisibleEnemies(test.viewContext(host))).toHaveLength(0);
+
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const hostIntel = moduleExports.myVisibleEnemies(test.viewContext(host));
+  const enemyShips = [...test.db.ship.matchId.filter(matchId)].filter(s => s.ownerSlot === 1);
+  const enemyStructures = [...test.db.structure.matchId.filter(matchId)]
+    .filter(s => s.ownerSlot === 1 && s.complete);
+  expect(enemyShips).toHaveLength(1);
+  expect(enemyStructures).toHaveLength(7);
+  expect(hostIntel).toHaveLength(enemyShips.length + enemyStructures.length);
+  for (const s of enemyShips) {
+    expect(hostIntel).toContainEqual({
+      contactKey: matchId.toString() + ":ship:" + s.id.toString(),
+      matchId, entityId: s.id, entityType: "ship", x: s.x, y: s.y,
+    });
+  }
+  for (const s of enemyStructures) {
+    expect(hostIntel).toContainEqual({
+      contactKey: matchId.toString() + ":structure:" + s.id.toString(),
+      matchId, entityId: s.id, entityType: "structure",
+      x: s.gridX + s.width / 2, y: s.gridY + s.height / 2,
+    });
+  }
+  expect(moduleExports.myVisibleEnemies(test.viewContext(outsider))).toHaveLength(0);
+  expect(hostIntel.every(contact =>
+    Object.keys(contact).sort().join(",") ===
+      ["contactKey", "entityId", "entityType", "matchId", "x", "y"].sort().join(",")
+  )).toBe(true);
+});
+
+it("Gemini world projection matches authoritative map, salvage, ships and structures", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const host = auth("gemini-world-host", 901n);
+  const outsider = auth("gemini-world-outsider", 902n);
+  test.withReducerTx(host, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(host, ctx =>
+    moduleExports.addBot(ctx, { matchId, difficulty: "normal" })
+  );
+  test.withReducerTx(host, ctx => moduleExports.startMatch(ctx, { matchId }));
+
+  const chunks = moduleExports.myGeminiWorldChunks(test.viewContext(host));
+  const deposits = moduleExports.myGeminiSalvage(test.viewContext(host));
+  const ships = moduleExports.myGeminiShips(test.viewContext(host));
+  const structures = moduleExports.myGeminiStructures(test.viewContext(host));
+  const rawChunks = [...test.db.worldChunk.matchId.filter(matchId)];
+  const rawDeposits = [...test.db.salvageNode.matchId.filter(matchId)];
+  expect(chunks).toHaveLength(rawChunks.length);
+  expect(chunks.length).toBeGreaterThan(0);
+  expect(deposits).toHaveLength(rawDeposits.length);
+  expect(ships).toHaveLength(2);
+  expect(structures).toHaveLength(14);
+  expect(ships.map(ship => ship.ownerSlot).sort()).toEqual([0, 1]);
+
+  for (const row of chunks) {
+    const original = rawChunks.find(raw => raw.chunkX === row.chunkX &&
+      raw.chunkY === row.chunkY)!;
+    expect(row.mapCells).toBe(56);
+    expect([...row.terrain]).toEqual([...original.terrain]);
+  }
+  const restricted = test.viewContext(outsider);
+  expect(moduleExports.myGeminiWorldChunks(restricted)).toHaveLength(0);
+  expect(moduleExports.myGeminiSalvage(restricted)).toHaveLength(0);
+  expect(moduleExports.myGeminiShips(restricted)).toHaveLength(0);
+  expect(moduleExports.myGeminiStructures(restricted)).toHaveLength(0);
+  for (const row of ships) {
+    expect("targetX" in row).toBe(false);
+    expect("factionKey" in row).toBe(false);
+    expect("lastFiredAtUs" in row).toBe(false);
+  }
+});
+
+it("atomic box building creates an entire connected deck and schedules its completion", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("box-builder", 1001n);
+  const outsider = auth("box-outsider", 1002n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, { matchId, difficulty: "normal" }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(st => st.ownerSlot === 0 && st.kind === "command_core")!;
+  const faction = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.slot === 0)!;
+  const batch = {
+    matchId, kind: "platform",
+    startX: core.gridX + 3, startY: core.gridY + 1,
+    endX: core.gridX + 5, endY: core.gridY + 1,
+  };
+  const beforeCount = test.db.structure.count();
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.placeStructuresBox(ctx, batch)
+  )).toThrow("another player's match");
+  expect(test.db.structure.count()).toBe(beforeCount);
+
+  test.withReducerTx(alice, ctx => moduleExports.placeStructuresBox(ctx, batch));
+  const newDeck = [...test.db.structure.matchId.filter(matchId)]
+    .filter(row => row.ownerSlot === 0 && row.kind === "platform" &&
+      row.gridY === batch.startY && row.gridX >= batch.startX &&
+      row.gridX <= batch.endX);
+  expect(newDeck).toHaveLength(3);
+  expect(newDeck.every(row => !row.complete)).toBe(true);
+  expect(test.db.constructionSchedule.count()).toBe(3n);
+  expect(test.db.factionState.id.find(faction.id)?.salvage).toBe(faction.salvage - 75);
+
+  // A second attempt collides with the very first cell. It must leave
+  // resources, schedules and structures completely untouched.
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.placeStructuresBox(ctx, batch)
+  )).toThrow("Surface cell occupied");
+  expect(test.db.structure.count()).toBe(beforeCount + 3n);
+  expect(test.db.constructionSchedule.count()).toBe(3n);
+  expect(test.db.factionState.id.find(faction.id)?.salvage).toBe(faction.salvage - 75);
+
+  test.clock.advance(TimeDuration.fromMillis(1500));
+  const schedules = [...test.db.constructionSchedule.iter()];
+  for (const schedule of schedules) {
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.completeConstruction(ctx, { arg: schedule }));
+  }
+  const completed = [...test.db.structure.matchId.filter(matchId)]
+    .filter(row => newDeck.some(st => st.id === row.id));
+  expect(completed.every(row => row.complete && row.connected)).toBe(true);
+});
+
+it("new matches seed fair advanced resources and keep wallets private to each identity", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("material-alice", 1101n);
+  const bob = auth("material-bob", 1102n);
+  const stranger = auth("material-stranger", 1103n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  const rawNodes = [...test.db.materialNode.matchId.filter(match.id)];
+  expect(rawNodes.filter(n => n.kind === "oil")).toHaveLength(2);
+  expect(rawNodes.filter(n => n.kind === "alloy")).toHaveLength(2);
+  expect(rawNodes.filter(n => n.kind === "isotope")).toHaveLength(1);
+  expect([...test.db.materialBalance.matchId.filter(match.id)]).toHaveLength(3);
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId: match.id }));
+  expect([...test.db.materialBalance.matchId.filter(match.id)]).toHaveLength(6);
+  expect(moduleExports.myMaterialDeposits(test.viewContext(stranger))).toHaveLength(0);
+  expect(moduleExports.myMaterialBalances(test.viewContext(stranger))).toHaveLength(0);
+
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  expect(moduleExports.myMaterialDeposits(test.viewContext(alice))).toHaveLength(rawNodes.length);
+  expect(moduleExports.myMaterialDeposits(test.viewContext(bob))).toHaveLength(rawNodes.length);
+  const aliceWallet = moduleExports.myMaterialBalances(test.viewContext(alice));
+  const bobWallet = moduleExports.myMaterialBalances(test.viewContext(bob));
+  expect(aliceWallet).toHaveLength(3);
+  expect(bobWallet).toHaveLength(3);
+  expect(aliceWallet.every(row => row.amount === 0)).toBe(true);
+  expect(aliceWallet.every(row => !bobWallet.some(other => other.id === row.id))).toBe(true);
+});
+
+it("a real Scout gathers Oil but a foreign identity cannot issue the order", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("oil-scout-owner", 1111n);
+  const bob = auth("oil-scout-outsider", 1112n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId: match.id, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const ship = [...test.db.ship.matchId.filter(match.id)].find(row => row.ownerSlot === 0)!;
+  const oil = [...test.db.materialNode.matchId.filter(match.id)].find(row => row.kind === "oil")!;
+
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    ctx.db.ship.id.update({
+      ...ship, x: oil.gridX + 0.5, y: oil.gridY + 0.5,
+    })
+  );
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.orderMaterialHarvest(ctx, { shipId: ship.id, nodeId: oil.id })
+  )).toThrow("Cannot command another");
+  expect(test.db.materialHarvestOrder.count()).toBe(0n);
+
+  test.withReducerTx(alice, ctx =>
+    moduleExports.orderMaterialHarvest(ctx, { shipId: ship.id, nodeId: oil.id })
+  );
+  expect(test.db.materialHarvestOrder.count()).toBe(1n);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: timer })
+  );
+  const oilBalance = [...test.db.materialBalance.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "oil")!;
+  expect(oilBalance.amount).toBe(7); // Scout's advanced-material rate, 14 / 2
+  expect(oilBalance.totalGathered).toBe(7n);
+  expect(test.db.materialNode.id.find(oil.id)!.remaining)
+    .toBe(oil.capacity - 7); // regeneration is capped at full capacity before extraction
+
+  // Stopping a hybrid collection order cannot leave a background extractor.
+  test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: ship.id }));
+  expect(test.db.materialHarvestOrder.count()).toBe(0n);
+});
+
+it("connected extractor splits finite throughput across two nearby advanced nodes", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("mixed-rig-owner", 1121n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId: match.id, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  const oil = [...test.db.materialNode.matchId.filter(match.id)]
+    .find(row => row.kind === "oil")!;
+  const alloy = [...test.db.materialNode.matchId.filter(match.id)]
+    .find(row => row.kind === "alloy")!;
+  // Internal harness setup is not an RPC a player can call.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.materialNode.id.update({ ...oil, gridX: core.gridX + 1, gridY: core.gridY + 4 });
+    ctx.db.materialNode.id.update({ ...alloy, gridX: core.gridX + 2, gridY: core.gridY + 4 });
+    ctx.db.structure.insert({
+      id: 0n, matchId: match.id, ownerSlot: 0, kind: "salvage_rig",
+      channel: "superstructure", gridX: core.gridX, gridY: core.gridY + 3,
+      width: 2, height: 2, hp: 560, lastFiredAtUs: -1n,
+      turretAngleDeg: 0, level: 1, upgradeRemainingUs: 0n,
+      upgradeStartedAtUs: 0n, complete: true, connected: true, completeAtUs: 0n,
+    });
+  });
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const timer = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: timer })
+  );
+  const balances = [...test.db.materialBalance.matchId.filter(match.id)]
+    .filter(row => row.ownerSlot === 0);
+  expect(balances.find(row => row.kind === "oil")?.amount).toBe(4);
+  expect(balances.find(row => row.kind === "alloy")?.amount).toBe(4);
+  const credited = balances.reduce((sum, row) => sum + row.amount, 0);
+  expect(credited).toBe(8); // hard total budget despite two deposits
+});
+
+it("a workshop refit uses actual Oil/Alloys, rejects outsiders and supports upgraded repairs", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("refit-alice", 1201n);
+  const outsider = auth("refit-outsider", 1202n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const match = [...test.db.match.iter()][0]!;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId: match.id, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId: match.id }));
+  const core = [...test.db.structure.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId: match.id, kind: "workshop",
+    gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const workshop = [...test.db.structure.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "workshop")!;
+  const ship = [...test.db.ship.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "scout")!;
+  test.clock.advance(TimeDuration.fromMillis(5000));
+  const schedule = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: schedule })
+  );
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const live = ctx.db.ship.id.find(ship.id)!;
+    ctx.db.ship.id.update({
+      ...live, x: workshop.gridX + 2.5, y: workshop.gridY + 2.5,
+    });
+  });
+  const command = { workshopId: workshop.id, shipId: ship.id };
+  const before = [...test.db.factionState.matchId.filter(match.id)]
+    .find(row => row.slot === 0)!;
+  expect(() => test.withReducerTx(outsider, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  )).toThrow("your own");
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  )).toThrow("Insufficient refit resources");
+  expect(test.db.shipRefit.shipId.find(ship.id)).toBeNull();
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage);
+
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    for (const row of Array.from(ctx.db.materialBalance.matchId.filter(match.id))) {
+      if (row.ownerSlot !== 0) continue;
+      if (row.kind === "oil" || row.kind === "alloy")
+        ctx.db.materialBalance.id.update({ ...row, amount: 80 });
+    }
+  });
+  test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  );
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 75);
+  expect([...test.db.materialBalance.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "oil")!.amount).toBe(35);
+  expect(test.db.shipRefit.shipId.find(ship.id)?.highOutputEngine).toBe(true);
+  expect(() => test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "high_output_engine" })
+  )).toThrow("already has");
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 75);
+
+  test.withReducerTx(alice, ctx =>
+    moduleExports.refitShip(ctx, { ...command, kind: "reinforced_hull" })
+  );
+  expect(test.db.ship.id.find(ship.id)?.hp).toBe(330);
+  expect(test.db.shipRefit.shipId.find(ship.id)?.reinforcedHull).toBe(true);
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 135);
+  expect([...test.db.materialBalance.matchId.filter(match.id)]
+    .find(row => row.ownerSlot === 0 && row.kind === "alloy")!.amount).toBe(45);
+  expect(moduleExports.myShipRefits(test.viewContext(alice))).toHaveLength(1);
+  expect(moduleExports.myShipRefits(test.viewContext(outsider))).toHaveLength(0);
+
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const live = ctx.db.ship.id.find(ship.id)!;
+    ctx.db.ship.id.update({ ...live, hp: 300 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.repairShip(ctx, {
+    workshopId: workshop.id, shipId: ship.id, requestedHp: 60,
+  }));
+  expect(test.db.ship.id.find(ship.id)?.hp).toBe(330);
+  expect(test.db.factionState.id.find(before.id)?.salvage).toBe(before.salvage - 150);
+});
+
+it("real Shipyard makes a ship, exposes queue only to owner and supports authorized cancellation", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("yard-alice", 1301n);
+  const bob = auth("yard-bob", 1302n);
+  const outsider = auth("yard-outsider", 1303n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(st => st.ownerSlot === 0 && st.kind === "command_core")!;
+
+  // Initial Gemini 3×2 completed deck supports a Shipyard at this location.
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "shipyard", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const yard = [...test.db.structure.matchId.filter(matchId)]
+    .find(st => st.ownerSlot === 0 && st.kind === "shipyard")!;
+  test.clock.advance(TimeDuration.fromMillis(6000));
+  const completion = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: completion })
+  );
+  const operational = test.db.structure.id.find(yard.id)!;
+  expect(operational.complete).toBe(true);
+  expect(operational.connected).toBe(true);
+
+  const faction = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.slot === 0)!;
+  const ironBefore = faction.salvage;
+  test.withReducerTx(alice, ctx => moduleExports.enqueueShip(ctx, {
+    shipyardId: yard.id, kind: "scout",
+  }));
+  expect(moduleExports.myProductionJobs(test.viewContext(alice))).toHaveLength(1);
+  expect(moduleExports.myProductionJobs(test.viewContext(bob))).toHaveLength(0);
+  expect(moduleExports.myProductionJobs(test.viewContext(outsider))).toHaveLength(0);
+  expect(test.db.factionState.id.find(faction.id)!.salvage).toBe(ironBefore - 70);
+  const paidJob = moduleExports.myProductionJobs(test.viewContext(alice))[0]!;
+  expect(() => test.withReducerTx(bob, ctx =>
+    moduleExports.cancelShipProduction(ctx, { orderId: paidJob.id })
+  )).toThrow("Not your production order");
+  test.withReducerTx(alice, ctx =>
+    moduleExports.cancelShipProduction(ctx, { orderId: paidJob.id })
+  );
+  expect(moduleExports.myProductionJobs(test.viewContext(alice))).toHaveLength(0);
+  expect(test.db.factionState.id.find(faction.id)!.salvage).toBe(ironBefore);
+
+  // A new paid job progresses on the real 1Hz authoritative schedule and
+  // launches into navigable sea; no browser-side fake ship spawning.
+  const fleetBefore = [...test.db.ship.matchId.filter(matchId)]
+    .filter(ship => ship.ownerSlot === 0).length;
+  test.withReducerTx(alice, ctx => moduleExports.enqueueShip(ctx, {
+    shipyardId: yard.id, kind: "scout",
+  }));
+  for (let i = 0; i < 7; i++) {
+    test.clock.advance(TimeDuration.fromMillis(1000));
+    const timer = [...test.db.economySchedule.iter()][0]!;
+    test.withReducerTx(TestAuth.internal(), ctx =>
+      moduleExports.advanceEconomy(ctx, { arg: timer })
+    );
+  }
+  expect(moduleExports.myProductionJobs(test.viewContext(alice))).toHaveLength(0);
+  expect([...test.db.ship.matchId.filter(matchId)]
+    .filter(ship => ship.ownerSlot === 0)).toHaveLength(fleetBefore + 1);
+});
+
+
+/** Shared setup for the playable-combat regression slice. */
+function newActiveSkirmish() {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("alice", 1n), bob = auth("bob", 2n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(bob, ctx => moduleExports.joinMatch(ctx, { matchId }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const ships = [...test.db.ship.matchId.filter(matchId)];
+  const attacker = ships.find(row => row.ownerSlot === 0)!;
+  const defender = ships.find(row => row.ownerSlot === 1)!;
+  return { test, alice, bob, matchId, attacker, defender };
+}
+
+function advanceCombatTick(test: any): boolean {
+  test.clock.advance(TimeDuration.fromMillis(100));
+  const timer = [...test.db.combatSchedule.iter()][0];
+  if (!timer) return false;
+  test.withReducerTx(TestAuth.internal(), (ctx: any) =>
+    moduleExports.advanceCombat(ctx, { arg: timer })
+  );
+  return true;
+}
+
+/** Deterministic clear-water lane that is also free of building footprints. */
+function findOpenWaterLane(test: any, matchId: bigint, length: number) {
+  const config = test.db.worldConfig.matchId.find(matchId)!;
+  const world = generateDeterministicWorld(config.seed, 2);
+  const size = world.mapCells;
+  const structures = [...test.db.structure.matchId.filter(matchId)];
+  const clearOfBuildings = (x: number, y: number) => !structures.some(st =>
+    x >= st.gridX - 1 && x < st.gridX + st.width + 1 &&
+    y >= st.gridY - 1 && y < st.gridY + st.height + 1);
+  for (let y = 3; y < size - 3; y++) {
+    for (let x = 3; x < size - 3 - length; x++) {
+      let clear = true;
+      for (let i = 0; i <= length && clear; i++) {
+        if (world.cells[y * size + x + i] !== 0 ||
+            !clearOfBuildings(x + i, y)) clear = false;
+      }
+      if (clear) return { x, y };
+    }
+  }
+  throw new Error("No clear water lane available for this test");
+}
+
+it("attack orders are owner-scoped, replace other tasks, and preserve cancel paths", () => {
+  const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
+  expect(() => test.withReducerTx(bob, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }))).toThrow("Cannot command another");
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: attacker.id,
+  }))).toThrow("Target not visible");
+  expect(() => test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "planet", targetId: defender.id,
+  }))).toThrow("Target not visible");
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  expect(test.db.attackOrder.count()).toBe(1n);
+  expect(test.db.attackOrder.shipId.find(attacker.id)?.targetId).toBe(defender.id);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  test.withReducerTx(alice, ctx => moduleExports.stopShip(ctx, { shipId: attacker.id }));
+  expect(test.db.attackOrder.count()).toBe(0n);
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.issueShipOrder(ctx, {
+    shipId: attacker.id, targetX: attacker.x + 1, targetY: attacker.y,
+  }));
+  expect(test.db.attackOrder.count()).toBe(0n);
+  expect(test.db.shipRoute.shipId.find(attacker.id)).toBeTruthy();
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  const enemyStructure = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 1)!;
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "structure", targetId: enemyStructure.id,
+  }));
+  expect(test.db.attackOrder.count()).toBe(1n);
+});
+
+it("an in-range attack order aims, fires on cooldown, and applies server damage", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y, hp: 500 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+
+  advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)?.lastFiredAtUs).not.toBe(-1n);
+  expect(test.db.projectile.count()).toBe(1n);
+  const firedAt = test.db.ship.id.find(attacker.id)!.lastFiredAtUs;
+
+  advanceCombatTick(test);
+  // Scout 18 damage minus 2 armour, exactly once.
+  expect(test.db.ship.id.find(defender.id)?.hp).toBe(484);
+  const hit = [...test.db.combatImpact.matchId.filter(matchId)]
+    .find(row => row.kind === "hit");
+  expect(hit).toBeDefined();
+  // Swept collision is on the target's hull boundary: never the launch point
+  // or the stale interpolated position where the old splash was drawn.
+  expect(hit!.x).toBeGreaterThan(attacker.x);
+  expect(hit!.x).toBeLessThan(attacker.x + 3);
+  expect(moduleExports.myBattleImpacts(test.viewContext(alice))
+    .some(row => row.id === hit!.id)).toBe(true);
+
+  // Repeated ticks inside the 950ms cooldown must not create a second shot.
+  for (let i = 0; i < 4; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)?.lastFiredAtUs).toBe(firedAt);
+
+  // After the cooldown the same order fires again without client input.
+  for (let i = 0; i < 5; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)!.lastFiredAtUs - firedAt)
+    .toBeGreaterThanOrEqual(950_000n);
+  // Let that second authoritative projectile reach the target.
+  for (let i = 0; i < 3; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(defender.id)!.hp).toBeLessThan(484);
+});
+
+it("an out-of-range order chases the live target and re-paths when it moves", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  const lane = findOpenWaterLane(test, matchId, 20);
+  const ax = lane.x + 0.5, ay = lane.y + 0.5;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const own = ctx.db.ship.id.find(attacker.id)!;
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...own, x: ax, y: ay });
+    ctx.db.ship.id.update({ ...enemy, x: ax + 12, y: ay, hp: 500 });
+  });
+  const defenderNow = test.db.ship.id.find(defender.id)!;
+
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  const route = test.db.shipRoute.shipId.find(attacker.id);
+  expect(route).toBeTruthy();
+  const routeEnd = route!.cellPath[route!.cellPath.length - 1]!;
+  const cells = test.db.worldConfig.matchId.find(matchId)!.mapCells;
+  const goal = { x: (routeEnd % cells) + 0.5, y: Math.floor(routeEnd / cells) + 0.5 };
+  expect(Math.hypot(goal.x - defenderNow.x, goal.y - defenderNow.y)).toBeLessThanOrEqual(5.5);
+  expect(test.db.attackOrder.count()).toBe(1n);
+
+  // Target movement is re-evaluated: clear the stale route, move the target,
+  // wait past the chase throttle, and verify a fresh approach route.
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.shipRoute.shipId.delete(attacker.id);
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...enemy, x: ax + 18, y: ay });
+  });
+  test.clock.advance(TimeDuration.fromMillis(700));
+  const timer = [...test.db.combatSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceCombat(ctx, { arg: timer })
+  );
+  const repathed = test.db.shipRoute.shipId.find(attacker.id);
+  expect(repathed).toBeTruthy();
+  const end = repathed!.cellPath[repathed!.cellPath.length - 1]!;
+  const newGoal = { x: (end % cells) + 0.5, y: Math.floor(end / cells) + 0.5 };
+  expect(Math.hypot(newGoal.x - (ax + 18), newGoal.y - ay)).toBeLessThanOrEqual(5.5);
+});
+
+it("Siege closes inside its shorter fire-visibility range instead of stalling", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  const lane = findOpenWaterLane(test, matchId, 20);
+  const x = lane.x + 0.5, y = lane.y + 0.5;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const own = ctx.db.ship.id.find(attacker.id)!;
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...own, kind: "siege", x, y });
+    ctx.db.ship.id.update({ ...enemy, x: x + 10, y, hp: 500 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  // Siege weapon range is 11 but its actual dispatchFire vision cap is 9.5.
+  // At 10 cells it MUST approach instead of idling and failing every shot.
+  expect(test.db.shipRoute.shipId.find(attacker.id)).toBeTruthy();
+  expect(test.db.ship.id.find(attacker.id)!.lastFiredAtUs).toBe(-1n);
+  expect(test.db.attackOrder.shipId.find(attacker.id)).not.toBeNull();
+});
+
+it("multiple owned ships keep independent attack orders and never duplicate shots", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.insert({
+      ...attacker, id: 0n, x: attacker.x - 1, y: attacker.y,
+      targetX: attacker.x - 1, targetY: attacker.y,
+    });
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y, hp: 900 });
+  });
+  const ownShips = [...test.db.ship.matchId.filter(matchId)]
+    .filter(row => row.ownerSlot === 0)
+    .sort((a, b) => a.id < b.id ? -1 : 1);
+  expect(ownShips).toHaveLength(2);
+  for (const ship of ownShips) {
+    test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+      shipId: ship.id, targetType: "ship", targetId: defender.id,
+    }));
+  }
+  expect(test.db.attackOrder.count()).toBe(2n);
+  advanceCombatTick(test);
+  expect(test.db.projectile.count()).toBe(2n);
+  for (const ship of ownShips)
+    expect(test.db.ship.id.find(ship.id)?.lastFiredAtUs).not.toBe(-1n);
+  const hpAfterOne = test.db.ship.id.find(defender.id)!.hp;
+  advanceCombatTick(test);
+  // Two projectiles, each 16 damage; no extra hidden shots.
+  expect(test.db.ship.id.find(defender.id)!.hp).toBe(hpAfterOne - 32);
+});
+
+it("destroying the target clears the attack order and stops further fire", () => {
+  const { test, alice, matchId, attacker, defender } = newActiveSkirmish();
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y, hp: 1 });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  expect(test.db.ship.id.find(attacker.id)?.lastFiredAtUs).not.toBe(-1n);
+  advanceCombatTick(test);
+  expect(test.db.ship.id.find(defender.id)).toBeFalsy();
+  expect(test.db.attackOrder.count()).toBe(0n);
+  expect(test.db.projectile.count()).toBe(0n);
+  expect(test.db.match.id.find(matchId)?.phase).toBe("active");
+});
+
+it("harvesting still works, replaces attack orders, and combat views stay member-scoped", () => {
+  const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
+  const node = [...test.db.salvageNode.matchId.filter(matchId)]
+    .sort((a, b) => a.id < b.id ? -1 : 1)[0]!;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.salvageNode.id.update({
+      ...node, gridX: Math.floor(attacker.x) + 1, gridY: Math.floor(attacker.y),
+      remaining: node.capacity,
+    });
+    ctx.db.ship.id.update({ ...defender, x: attacker.x + 3, y: attacker.y });
+  });
+  test.withReducerTx(alice, ctx => moduleExports.orderHarvest(ctx, {
+    shipId: attacker.id, nodeId: node.id,
+  }));
+  expect(test.db.harvestOrder.count()).toBe(1n);
+  expect(test.db.attackOrder.count()).toBe(0n);
+
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  expect(test.db.harvestOrder.count()).toBe(0n);
+  expect(test.db.attackOrder.count()).toBe(1n);
+
+  test.withReducerTx(alice, ctx => moduleExports.orderHarvest(ctx, {
+    shipId: attacker.id, nodeId: node.id,
+  }));
+  expect(test.db.attackOrder.count()).toBe(0n);
+  expect(test.db.harvestOrder.count()).toBe(1n);
+
+  test.withReducerTx(alice, ctx => moduleExports.issueAttackOrder(ctx, {
+    shipId: attacker.id, targetType: "ship", targetId: defender.id,
+  }));
+  advanceCombatTick(test);
+  const aliceOrders = moduleExports.myAttackOrders(test.viewContext(alice));
+  const bobOrders = moduleExports.myAttackOrders(test.viewContext(bob));
+  expect(aliceOrders).toHaveLength(1);
+  expect(bobOrders).toHaveLength(0);
+  const aliceShots = moduleExports.myBattleProjectiles(test.viewContext(alice));
+  const bobShots = moduleExports.myBattleProjectiles(test.viewContext(bob));
+  expect(aliceShots.length).toBeGreaterThan(0);
+  expect(bobShots.length).toBe(aliceShots.length);
+});
+
+it("completing a real platform-mounted Cannon arms one automatic defense timer", () => {
+  const { test, alice, matchId } = newActiveSkirmish();
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  test.withReducerTx(alice, ctx => moduleExports.placeStructure(ctx, {
+    matchId, kind: "cannon", gridX: core.gridX, gridY: core.gridY + 3,
+  }));
+  const cannon = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "cannon")!;
+  expect(cannon.complete).toBe(false);
+  expect(test.db.combatSchedule.count()).toBe(0n);
+  test.clock.advance(TimeDuration.fromMillis(4000));
+  const construction = [...test.db.constructionSchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.completeConstruction(ctx, { arg: construction })
+  );
+  expect(test.db.structure.id.find(cannon.id)!.complete).toBe(true);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+});
+
+it("a completed Cannon autonomously defends using real aim/fire and exact impact events", () => {
+  const { test, alice, bob, matchId, attacker, defender } = newActiveSkirmish();
+  const lane = findOpenWaterLane(test, matchId, 20);
+  const core = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "command_core")!;
+  const x = lane.x + 4, y = lane.y;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    ctx.db.structure.insert({
+      ...core, id: 0n, kind: "cannon", channel: "superstructure",
+      gridX: x, gridY: y, width: 1, height: 1,
+      hp: 300, turretAngleDeg: 0, lastFiredAtUs: -1n,
+      complete: true, connected: true,
+    });
+    const enemy = ctx.db.ship.id.find(defender.id)!;
+    ctx.db.ship.id.update({ ...enemy, x: x + 4.5, y: y + 0.5, hp: 500 });
+    const ally = ctx.db.ship.id.find(attacker.id)!;
+    ctx.db.ship.id.update({ ...ally, x: x - 2.5, y: y + 0.5 });
+  });
+  const cannon = [...test.db.structure.matchId.filter(matchId)]
+    .find(row => row.ownerSlot === 0 && row.kind === "cannon")!;
+  // No player Attack/Aim/Fire action: the existing economy tick wakes the
+  // single shared combat scheduler for persisted operational Cannons.
+  expect(test.db.combatSchedule.count()).toBe(0n);
+  test.clock.advance(TimeDuration.fromMillis(1000));
+  const economy = [...test.db.economySchedule.iter()][0]!;
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.advanceEconomy(ctx, { arg: economy })
+  );
+  expect(test.db.combatSchedule.count()).toBe(1n);
+  advanceCombatTick(test);
+  expect(test.db.structure.id.find(cannon.id)?.lastFiredAtUs).not.toBe(-1n);
+  expect([...test.db.projectile.matchId.filter(matchId)]
+    .some(row => row.sourceType === "structure" && row.sourceId === cannon.id)).toBe(true);
+  for (let i = 0; i < 4; i++) advanceCombatTick(test);
+  expect(test.db.ship.id.find(defender.id)!.hp).toBeLessThan(500);
+  const impact = [...test.db.combatImpact.matchId.filter(matchId)][0]!;
+  expect(impact).toBeDefined();
+  expect(impact.x).toBeGreaterThan(cannon.gridX + 0.5);
+  expect(moduleExports.myBattleImpacts(test.viewContext(alice))
+    .some(row => row.id === impact.id)).toBe(true);
+  expect(moduleExports.myBattleImpacts(test.viewContext(bob))
+    .some(row => row.id === impact.id)).toBe(true);
+  expect(test.db.combatSchedule.count()).toBe(1n);
+});
+
+it("finished bot match has a durable member-only scoreboard and cannot be finalized twice", () => {
+  const test = createModuleTestHarness(spacetimedb, moduleExports);
+  const alice = auth("final-bot-host", 1441n);
+  const stranger = auth("final-outside", 1442n);
+  test.withReducerTx(alice, ctx => moduleExports.createMatch(ctx, { maxSlots: 2 }));
+  const matchId = [...test.db.match.iter()][0]!.id;
+  test.withReducerTx(alice, ctx => moduleExports.addBot(ctx, {
+    matchId, difficulty: "normal",
+  }));
+  test.withReducerTx(alice, ctx => moduleExports.startMatch(ctx, { matchId }));
+  const bot = [...test.db.factionState.matchId.filter(matchId)]
+    .find(row => row.controller === "bot")!;
+  test.withReducerTx(TestAuth.internal(), ctx => {
+    const balance = [...ctx.db.materialBalance.matchId.filter(matchId)]
+      .find(row => row.ownerSlot === bot.slot && row.kind === "oil")!;
+    ctx.db.materialBalance.id.update({ ...balance, totalGathered: 13n });
+  });
+  expect(moduleExports.myCompletedStandings(test.viewContext(alice))).toHaveLength(0);
+  const deadline = [...test.db.matchDeadline.matchId.filter(matchId)][0]!;
+  test.clock.advance(TimeDuration.fromMillis(720_000));
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  );
+  const completed = moduleExports.myCompletedStandings(test.viewContext(alice));
+  expect(completed).toHaveLength(2);
+  expect(completed.find(row => row.controller === "bot")?.advancedGathered).toBe(13n);
+  expect(moduleExports.myCompletedStandings(test.viewContext(stranger))).toHaveLength(0);
+  test.withReducerTx(TestAuth.internal(), ctx =>
+    moduleExports.finishMatchAtDeadline(ctx, { arg: deadline })
+  );
+  expect([...test.db.matchFinalStanding.matchId.filter(matchId)]).toHaveLength(2);
 });
