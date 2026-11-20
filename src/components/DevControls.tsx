@@ -41,7 +41,6 @@ export function DevControls() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
-  const [player2Joined, setPlayer2Joined] = useState(false);
   const [copiedLobbyId, setCopiedLobbyId] = useState<bigint | null>(null);
 
   const handleQuickPlay = async () => {
@@ -51,7 +50,6 @@ export function DevControls() {
     try {
       await quickPlay();
       setShowBrowser(false);
-      setPlayer2Joined(false);
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : "Could not start Quick Play");
     } finally {
@@ -111,12 +109,6 @@ export function DevControls() {
 
   const handleStart = async () => {
     if (!activeMatchId) return;
-    if (!player2Joined) {
-      setActionError(
-        "Need at least two actual members. Join this match from a second browser window (e.g. Incognito) before starting."
-      );
-      return;
-    }
     setIsActing(true);
     setActionError(null);
     try {
@@ -175,6 +167,7 @@ export function DevControls() {
         </div>
         <button
           onClick={resetIdentity}
+          aria-label="Reset the local identity for testing"
           title="Clear token and reconnect with a fresh identity (creates a second test player)"
           className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition"
         >
@@ -183,7 +176,7 @@ export function DevControls() {
       </div>
 
       {error && (
-        <div className="text-xs text-rose-300 bg-rose-950/40 border border-rose-800/40 p-2.5 rounded-md space-y-2">
+        <div role="alert" className="text-xs text-rose-300 bg-rose-950/40 border border-rose-800/40 p-2.5 rounded-md space-y-2">
           <div>{error}</div>
           {status === "connected" && subscriptionStatus === "error" && (
             <Button
@@ -198,7 +191,7 @@ export function DevControls() {
         </div>
       )}
       {actionError && (
-        <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-800/40 p-2.5 rounded-md">
+        <div role="alert" className="text-xs text-amber-300 bg-amber-950/40 border border-amber-800/40 p-2.5 rounded-md">
           {actionError}
         </div>
       )}
@@ -294,24 +287,10 @@ export function DevControls() {
             <div className="pt-1 space-y-2.5">
               {isHost ? (
                 <>
-                  <div className="bg-slate-900/60 border border-cyan-800/30 rounded-lg p-2.5 text-xs space-y-1.5">
-                    <div className="flex items-center justify-between text-slate-300">
-                      <span className="font-semibold text-cyan-300">Host Confirmation:</span>
-                      <span className="text-[11px] font-mono text-amber-300">Min 2 Players Required</span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Matches require at least two players (server-enforced). Open an <span className="text-cyan-200 font-semibold">Incognito window</span>, connect, and join <span className="font-mono text-amber-300">Match #{activeMatch.id.toString()}</span>.
-                    </p>
-                    <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer pt-1">
-                      <input
-                        type="checkbox"
-                        checked={player2Joined}
-                        onChange={(e) => setPlayer2Joined(e.target.checked)}
-                        className="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-400"
-                      />
-                      <span>I confirm Player 2 has joined in second window</span>
-                    </label>
-                  </div>
+                  <p className="rounded-lg border border-cyan-800/40 bg-slate-900/60 p-2.5 text-xs text-slate-300">
+                    Invite at least one other player using the lobby ID below.
+                    The server verifies actual match membership when you press Start.
+                  </p>
                   <Button
                     size="sm" variant="outline"
                     className="w-full border-sky-700 text-sky-200"
@@ -321,7 +300,7 @@ export function DevControls() {
                   </Button>
                   <Button
                     onClick={handleStart}
-                    disabled={isActing || !player2Joined}
+                    disabled={isActing || status !== "connected"}
                     className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-semibold flex items-center justify-center gap-2"
                   >
                     <Play className="size-4" /> Start Match
@@ -376,6 +355,7 @@ export function DevControls() {
             </label>
             <div className="flex gap-2">
               <select
+                aria-label="Maximum players in this lobby"
                 value={slots}
                 onChange={(e) => setSlots(Number(e.target.value))}
                 className="bg-slate-900 border border-border/60 rounded px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-cyan-500"
@@ -442,6 +422,7 @@ export function DevControls() {
           <div className="flex gap-2 pt-1 border-t border-border/40">
             <input
               type="text"
+              aria-label="Match ID to join"
               placeholder="Join by Match ID..."
               value={manualMatchId}
               onChange={(e) => {

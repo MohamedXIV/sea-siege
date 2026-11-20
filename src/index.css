@@ -51,3 +51,27 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--background); color: var(--foreground); font-family: Inter, system-ui, sans-serif; }
 button { cursor: pointer; }
+
+/* Readable focus for native controls that are not wrapped by shadcn Button. */
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@keyframes game-feedback-appear {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.game-feedback-enter {
+  animation: game-feedback-appear 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
